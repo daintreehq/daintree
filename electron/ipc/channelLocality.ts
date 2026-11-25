@@ -638,6 +638,8 @@ export const CHANNEL_LOCALITY = {
   "help:global-assistant-restart": "host",
   "help:global-assistant-can-run": "host",
   "help:global-assistant-replace": "host",
+  "help:global-assistant-list-past": "host",
+  "help:global-assistant-resume": "host",
   "help:global-assistant-discard": "host",
   "help:global-assistant-cancel-launch": "host",
   "help:global-assistant-changed": "host",

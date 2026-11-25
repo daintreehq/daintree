@@ -129,6 +129,26 @@ export interface GlobalAssistantReplacement {
 }
 
 /**
+ * A global session's earlier conversations it can reopen (#18169): the past
+ * conversations of the agent it runs, or would start on, read under the global
+ * assistant's own folder, less any either session holds. `agentId` is null,
+ * and nothing is listed, when that agent is unknown or keeps no transcripts
+ * Daintree can read.
+ */
+export interface GlobalAssistantPastSessions extends HelpPastSessionsListing {
+  slot: GlobalAssistantSlot;
+  agentId: string | null;
+}
+
+/** An earlier conversation to reopen in a global session, as the person approved it (#18169). */
+export interface GlobalAssistantConversationResume {
+  slot: GlobalAssistantSlot;
+  agentSessionId: string;
+  /** The session as the person was shown it: one changed since reopens nothing. */
+  expected: { generation: number; phase: GlobalAssistantPhase };
+}
+
+/**
  * The global assistant as a window is told it: the lifecycle, and while it
  * runs, the exact subject — terminal and PTY launch generation — a view watches
  * it by. A subject that no longer matches is a run that ended or was replaced.

@@ -897,6 +897,16 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleReplaceGlobalAssistant,
       { withContext: true }
     ),
+    listGlobalAssistantPastSessions: op(
+      HELP_METHOD_CHANNELS.listGlobalAssistantPastSessions,
+      globalAssistant.handleListGlobalAssistantPastSessions,
+      { withContext: true }
+    ),
+    resumeGlobalAssistantConversation: op(
+      HELP_METHOD_CHANNELS.resumeGlobalAssistantConversation,
+      globalAssistant.handleResumeGlobalAssistantConversation,
+      { withContext: true }
+    ),
     discardGlobalAssistant: op(
       HELP_METHOD_CHANNELS.discardGlobalAssistant,
       globalAssistant.handleDiscardGlobalAssistant,

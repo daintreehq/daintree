@@ -199,6 +199,8 @@ interface ProvisionInput {
    * and no one to ask, under `GLOBAL_ASSISTANT_ID`, and never a project lane.
    */
   global?: true;
+  /** Reopen an earlier conversation in the global assistant's place (#18169). Only with `global`. */
+  switchingTo?: LaneConversationSwitch;
 }
 
 /**
@@ -343,6 +345,16 @@ interface LaneRun {
 /** The PTY events that end or unsettle a kept lane's run (#18177). */
 type StandingRunEvents = Pick<PtyClient, "on" | "off">;
 
+/**
+ * The global assistant's switch to an earlier conversation (#18169): its exact
+ * id, and the ownership id the seat's work was held under when the person
+ * asked, read before the run it replaces was stopped.
+ */
+export interface LaneConversationSwitch {
+  agentSessionId: string;
+  work: string | undefined;
+}
+
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
@@ -428,6 +440,13 @@ interface HelpSessionRecord {
    * one when it started fresh. Unset for an agent that can't resume.
    */
   conversationOwnershipId?: string;
+  /** The earlier conversation the global assistant was asked to switch to (#18169). */
+  switchingTo?: LaneConversationSwitch;
+  /**
+   * Its spawn reopened that conversation and waits to be confirmed before the
+   * switch is written: until then the lane still points where it did.
+   */
+  switchStaged?: true;
   /**
    * Renderer `ActionContext` snapshot bound at provision time. Returned by
    * `getActionContextForToken` so the MCP handshake can pin every tool call
@@ -1479,6 +1498,7 @@ export class HelpSessionService {
           }
         : {}),
       ...(input.global ? { outlivesView: true as const } : {}),
+      ...(input.global && input.switchingTo ? { switchingTo: { ...input.switchingTo } } : {}),
       codexLaunchArgs,
       copilotLaunchArgs,
       laneMcpConfigPath,
@@ -1788,7 +1808,9 @@ export class HelpSessionService {
     // renderer (project sleep/close) can close the panel deliberately while
     // we wait, so that path keeps reading it afterwards (#10815).
     let panelOpenAtCapture = false;
-    if (opts?.captureHibernation && terminalId && this.ptyClient) {
+    // A switch whose spawn was never confirmed (#18169) left the lane pointing
+    // where it did: capturing it now would write the switch after all.
+    if (opts?.captureHibernation && terminalId && this.ptyClient && record.switchStaged !== true) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
       // calls us is fire-and-forget, so a project switch-back can load the new
@@ -2111,6 +2133,19 @@ export class HelpSessionService {
     if (!record || record.revoked) return Promise.resolve();
     if (!getEffectiveAgentConfig(record.agentId)?.resume) return Promise.resolve();
     const slotKey = assistantSlotKey(record.projectId, record.slot);
+    // The global assistant's switch to an earlier conversation (#18169) is
+    // written only once its spawn is confirmed (`confirmLaneSwitch`): a spawn
+    // refused after this point must leave the lane, and its work, as it was.
+    if (
+      options?.freshConversation === undefined &&
+      options?.forkedConversation === undefined &&
+      agentSessionId !== undefined &&
+      record.switchingTo?.agentSessionId === agentSessionId
+    ) {
+      record.agentSessionId = agentSessionId;
+      record.switchStaged = true;
+      return Promise.resolve();
+    }
     // A fork runs a conversation its id names nothing of: what it launches is
     // its bearer's alone, and the one it forked from stays the lane's previous.
     const conversationOwnershipId =
@@ -2122,6 +2157,28 @@ export class HelpSessionService {
             agentSessionId ?? "",
             options?.freshConversation === true
           );
+    return this.commitLaneLaunch(
+      record,
+      slotKey,
+      agentSessionId ?? "",
+      conversationOwnershipId,
+      options
+    );
+  }
+
+  /**
+   * Write the conversation `record`'s spawn runs as its lane's pointer, with the
+   * ownership id it was given, and bind that id to the session.
+   */
+  private commitLaneLaunch(
+    record: HelpSessionRecord,
+    slotKey: string,
+    agentSessionId: string,
+    conversationOwnershipId: string | undefined,
+    options?: { forkedConversation?: true; spawnRefused?: true }
+  ): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store) return Promise.resolve();
     record.agentSessionId = agentSessionId || undefined;
     record.conversationOwnershipId = conversationOwnershipId;
     this.bumpLaneRevision(slotKey);
@@ -2129,7 +2186,7 @@ export class HelpSessionService {
     this.claimsBySlotKey.delete(slotKey);
     const entry = {
       agentId: record.agentId,
-      agentSessionId: agentSessionId ?? "",
+      agentSessionId,
       cwd: record.sessionPath,
       capturedAt: Date.now(),
       ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
@@ -2142,13 +2199,9 @@ export class HelpSessionService {
     const forked = options?.forkedConversation === true;
     if (terminalId === undefined) this.laneRuns.delete(slotKey);
     else this.laneRuns.set(slotKey, { terminalId, confirmed: !forked, confirmable: !forked });
-    const written = this.pendingHibernationStore.isKeptRunning(slotKey)
-      ? this.pendingHibernationStore.set(
-          slotKey,
-          entry,
-          this.laneRuns.get(slotKey)?.confirmed === true
-        )
-      : this.pendingHibernationStore.set(slotKey, entry);
+    const written = store.isKeptRunning(slotKey)
+      ? store.set(slotKey, entry, this.laneRuns.get(slotKey)?.confirmed === true)
+      : store.set(slotKey, entry);
     if (conversationOwnershipId !== undefined) {
       try {
         this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
@@ -2157,6 +2210,37 @@ export class HelpSessionService {
       }
     }
     return written;
+  }
+
+  /**
+   * Write the global assistant's switch to an earlier conversation (#18169),
+   * once its spawn is confirmed: the conversation becomes the lane's pointer
+   * and takes the work the seat held. A session revoked meanwhile, or one
+   * whose spawn reopened something else, writes nothing.
+   */
+  confirmLaneSwitch(sessionId: string): Promise<void> {
+    const record = this.sessionsById.get(sessionId);
+    const switchingTo = record?.switchingTo;
+    if (!record || record.revoked || record.switchStaged !== true || !switchingTo) {
+      return Promise.resolve();
+    }
+    delete record.switchStaged;
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
+    return this.commitLaneLaunch(
+      record,
+      slotKey,
+      switchingTo.agentSessionId,
+      this.laneConversationTakingWork(slotKey, record.agentId, switchingTo)
+    );
+  }
+
+  /**
+   * The ownership id the lane's work is held under now (#18169): its live
+   * run's, else its pointer's. Read before a switch stops the run, since the
+   * capture may then file it under the conversation the run started on.
+   */
+  laneWorkOwnershipId(projectId: string, slot: number): string | undefined {
+    return this.laneOwnershipId(projectId, slot);
   }
 
   /** Keep the conversation the lane points at as its previous one, giving the launch none. */
@@ -2213,6 +2297,56 @@ export class HelpSessionService {
   }
 
   /**
+   * The ownership id for an earlier conversation the global assistant switched
+   * to (#18169): the one the seat's work was held under, so what it launched
+   * comes with it, as a handover between sessions moves it (#18149). The
+   * conversation the pointer held becomes the previous one: under its own id
+   * when that isn't the work (the run moved to it inside the CLI, #17919),
+   * else under the id the incoming conversation held as the previous one, or
+   * a new one holding nothing. With no work known, the ordinary rules apply.
+   */
+  private laneConversationTakingWork(
+    slotKey: string,
+    agentId: string,
+    { agentSessionId, work }: LaneConversationSwitch
+  ): string {
+    const entry = this.pendingHibernationStore?.get(slotKey) ?? null;
+    if (!entry || work === undefined) {
+      return this.laneConversationFor(slotKey, agentId, agentSessionId, false);
+    }
+    const previous = this.previousConversationBySlotKey.get(slotKey);
+    const incoming = (conversation: { agentId: string; agentSessionId: string } | undefined) =>
+      conversation !== undefined &&
+      conversation.agentId === agentId &&
+      conversation.agentSessionId === agentSessionId;
+    const held = entry.conversationOwnershipId;
+    const own = held !== undefined && held !== work ? held : undefined;
+    if (incoming(entry)) {
+      // The run moved to it inside the CLI: the conversation that launched the
+      // work keeps no claim to it, and takes the id this one held, if any.
+      if (previous !== undefined && previous.conversationOwnershipId === work) {
+        this.setPreviousConversation(
+          slotKey,
+          { ...previous, conversationOwnershipId: own ?? randomUUID() },
+          work
+        );
+      }
+      return work;
+    }
+    const theirs = previous !== undefined && incoming(previous) ? previous.conversationOwnershipId : undefined;
+    this.setPreviousConversation(
+      slotKey,
+      {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId: own ?? theirs ?? randomUUID(),
+      },
+      work
+    );
+    return work;
+  }
+
+  /**
    * Make `conversation` the lane's previous one, forgetting the one it
    * replaces unless that is `keeping`, the conversation the lane now runs.
    */
@@ -2252,7 +2386,8 @@ export class HelpSessionService {
     if (!this.pendingHibernationStore) return lanes;
     for (const [sessionId, terminalId] of this.terminalBySessionId.entries()) {
       const record = this.sessionsById.get(sessionId);
-      if (!record || record.revoked) continue;
+      // A switch never confirmed (#18169) leaves the lane where it pointed.
+      if (!record || record.revoked || record.switchStaged === true) continue;
       const slotKey = assistantSlotKey(record.projectId, record.slot);
       if (this.activeHelpTerminalBySlotKey.get(slotKey) !== terminalId) continue;
       const entry = this.pendingHibernationStore.get(slotKey);
@@ -3431,6 +3566,8 @@ export class HelpSessionService {
       if (!noView || input.startedBy !== undefined || !isGlobalAssistantId(input.projectId)) {
         throw new Error("The global assistant has no view, no asker and its own id");
       }
+    } else if (input.switchingTo !== undefined) {
+      throw new Error("Only the global assistant switches to an earlier conversation");
     } else if (isGlobalAssistantId(input.projectId)) {
       throw new Error("That project id is reserved for the global assistant");
     } else if (noView !== (input.startedBy !== undefined)) {
