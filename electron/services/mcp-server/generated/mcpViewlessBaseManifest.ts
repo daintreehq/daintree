@@ -624,6 +624,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 "missing-account",
                 "missing-preset",
                 "settings-unavailable",
+                "conversation-not-found",
                 "spawn-failed",
                 "cancelled",
                 "not-authorized",
