@@ -124,7 +124,7 @@ async function agent37() {
       sleep: async () => {},
       now: () => Date.now() - skew,
       // Wherever the test runs: a create refuses without the tunnel's command (#18180).
-      findCommand: async (command) => `/usr/local/bin/${command}`,
+      findCommand: async (command) => (command === "agent37" ? "/usr/local/bin/agent37" : null),
     });
     runs.push(lifecycle);
     const crash = () => {

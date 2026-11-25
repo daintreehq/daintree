@@ -434,6 +434,36 @@ describe("CloudMachineSection SSH identity", () => {
     expect(openExternal).toHaveBeenCalledWith("https://acme.test/cli");
   });
 
+  it("offers the page beside a Retry refused for the missing command (#18180)", async () => {
+    const message = "Acme machines are reached through its acme command, which isn't installed.";
+    const refused = status({
+      operation: null,
+      lastError: { code: "refused", message: "Acme turned this down.", at: 1 },
+    });
+    vi.mocked(cloudHostsClient.retryCreate).mockRejectedValueOnce(
+      Object.assign(new Error("refused"), {
+        name: "AppError",
+        code: "VALIDATION",
+        userMessage: message,
+      })
+    );
+    const view = show(refused, [tunnelProvider("provider-tunnel", true)]);
+    expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(message);
+    // Main recorded the same words on the host as it refused.
+    cloud.snapshot = {
+      providers: [tunnelProvider("provider-tunnel", true)],
+      accounts: [],
+      hosts: [{ ...refused, lastError: { code: "ssh-tunnel-command-missing", message, at: 2 } }],
+    };
+    view.rerender(
+      <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+    );
+    expect(screen.getByRole("alert").textContent).toBe(message);
+    expect(screen.getByRole("button", { name: "Get acme" })).toBeTruthy();
+  });
+
   it("offers no install page while the tunnel works or another error is shown", () => {
     show(running(), [tunnelProvider("provider-tunnel", true)]);
     expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();

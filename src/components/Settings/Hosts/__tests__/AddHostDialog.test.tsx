@@ -1452,11 +1452,36 @@ describe("AddHostDialog", () => {
         render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
         await advance(0);
         const note = screen.getByTestId("add-host-tunnel-closed");
-        expect(note.textContent).toContain("agent37 on this device closed before SSH reached");
+        expect(note.textContent).toContain(
+          "agent37 on this device closed the connection before SSH logged in"
+        );
         expect(note.textContent).toContain(
           "signed in here, as https://www.agent37.com/docs/agents-api/ssh describes"
         );
         expect(screen.getByText(/Connection closed by UNKNOWN port 65535/)).toBeTruthy();
+      });
+
+      it("says it when ssh, starting a master, kept only its own last line", async () => {
+        cloud = { providers: [TUNNELLED], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(
+          closedEarly("Connection closed by UNKNOWN port 65535")
+        );
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        expect(screen.getByTestId("add-host-tunnel-closed")).toBeTruthy();
+      });
+
+      it("says nothing of signing in beside a login the machine refused", async () => {
+        cloud = { providers: [TUNNELLED], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(
+          closedEarly(
+            "root@inst.agent37.app: Permission denied (publickey).\nConnection closed by UNKNOWN port 65535"
+          )
+        );
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        expect(screen.getByText(/Permission denied/)).toBeTruthy();
+        expect(screen.queryByTestId("add-host-tunnel-closed")).toBeNull();
       });
 
       it("says nothing of a tunnel for another failure, or a provider reached directly", async () => {

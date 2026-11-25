@@ -389,6 +389,7 @@ describe("CloudHostLifecycle.create", () => {
       {},
       { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
     );
+    const catalogReads = vi.mocked(provider.catalog).mock.calls.length;
     const error = await lifecycle
       .create({
         accountId: store.accounts()[0]!.id,
@@ -399,6 +400,8 @@ describe("CloudHostLifecycle.create", () => {
       .catch((e: unknown) => e);
     expect(findCommand).toHaveBeenCalledWith("acme");
     expect(error).toMatchObject({ code: "VALIDATION" });
+    // Refused before the account is even asked for its sizes.
+    expect(vi.mocked(provider.catalog).mock.calls.length).toBe(catalogReads);
     const said = (error as { userMessage: string }).userMessage;
     expect(said).toContain("acme command");
     expect(said).toContain("https://example.com/acme");
@@ -532,6 +535,68 @@ describe("CloudHostLifecycle.create", () => {
     // The machine the first request made is bound; nothing is asked for again.
     expect(store.bindings()[0]!.resourceId).toBe("bx_orig00001");
     expect(provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("won't send a lost create again while the tunnel's command is missing (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(store.bindings()[0]?.creation?.sentAt).toEqual(expect.any(Number));
+    // Nothing of its own in the account: a provider that replays the key would send again here.
+    vi.mocked(provider.list).mockResolvedValue([]);
+    findCommand.mockResolvedValue(null);
+    const error = await lifecycle.retryCreate("build").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "VALIDATION" });
+    expect(provider.list).toHaveBeenCalled();
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("The create wasn't sent again"),
+    });
+  });
+
+  it("names no replaced provider's command when it was replaced while the command was looked for (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store, accounts } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const replacement = fakeProvider({ machine: resource() });
+    findCommand.mockImplementationOnce(async () => {
+      vi.spyOn(accounts, "provider").mockReturnValue(replacement);
+      return null;
+    });
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/changed while the machine/);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("failed");
+    expect(lifecycle.statuses()[0]?.lastError?.message).not.toContain("acme command");
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(replacement.create).not.toHaveBeenCalled();
   });
 
   it("saves the binding and idempotency key before asking for a machine", async () => {
@@ -802,6 +867,7 @@ describe("CloudHostLifecycle access through a provider's tunnel", () => {
       expect(said).toContain("acme command");
       expect(said).toContain(INSTALL_URL);
       expect(said).toContain("sign in to it");
+      expect(said).toMatch(/then connect again\.$/);
     }
     expect(findCommand).toHaveBeenCalledWith("acme");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();

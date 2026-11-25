@@ -139,10 +139,10 @@ describe("cloudHosts findTunnel", () => {
     const find = cloudHostsNamespace.ops.findTunnel.handler as unknown as (
       payload: unknown
     ) => Promise<unknown>;
-    expect(await find({ providerId: "agent37", command: "/bin/sh" })).toEqual({
+    expect(await find({ providerId: "acme.clouds.tunnel", command: "/bin/sh" })).toEqual({
       command: "agent37",
       found: false,
     });
-    expect(mocks.findTunnel).toHaveBeenCalledWith("agent37");
+    expect(mocks.findTunnel).toHaveBeenCalledWith("acme.clouds.tunnel");
   });
 });

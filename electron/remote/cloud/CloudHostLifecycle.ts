@@ -1097,9 +1097,10 @@ export class CloudHostLifecycle {
       }
     }
     // Only a send gets this far. A retry asks for nothing this device couldn't reach, as
-    // create() did; the provider check below covers the lookup's wait.
+    // create() did. What the lookup found is said only of the provider still registered: one
+    // replaced while it looked is refused below, never named with its old command.
     const tunnel = await this.tunnelProblem(provider, "retry");
-    if (tunnel) {
+    if (tunnel && this.stillRegistered(binding.providerId, provider)) {
       const sentBefore = creation.sentAt !== null;
       const message = sentBefore
         ? `${tunnel.said} The create wasn't sent again; Retry looks for a machine from the earlier request first.`
@@ -1115,7 +1116,9 @@ export class CloudHostLifecycle {
         message,
         at: this.now(),
       });
-      throw invalid(message);
+      throw tunnel.missing
+        ? invalid(message)
+        : new AppError({ code: "INTERNAL", message, userMessage: message });
     }
     // Asked only of the provider registered now, and only for what it still takes: a limit
     // asked for under a model it has since dropped is refused, never sent as none.

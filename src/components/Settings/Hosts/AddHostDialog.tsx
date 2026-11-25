@@ -1690,13 +1690,15 @@ export function AddHostDialog({
               </p>
             ) : cloudExisting ? (
               <>
-                {/* ssh hides what the tunnel said; what it shows is that the tunnel closed first. */}
-                {cloudTunnel && isProxyClosedEarly(probe.sshError) && (
+                {/* ssh hides what the tunnel said; what it shows is that the tunnel closed first.
+                    Said beside a new machine's wait too: a CLI that isn't signed in would
+                    otherwise go unnamed for every recheck. Never beside a refusal of ssh's own. */}
+                {cloudTunnel && refusal === null && isProxyClosedEarly(probe.sshError) && (
                   <p
                     className="mt-3 text-xs text-text-secondary"
                     data-testid="add-host-tunnel-closed"
                   >
-                    {`The tunnel through ${cloudTunnel.command} on this device closed before SSH reached the machine. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
+                    {`The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
                   </p>
                 )}
                 {existingId !== null && (
