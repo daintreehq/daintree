@@ -6,26 +6,33 @@
  *
  * Every path that puts panels back holds the gate open while it runs: the
  * view's own restore, and the host read-backs of a view that regained it.
- * Emptying the store keeps it open until a restore next finishes. Nothing has
- * been restored until the first one does.
+ * Emptying the store keeps it open until a restore begun after it finishes.
+ * Nothing has been restored until the first one does.
  */
 let inFlight = 0;
 let restored = false;
+let clears = 0;
 
-/** Hold the gate open for one restore; the returned call ends it, once. */
+/**
+ * Hold the gate open for one restore; the returned call ends it, once. Only a
+ * restore begun since the store was last emptied counts it restored: one begun
+ * before may have put back panels that the emptying has since removed.
+ */
 export function beginPanelRestore(): () => void {
   inFlight += 1;
+  const clearsAtStart = clears;
   let ended = false;
   return () => {
     if (ended) return;
     ended = true;
     inFlight -= 1;
-    restored = true;
+    if (clearsAtStart === clears) restored = true;
   };
 }
 
-/** The store was emptied: nothing reads as missing until a restore finishes. */
+/** The store was emptied: nothing reads as missing until a restore begun after it finishes. */
 export function markPanelsCleared(): void {
+  clears += 1;
   restored = false;
 }
 

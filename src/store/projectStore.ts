@@ -1481,7 +1481,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       clearFleetArmingThroughAccessor();
       set({ currentProject: null, worktreeLoadError: null });
       clearPanelStoreForSwitchThroughAccessor();
-      markPanelsCleared();
       await get().loadProjects();
 
       return result;

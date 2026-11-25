@@ -49,4 +49,25 @@ describe("panelRestoreGate", () => {
     end();
     expect(gate.arePanelsRestored()).toBe(true);
   });
+
+  it("doesn't count an emptied store restored by a restore begun before it was emptied", () => {
+    gate.beginPanelRestore()();
+    const older = gate.beginPanelRestore();
+    gate.markPanelsCleared();
+    const newer = gate.beginPanelRestore();
+
+    older();
+    expect(gate.arePanelsRestored()).toBe(false);
+    newer();
+    expect(gate.arePanelsRestored()).toBe(true);
+  });
+
+  it("stays closed when the only restore left began before the store was emptied", () => {
+    gate.beginPanelRestore()();
+    const older = gate.beginPanelRestore();
+    gate.markPanelsCleared();
+
+    older();
+    expect(gate.arePanelsRestored()).toBe(false);
+  });
 });
