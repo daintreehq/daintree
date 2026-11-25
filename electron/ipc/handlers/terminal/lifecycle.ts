@@ -1722,9 +1722,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           : startsFreshConversation
             ? ({ freshConversation: true } as const)
             : undefined;
+        // A spawn PtyClient refused without sending it never ran, so a lane
+        // kept running across restarts isn't marked running by it (#18177).
+        const spawnRefused =
+          launchGeneration === undefined || launchGeneration === generationBeforeSpawn;
+        const options = spawnRefused
+          ? ({ ...laneLaunch, spawnRefused: true } as const)
+          : laneLaunch;
         try {
-          (laneLaunch
-            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, laneLaunch)
+          (options
+            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, options)
             : helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
           ).catch((err) => {
             console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);

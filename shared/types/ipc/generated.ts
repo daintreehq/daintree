@@ -2559,12 +2559,20 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").HelpAdoptResult | null;
   };
   "help:discard-conversation": {
-    args: [projectId: string, rawSlot?: number | undefined];
+    args: [
+      projectId: string,
+      rawSlot?: number | undefined,
+      options?: { keepRunningChoice?: boolean | undefined } | undefined,
+    ];
     result: void;
   };
   "help:get-folder-path": {
     args: [];
     result: string | null;
+  };
+  "help:get-keep-running": {
+    args: [projectId: string, rawSlot?: number | undefined];
+    result: boolean;
   };
   "help:get-pinned-action-context": {
     args: [sessionId: string];
@@ -2630,6 +2638,10 @@ export interface GeneratedIpcInvokeMap {
   "help:global-assistant-set-coordinator": {
     args: [slot: number];
     result: import("./help.js").GlobalAssistantView[];
+  };
+  "help:global-assistant-set-keep-running": {
+    args: [keep: boolean, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-start-new": {
     args: [agentId: string];
@@ -2700,6 +2712,10 @@ export interface GeneratedIpcInvokeMap {
   "help:revoke-session": {
     args: [sessionId: string];
     result: void;
+  };
+  "help:set-keep-running": {
+    args: [projectId: string, rawSlot: number, keep: boolean];
+    result: boolean;
   };
   "help:take-pending-hibernation": {
     args: [projectId: string, rawSlot?: number | undefined];

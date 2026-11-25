@@ -532,9 +532,11 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         string,
         Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number]
       >();
+      let terminalsSnapshotted = false;
       try {
         const allTerminals = await ptyClient.getAllTerminalsAsync();
         terminalInfoById = new Map(allTerminals.map((t) => [t.id, t]));
+        terminalsSnapshotted = true;
       } catch {
         // Snapshot is best-effort; journaling below skips when info is absent.
       }
@@ -557,6 +559,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       try {
         helpSessions = (await import("../services/HelpSessionService.js")).helpSessionService;
         assistantLanes = helpSessions.snapshotLaneTerminals();
+        // The lanes kept running across restarts that come back after this
+        // quit, fixed before the kill whose exits would otherwise read as
+        // theirs (#18177): any whose process is alive now. Landed by the
+        // store flush in `revokeAll`.
+        const alive = terminalsSnapshotted
+          ? new Set([...terminalInfoById.values()].filter((t) => t.isExited !== true).map((t) => t.id))
+          : null;
+        helpSessions.holdStandingRunsForQuit(alive).catch((err: unknown) => {
+          console.warn("[MAIN] Recording the kept assistant lanes at quit failed:", err);
+        });
       } catch (err) {
         console.warn("[MAIN] Assistant lane snapshot at quit failed:", err);
       }
@@ -702,8 +714,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       await Promise.all(assistantCaptureWrites);
 
       // A restart to install an update brings back the lanes it stops, by the
-      // ids just captured (#16753); any other quit leaves them to be resumed by
-      // hand (#10815). Running means its process was alive in the pre-kill
+      // ids just captured (#16753); any other quit brings back only the lanes
+      // kept running across restarts, held above (#18177), and leaves the rest
+      // to be resumed by hand (#10815). Running means its process was alive in the pre-kill
       // snapshot: a lane binding can outlast an assistant that exited, and a
       // snapshot that failed records nothing.
       if (

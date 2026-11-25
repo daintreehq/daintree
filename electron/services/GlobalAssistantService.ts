@@ -56,6 +56,8 @@ export interface GlobalAssistantSpawnSpec {
   env: Record<string, string>;
   /** Reopen this exact conversation; absent, start one. */
   resumeAgentSessionId?: string;
+  /** Refuse rather than start another conversation when that one can't be reopened (#18177). */
+  exactResume?: true;
   /** The first turn of a run that continues from a hand-off (#18140). */
   prompt?: string;
 }
@@ -78,8 +80,11 @@ export interface GlobalAssistantDeps {
   /** Claim the exact conversation a previous run left, if any. */
   takeResume(): Promise<GlobalAssistantResume | null>;
   releaseResume(claimId: string): Promise<void>;
-  /** Forget the conversation: the next run starts a new one. */
-  discardResume(): Promise<void>;
+  /**
+   * Forget the conversation: the next run starts a new one. The choice to keep
+   * the session running across restarts goes with it unless `keepRunningChoice` (#18177).
+   */
+  discardResume(options?: { keepRunningChoice?: boolean }): Promise<void>;
   /** Spawn the PTY; false when nothing started. */
   spawn(spec: GlobalAssistantSpawnSpec): Promise<boolean>;
   /**
@@ -97,6 +102,8 @@ export interface GlobalAssistantDeps {
   savePinnedAgent?(agentId: string | null): void;
   /** Whether it is the session that coordinates (#18143). Absent, it always is. */
   coordinates?(): boolean;
+  /** Whether the person chose to keep it running across restarts (#18177). Absent, it isn't. */
+  keptRunning?(): boolean;
 }
 
 export interface GlobalAssistantOptions {
@@ -191,6 +198,7 @@ export class GlobalAssistantService {
       occupied: this.isOccupied(),
       pinnedAgentId: this.pinnedAgentId,
       coordinating: this.coordinates(),
+      keepRunning: this.deps.keptRunning?.() ?? false,
       generation: this.generation,
       agentId: this.run?.agentId ?? this.starting?.agentId ?? this.pinnedAgentId ?? null,
       terminalId: this.run?.terminalId ?? null,
@@ -286,9 +294,25 @@ export class GlobalAssistantService {
     return this.admit(options?.fresh === true, null);
   }
 
+  /**
+   * Reopen exactly the conversation a run kept running across restarts was on
+   * (#18177), as a Start would, refusing rather than starting another. Only a
+   * session with nothing running or starting is resumed this way.
+   */
+  resumeAfterRestart(agentSessionId: string): Promise<GlobalAssistantState> {
+    if (this.closed) {
+      return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
+    }
+    if (this.run || (this.launch && this.launchInFlight())) {
+      return Promise.reject(refuse("VALIDATION", "This global assistant session is in use."));
+    }
+    return this.admit(false, null, agentSessionId);
+  }
+
   private admit(
     fresh: boolean,
-    choice: GlobalAssistantChoice | null
+    choice: GlobalAssistantChoice | null,
+    exact: string | null = null
   ): Promise<GlobalAssistantState> {
     if (this.closed) {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
@@ -305,7 +329,8 @@ export class GlobalAssistantService {
       generation,
       fresh,
       predecessor,
-      choice
+      choice,
+      exact
     )
       .catch((err: unknown) => {
         // Stopped while starting, whatever it ran into on the way down.
@@ -333,7 +358,8 @@ export class GlobalAssistantService {
     generation: number,
     fresh: boolean,
     predecessor: Promise<unknown> | null,
-    choice: GlobalAssistantChoice | null
+    choice: GlobalAssistantChoice | null,
+    exact: string | null
   ): Promise<GlobalAssistantState> {
     const superseded = () => generation !== this.generation || this.closed;
 
@@ -369,6 +395,12 @@ export class GlobalAssistantService {
     if (superseded()) {
       await releaseResume();
       throw stoppedWhileStarting();
+    }
+    // A restore after a restart reopens exactly the conversation the run was
+    // on, on the agent a Start chooses, or nothing (#18177).
+    if (exact !== null && resume?.agentSessionId !== exact) {
+      await releaseResume();
+      throw refuse("NOT_FOUND", "The global assistant's conversation can't be reopened as it was.");
     }
     // The agent it will run, when no default chose it, is checked here: the CLI
     // may have gone, or be too old for its wiring. The conversation is kept.
@@ -419,6 +451,7 @@ export class GlobalAssistantService {
           ...(session.mcpUrl ? { [LAUNCH_ENV_KEYS.url]: session.mcpUrl } : {}),
         },
         ...(resume ? { resumeAgentSessionId: resume.agentSessionId } : {}),
+        ...(resume && exact !== null ? { exactResume: true as const } : {}),
         ...(choice ? { prompt: choice.prompt } : {}),
       });
     } catch (err) {
@@ -484,8 +517,9 @@ export class GlobalAssistantService {
         this.deps.kill(run.terminalId);
       }
       if (reason === "restart" || reason === "discard") {
+        // A clear starts the same session over, still kept running (#18177); a stop doesn't.
         await this.deps
-          .discardResume()
+          .discardResume(reason === "restart" ? { keepRunningChoice: true } : undefined)
           .catch((err) =>
             console.warn("[GlobalAssistant] Forgetting the conversation failed:", err)
           );

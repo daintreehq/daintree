@@ -21,6 +21,7 @@ import {
   globalAssistantCoordinatorSlot,
   handGlobalAssistantCoordination,
   joinNewGlobalAssistantLaunch,
+  setGlobalAssistantKeepRunning,
   startNewGlobalAssistantSession,
   stopGlobalAssistantSession,
   whenGlobalAssistantSessionsReadable,
@@ -487,6 +488,21 @@ export async function handleSetGlobalAssistantCoordinator(
   }
   await handGlobalAssistantCoordination(slot);
   return GLOBAL_ASSISTANT_SLOTS.map((at) => globalAssistantView(service(at)));
+}
+
+/** Keep the session running across restarts, or stop keeping it (#18177). */
+export async function handleSetGlobalAssistantKeepRunning(
+  ctx: IpcContext,
+  keep: boolean,
+  slot?: number
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  if (typeof keep !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "Whether to keep it running is required." });
+  }
+  const at = requireSlot(slot);
+  await setGlobalAssistantKeepRunning(at, keep);
+  return globalAssistantView(service(at));
 }
 
 /**

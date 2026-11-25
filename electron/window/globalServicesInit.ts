@@ -1461,6 +1461,11 @@ export async function initGlobalServices(
       // view torn down mid-launch). The timer is unref'd, so it never holds the
       // process up.
       helpSessionService.startOrphanSweep();
+      // Before any view can launch a lane kept running across restarts, so
+      // none of its runs ends unseen (#18177). The PTY client exists by the
+      // time a window can provision; the task below covers one that didn't.
+      const ptyClient = getPtyClient();
+      if (ptyClient) helpSessionService.watchStandingRuns(ptyClient);
     });
 
     // Load the pending-hibernation file and wire it into HelpSessionService.
@@ -1553,6 +1558,7 @@ export async function initGlobalServices(
           }
           const { helpSessionService } = await import("../services/HelpSessionService.js");
           helpSessionService.setPtyClient(ptyClient);
+          helpSessionService.watchStandingRuns(ptyClient);
           // A detached host assistant (#13360) has no view to notice its exit.
           ptyClient.on("exit", (terminalId: string) =>
             helpSessionService.handleTerminalExit(terminalId)
@@ -1564,9 +1570,10 @@ export async function initGlobalServices(
     });
 
     // The Assistant lanes a restart to install an update stopped come back now,
-    // each into its own conversation (#16753). After `help-session-pty`, so a
-    // displaced or revoked lane can still be killed. Nothing is loaded unless
-    // the last quit was that restart, and the queue doesn't wait on the starts.
+    // each into its own conversation (#16753), and so do the lanes kept running
+    // across restarts that any quit or crash left running (#18177). After
+    // `help-session-pty`, so a displaced or revoked lane can still be killed.
+    // Nothing is loaded unless there is one, and the queue doesn't wait on the starts.
     registerDeferredTask({
       name: "assistant-update-resume",
       run: async () => {

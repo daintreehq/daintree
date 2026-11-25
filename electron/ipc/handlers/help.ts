@@ -697,7 +697,9 @@ async function handleRestorePendingHibernation(
 async function handleDiscardConversation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
-  rawSlot?: number
+  rawSlot?: number,
+  /** A clear starts the lane over, still kept running across restarts (#18177). */
+  options?: { keepRunningChoice?: boolean }
 ): Promise<void> {
   if (typeof projectId !== "string" || !projectId) return;
   if (!ctx.projectId || ctx.projectId !== projectId) {
@@ -710,7 +712,65 @@ async function handleDiscardConversation(
   const slot = resolveSlot(rawSlot);
   if (slot === null) return;
   const { helpSessionService } = await getHelpSessionService();
-  await helpSessionService.discardConversation(projectId, slot);
+  await helpSessionService.discardConversation(
+    projectId,
+    slot,
+    options?.keepRunningChoice === true ? { keepRunningChoice: true } : undefined
+  );
+}
+
+/** A lane of the sender's own project, or null when it names another or no lane. */
+function ownLane(
+  ctx: import("../types.js").IpcContext,
+  projectId: unknown,
+  rawSlot: unknown,
+  what: string
+): { projectId: string; slot: number } | null {
+  if (typeof projectId !== "string" || !projectId) return null;
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(`[help] ${what}: projectId mismatch — refusing a cross-project call`, {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return null;
+  }
+  const slot = resolveSlot(rawSlot);
+  return slot === null ? null : { projectId, slot };
+}
+
+/** Whether the person chose to keep a lane of this project running across restarts (#18177). */
+async function handleGetKeepRunning(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot?: number
+): Promise<boolean> {
+  const lane = ownLane(ctx, projectId, rawSlot, "getKeepRunning");
+  if (!lane) return false;
+  const { helpSessionService } = await getHelpSessionService();
+  await helpSessionService.whenPendingHibernationStoreWired();
+  return helpSessionService.isLaneKeptRunning(lane.projectId, lane.slot);
+}
+
+/**
+ * Keep a lane of this project running across restarts, or stop keeping it
+ * (#18177). Answers with the choice now held.
+ */
+async function handleSetKeepRunning(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot: number,
+  keep: boolean
+): Promise<boolean> {
+  const lane = ownLane(ctx, projectId, rawSlot, "setKeepRunning");
+  if (!lane || typeof keep !== "boolean") return false;
+  const { helpSessionService } = await getHelpSessionService();
+  if (!(await helpSessionService.setLaneKeepRunning(lane.projectId, lane.slot, keep))) {
+    logger.warn("Keeping an assistant lane running across restarts wasn't saved", {
+      slot: lane.slot,
+    });
+  }
+  return helpSessionService.isLaneKeptRunning(lane.projectId, lane.slot);
 }
 
 async function handleReportPanelOpen(
@@ -787,6 +847,11 @@ export const helpNamespace = defineIpcNamespace({
     setGlobalAssistantCoordinator: op(
       HELP_METHOD_CHANNELS.setGlobalAssistantCoordinator,
       globalAssistant.handleSetGlobalAssistantCoordinator,
+      { withContext: true }
+    ),
+    setGlobalAssistantKeepRunning: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantKeepRunning,
+      globalAssistant.handleSetGlobalAssistantKeepRunning,
       { withContext: true }
     ),
     attachGlobalAssistant: op(
@@ -880,6 +945,12 @@ export const helpNamespace = defineIpcNamespace({
       { withContext: true }
     ),
     discardConversation: op(HELP_METHOD_CHANNELS.discardConversation, handleDiscardConversation, {
+      withContext: true,
+    }),
+    getKeepRunning: op(HELP_METHOD_CHANNELS.getKeepRunning, handleGetKeepRunning, {
+      withContext: true,
+    }),
+    setKeepRunning: op(HELP_METHOD_CHANNELS.setKeepRunning, handleSetKeepRunning, {
       withContext: true,
     }),
     listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {
