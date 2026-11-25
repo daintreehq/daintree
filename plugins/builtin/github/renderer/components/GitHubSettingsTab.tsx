@@ -27,7 +27,6 @@ import {
 } from "./GitHubCliImport";
 import { GitHubEnterpriseSection } from "./GitHubEnterpriseSection";
 import { GhCliSignInConfirm, GhCliSignInRow, useGhCliSignIn } from "./GitHubCliSignIn";
-import { GITHUB_COM_HOST } from "../../shared/githubHost.js";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
