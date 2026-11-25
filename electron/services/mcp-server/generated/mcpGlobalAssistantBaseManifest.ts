@@ -18,7 +18,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "Bring back a host whose link is down: wake it if set up here or start its asleep cloud machine, then start Daintree if Host mode is on. Up to 2 min; repeat calls join. Answers what it saw.",
+      "Bring back a host whose link is down: wake it if set up here or start its asleep cloud machine, then start Daintree if Host mode is on. Up to 2 min; repeat calls join. Says what it saw.",
     enabled: true,
     id: "host.bringBack",
     inputSchema: {

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostWakeSetup } from "../../../../shared/types/hostWake.js";
+import {
+  HOST_BRING_BACK_OBSERVED_MAX,
+  type HostWakeSetup,
+} from "../../../../shared/types/hostWake.js";
 import type {
   HostConnection,
   HostConnectionState,
@@ -634,7 +637,7 @@ describe("HostBringBackService", () => {
   });
 
   it("keeps what the dial saw when a cloud machine's start failed at length", async () => {
-    const long = `The provider refused the start: ${"x".repeat(600)}`;
+    const long = `The provider refused the start: ${"x".repeat(HOST_BRING_BACK_OBSERVED_MAX)}`;
     const blocker = "The machine's host key changed. Review it in the host's details.";
     const w = world({
       host: descriptor({ connection: CLOUD }),
@@ -646,7 +649,7 @@ describe("HostBringBackService", () => {
     const settled = await answer;
     expect(settled.observed!.endsWith(blocker)).toBe(true);
     expect(settled.observed!.startsWith("The provider refused the start:")).toBe(true);
-    expect(settled.observed!.length).toBeLessThanOrEqual(500);
+    expect(settled.observed!.length).toBeLessThanOrEqual(HOST_BRING_BACK_OBSERVED_MAX);
   });
 
   it("dials nothing once a cloud host's attempt is cancelled while its machine starts", async () => {
