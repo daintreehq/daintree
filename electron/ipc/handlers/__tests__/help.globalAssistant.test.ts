@@ -9,6 +9,8 @@ const registry = vi.hoisted(() => ({
   hand: vi.fn(async (_slot: number) => {}),
   coordinator: 0 as 0 | 1,
   keep: vi.fn(async (_slot: number, _keep: boolean) => {}),
+  listPast: vi.fn(),
+  resume: vi.fn(),
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
   getGlobalAssistantService: (slot = 0) => (slot === 1 ? secondService : service),
@@ -18,6 +20,8 @@ vi.mock("../../../services/globalAssistant.js", () => ({
   globalAssistantCoordinatorSlot: () => registry.coordinator,
   handGlobalAssistantCoordination: registry.hand,
   setGlobalAssistantKeepRunning: registry.keep,
+  listGlobalAssistantPastSessions: registry.listPast,
+  resumeGlobalAssistantConversation: registry.resume,
   stopGlobalAssistantSession: async (
     slot: number,
     check: (instance: GlobalAssistantService) => void
@@ -276,6 +280,76 @@ describe("global assistant IPC handlers", () => {
         code: "VALIDATION",
       });
       expect(registry.hand).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("an earlier conversation (#18169)", () => {
+    const request = (patch: Record<string, unknown> = {}) => ({
+      slot: 0,
+      agentSessionId: "conv-a",
+      expected: { generation: 2, phase: "running" },
+      ...patch,
+    });
+
+    beforeEach(() => {
+      registry.listPast.mockReset();
+      registry.resume.mockReset();
+    });
+
+    it("lists a session's earlier conversations only for a window of this machine", async () => {
+      registry.listPast.mockResolvedValue({ slot: 1, agentId: "claude", sessions: [] });
+      await expect(handlers.handleListGlobalAssistantPastSessions(ctx(10, 1), 1)).resolves.toEqual({
+        slot: 1,
+        agentId: "claude",
+        sessions: [],
+      });
+      expect(registry.listPast).toHaveBeenCalledWith(1);
+
+      await expect(
+        handlers.handleListGlobalAssistantPastSessions(ctx(10, null), 0)
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      await expect(
+        handlers.handleListGlobalAssistantPastSessions(ctx(10, 1), 2)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(registry.listPast).toHaveBeenCalledTimes(1);
+    });
+
+    it("reopens the conversation the person approved in the session they were shown", async () => {
+      registry.resume.mockResolvedValue(secondService);
+      const view = await handlers.handleResumeGlobalAssistantConversation(
+        ctx(10, 1),
+        request({ slot: 1 }) as never
+      );
+      expect(registry.resume).toHaveBeenCalledWith(1, "conv-a", {
+        generation: 2,
+        phase: "running",
+      });
+      expect(view.slot).toBe(1);
+    });
+
+    it.each([
+      ["no window", ctx(10, null), request()],
+      ["a session that isn't one", ctx(10, 1), request({ slot: 2 })],
+      ["no conversation", ctx(10, 1), request({ agentSessionId: "" })],
+      ["no session to compare", ctx(10, 1), request({ expected: undefined })],
+    ])("refuses %s before anything stops", async (_name, caller, body) => {
+      await expect(
+        handlers.handleResumeGlobalAssistantConversation(caller, body as never)
+      ).rejects.toMatchObject({ code: expect.stringMatching(/VALIDATION|UNSUPPORTED/) });
+      expect(registry.resume).not.toHaveBeenCalled();
+    });
+
+    it("says in the person's words that the session changed since they chose", async () => {
+      const { AppError } = await import("../../../utils/errorTypes.js");
+      registry.resume.mockRejectedValue(
+        new AppError({ code: "STALE_GENERATION", message: "changed" })
+      );
+      await expect(
+        handlers.handleResumeGlobalAssistantConversation(ctx(10, 1), request() as never)
+      ).rejects.toMatchObject({
+        code: "STALE_GENERATION",
+        userMessage: expect.stringContaining("Nothing was switched"),
+      });
     });
   });
 
