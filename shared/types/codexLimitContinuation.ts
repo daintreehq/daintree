@@ -1,8 +1,9 @@
 import type { CodexLimitUnknownReason } from "./codexLimitReset.js";
 
 /**
- * Continuing a Codex pane once its usage limit resets (#17909). The user arms
- * a pane from its menu; main waits for the reset #17906 resolves and the pty
+ * Continuing a Codex pane once its usage limit resets (#17909), and a Claude
+ * Code pane once its own wait for the reset is gone (#18192). The user arms a
+ * pane from its menu; main waits for the reset the pty host reads and the pty
  * host types the line only if the pane is still where the limit left it.
  */
 
@@ -25,12 +26,19 @@ export type CodexLimitContinueSkipReason =
   | "disarmed"
   /** The process that hit the limit is gone: the pane restarted, exited or moved. */
   | "process-changed"
-  /** The pane's Codex left it, or the pane is in the trash. */
+  /** The pane's agent left it, or the pane is in the trash. */
   | "agent-gone"
   /** The banner left the screen. */
   | "banner-gone"
   /** Something was typed or sent to the pane after the limit. */
   | "input-since"
+  /**
+   * Claude Code's own wait for the reset was cancelled by a key a person
+   * typed, or by nothing Daintree could attribute to an assistant (#18192).
+   */
+  | "auto-continue-cancelled"
+  /** Claude Code's own wait for the reset was on screen: it continues by itself (#18192). */
+  | "own-wait"
   /** A choice dialog showed in the pane after the limit. */
   | "dialog-since"
   /** Input of Daintree's was still waiting to be written to the pane. */
@@ -92,9 +100,11 @@ export type CodexLimitContinueResult =
 
 /**
  * Agents a pane can be armed for: those whose limit's reset Daintree can read
- * and whose CLI doesn't wait on its own (Claude Code continues by itself).
+ * off their screen. Claude Code waits out a limit by itself while its own
+ * "continuing automatically" line shows, so its pane only counts as stopped
+ * once that wait is gone (#18192).
  */
-const CONTINUABLE_AGENT_IDS: ReadonlySet<string> = new Set(["codex"]);
+const CONTINUABLE_AGENT_IDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 
 export function canContinueAtLimitReset(agentId: string | undefined): boolean {
   return agentId !== undefined && CONTINUABLE_AGENT_IDS.has(agentId);

@@ -104,6 +104,12 @@ export interface TerminalInputControllerHost {
   serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
   /** A count that moves whenever output reaches this terminal or goes on to its views. */
   outputMark(): number;
+  /**
+   * Each write {@link TerminalInputController.inputSequence} counts, as it is
+   * taken: `owner` names the assistant it was written for, absent for anyone
+   * else's (#18192).
+   */
+  noteInput?(data: string, owner: string | undefined): void;
 }
 
 function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
@@ -243,6 +249,7 @@ export class TerminalInputController {
     terminal.lastInputTime = Date.now();
     if (!isTerminalReportOnly(data)) {
       this.inputCount++;
+      this.host.noteInput?.(data, undefined);
       this.stampTyped(terminal.lastInputTime);
     }
     // Read before the analysis hears the keys: in-thread, it can move the
@@ -318,7 +325,10 @@ export class TerminalInputController {
       return false;
     }
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) this.inputCount++;
+    if (!isTerminalReportOnly(data)) {
+      this.inputCount++;
+      this.host.noteInput?.(data, inputOwner);
+    }
     // Read before the analysis hears the keys: in-thread, it can move the
     // state on before the write returns.
     const reachesPrompt = keysReachPrompt(terminal);

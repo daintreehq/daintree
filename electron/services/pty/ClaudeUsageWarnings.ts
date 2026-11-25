@@ -239,13 +239,35 @@ export function scanClaudeUsageMessages(
   lines: readonly string[],
   cols?: number
 ): ClaudeUsageMessage[] {
-  const tail = lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
   const byWindow = new Map<ClaudeUsageWindow, ClaudeUsageMessage>();
-  for (let i = 0; i < tail.length; i++) {
-    const message = matchRow(tail[i]!, tail[i + 1], cols);
-    if (message !== null) byWindow.set(message.window, message);
+  for (const { row: _row, ...message } of locateClaudeUsageMessages(lines, cols)) {
+    byWindow.set(message.window, message);
   }
   return [...byWindow.values()];
+}
+
+/** A usage message and the index in the lines given of the row it starts on. */
+export interface LocatedClaudeUsageMessage extends ClaudeUsageMessage {
+  row: number;
+}
+
+/**
+ * Every usage message {@link scanClaudeUsageMessages} reads at the tail of
+ * `lines`, top to bottom, with where each starts (#18192): a reader that
+ * judges what is drawn around a message needs its place.
+ */
+export function locateClaudeUsageMessages(
+  lines: readonly string[],
+  cols?: number
+): LocatedClaudeUsageMessage[] {
+  const start = Math.max(0, lines.length - SCAN_LINES);
+  const tail = lines.slice(start).map((line) => stripAnsi(line));
+  const located: LocatedClaudeUsageMessage[] = [];
+  for (let i = 0; i < tail.length; i++) {
+    const message = matchRow(tail[i]!, tail[i + 1], cols);
+    if (message !== null) located.push({ ...message, row: start + i });
+  }
+  return located;
 }
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];

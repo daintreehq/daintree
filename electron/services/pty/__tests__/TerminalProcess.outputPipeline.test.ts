@@ -2049,3 +2049,215 @@ describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
     terminal.dispose();
   });
 });
+
+describe("TerminalProcess continuing a Claude Code pane once its own wait is gone (#18192)", () => {
+  const unsubscribers: Array<() => void> = [];
+  // 3pm UTC; the banner's reset is 9pm UTC the same day.
+  const resetsAt = Date.UTC(2026, 10, 19, 21, 0) + 60_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 10, 19, 15, 0));
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  const RULE = "─".repeat(78);
+  const BANNER = "  ⎿  You've hit your weekly limit · resets 9pm (UTC)";
+  const CANCELLED = "  ⎿  Automatic continue cancelled · /rate-limit-options to re-arm";
+  const COUNTDOWN = "  Usage limit reached · continuing automatically at 9pm · esc to cancel";
+  /** Claude Code 2.1 at a plan limit: the banner, then its composer and footer. */
+  const claudeScreen = ({
+    notice = [] as string[],
+    footer = "  ⏵⏵ accept edits on (shift+tab to cycle)",
+    after = [] as string[],
+  } = {}) =>
+    "\x1b[2J\x1b[H" +
+    [
+      "● Refactoring the parser.",
+      BANNER,
+      "     /upgrade to increase your usage limit.",
+      "",
+      ...notice,
+      ...after,
+      RULE,
+      "❯ ",
+      RULE,
+      footer,
+    ].join("\r\n");
+  const countdownScreen = () => claudeScreen({ footer: COUNTDOWN });
+  const cancelledScreen = () => claudeScreen({ notice: [CANCELLED, ""] });
+
+  function collect() {
+    const stops: Array<{ run: string; seq: number }> = [];
+    unsubscribers.push(
+      events.on("agent:codex-limit-stopped", (payload) =>
+        stops.push({ run: payload.run, seq: payload.seq })
+      )
+    );
+    return stops;
+  }
+
+  type Internals = { terminalInfo: { ptyProcess: IPty } };
+  async function armedClaudePane(first: string) {
+    const stops = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    terminal.setCodexLimitContinueArmed(true);
+    ptyOnDataCallback!(first);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    const write = vi.spyOn((terminal as unknown as Internals).terminalInfo.ptyProcess, "write");
+    const typed = () => write.mock.calls.map(([data]) => data).join("");
+    return { terminal, stops, typed };
+  }
+
+  async function show(screen: string) {
+    ptyOnDataCallback!(screen);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+  }
+
+  const answer = (terminal: TerminalProcess) =>
+    terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+
+  async function continueAt(terminal: TerminalProcess, stop: { run: string; seq: number }) {
+    const result = terminal.continueAtCodexLimit(stop);
+    await vi.advanceTimersByTimeAsync(2_000);
+    return result;
+  }
+
+  it("holds no stop while Claude's own countdown is on screen, and types nothing once it continues by itself", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(stops).toEqual([]);
+    expect(answer(terminal)).toEqual({ reset: { status: "unknown", reason: "no-banner" } });
+
+    // Claude's own wait ran out and it took the turn up again.
+    await show(claudeScreen({ after: ["> continue", "", "● Picking up where the parser left off.", ""] }));
+    expect(stops).toEqual([]);
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("continues at the reset once an assistant's Escape cancelled the countdown", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+
+    expect(stops).toHaveLength(1);
+    const reply = answer(terminal);
+    expect(reply).toEqual({
+      reset: {
+        status: "known",
+        resetsAt,
+        precision: "minute",
+        source: "banner",
+        observedAt: expect.any(Number),
+      },
+      stamp: { run: stops[0]!.run, seq: stops[0]!.seq, observedAt: expect.any(Number) },
+    });
+    expect(JSON.stringify(reply)).not.toMatch(/limit|9pm/);
+    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    expect(typed()).toBe("\x1bcontinue\r");
+    terminal.dispose();
+  });
+
+  it("leaves the pane stopped when a person's Escape cancelled the countdown", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b");
+    await show(cancelledScreen());
+
+    expect(stops).toHaveLength(1);
+    expect(answer(terminal)).toMatchObject({
+      reset: { status: "known", resetsAt },
+      skipAtStop: "auto-continue-cancelled",
+    });
+    terminal.dispose();
+    expect(typed()).toBe("\x1b");
+  });
+
+  it("tells a person's Escape from an assistant's even when the cancelled screen is the first one seen", async () => {
+    const idle = claudeScreen({ after: [] }).replace(BANNER, "● Done.");
+    const person = await armedClaudePane(idle);
+    person.terminal.write("\x1b");
+    await show(cancelledScreen());
+    expect(answer(person.terminal)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+    person.terminal.dispose();
+
+    const assistant = await armedClaudePane(idle);
+    assistant.terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+    expect(answer(assistant.terminal)).not.toHaveProperty("skipAtStop");
+    assistant.terminal.dispose();
+  });
+
+  it("counts a person's key beside an assistant's Escape as the person's", async () => {
+    const { terminal } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    terminal.write("x");
+    await show(cancelledScreen());
+    expect(answer(terminal)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+    terminal.dispose();
+  });
+
+  it("types nothing after input written once the cancelled screen showed", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+    terminal.write("x");
+    terminal.write("\x7f");
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("continues a stop already on screen when the pane is armed, and again after a person's Escape once re-armed", async () => {
+    const stops = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    terminal.write("\x1b");
+    ptyOnDataCallback!(cancelledScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(stops).toEqual([]);
+
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(stops).toHaveLength(1);
+    expect(answer(terminal)).not.toHaveProperty("skipAtStop");
+    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    terminal.dispose();
+  });
+
+  it("continues a limit Claude drew no wait for at all", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(claudeScreen());
+    expect(stops).toHaveLength(1);
+    expect(answer(terminal)).toMatchObject({ reset: { status: "known", resetsAt } });
+    expect(answer(terminal)).not.toHaveProperty("skipAtStop");
+    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    expect(typed()).toBe("continue\r");
+    terminal.dispose();
+  });
+
+  it("types nothing once Claude's own countdown is back on screen", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+    await show(claudeScreen({ notice: [CANCELLED, ""], footer: COUNTDOWN }));
+    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "skipped", reason: "own-wait" });
+    expect(typed()).toBe("\x1b");
+    terminal.dispose();
+  });
+
+  it("drops the stop when the pane is disarmed", async () => {
+    const { terminal, stops } = await armedClaudePane(claudeScreen());
+    terminal.setCodexLimitContinueArmed(false);
+    expect(answer(terminal)).toEqual({ reset: { status: "unknown", reason: "no-banner" } });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "skipped", reason: "disarmed" });
+    terminal.dispose();
+  });
+});

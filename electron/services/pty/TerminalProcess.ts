@@ -64,14 +64,22 @@ import {
 import type {
   CodexLimitAnswer,
   CodexLimitQuery,
+  CodexLimitReset,
   CodexLimitUnknownReason,
 } from "../../../shared/types/codexLimitReset.js";
-import type {
-  CodexLimitContinueResult,
-  CodexLimitContinueSkipReason,
-  CodexLimitStopRef,
+import {
+  canContinueAtLimitReset,
+  type CodexLimitContinueResult,
+  type CodexLimitContinueSkipReason,
+  type CodexLimitStopRef,
 } from "../../../shared/types/codexLimitContinuation.js";
-import { codexStopContext, judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
+import {
+  codexStopContext,
+  judgeCodexLimitScreen,
+  type CodexLimitScreenVerdict,
+} from "./codexLimitContinueScreen.js";
+import { ClaudeLimitStopTracker, type LimitStopGuard } from "./ClaudeLimitStop.js";
+import { judgeClaudeLimitScreen } from "./claudeLimitStopScreen.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -124,14 +132,23 @@ import {
   type VisibleContentSnapshot,
 } from "./SustainedChangeTracker.js";
 
-/** What has happened to a pane since its Codex stop first showed (#17909). */
-interface CodexStopGuard {
-  /** The banner it was for, and the history rows just above it. */
-  key: string;
-  /** The terminal's input count when it first showed: any later write is input since the stop. */
-  inputSeq: number;
-  /** A choice dialog was observed since, whatever the screen shows now. */
-  dialogSeen: boolean;
+/** What has happened to a pane since its Codex stop first showed (#17909); `key` is the banner and the history rows just above it. */
+type CodexStopGuard = LimitStopGuard;
+
+/** The stop an armed pane's live agent holds, in the shape the report and the checks at the reset read (#18192). */
+interface HeldLimitStop {
+  seq: number;
+  incarnation: number;
+  observedSince: number | null;
+  /** The latest look showed it. */
+  shown: boolean;
+  /** Why it can't be continued while it isn't shown. */
+  goneReason: CodexLimitContinueSkipReason;
+  guard: LimitStopGuard;
+  /** Whether a serialized screen is still the one the stop left, and the line that continues it. */
+  judge(serialized: string, cols: number | undefined): CodexLimitScreenVerdict;
+  /** Asked again right before the line's Enter, where the agent's screen can still say no. */
+  holdsAtEnter?: () => boolean;
 }
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
@@ -317,7 +334,13 @@ export class TerminalProcess {
    */
   private readonly claudeUsageSeen = new Map<
     ClaudeUsageWindow,
-    { key: string; visible: boolean; lastSeenAt: number }
+    {
+      key: string;
+      visible: boolean;
+      lastSeenAt: number;
+      /** When it was observed: when the pane showed what it says. */
+      observedAt: number;
+    }
   >();
   /**
    * The Codex stop banner on screen (#17906), held from its first sighting,
@@ -370,6 +393,8 @@ export class TerminalProcess {
    * here runs.
    */
   private codexContinueArmed = false;
+  /** An armed Claude Code pane's stop, once Claude's own wait for the reset is gone (#18192). */
+  private readonly claudeLimitStop = new ClaudeLimitStopTracker(() => ++this.codexLimitSeq);
   private codexStopReportedSeq: number | null = null;
   private codexStopSettleTimer: NodeJS.Timeout | null = null;
   /** True only while the exit path settles the mirror's last frame. */
@@ -655,6 +680,7 @@ export class TerminalProcess {
       logWriteError: (error, context) => self.logWriteError(error, context),
       serializeScreen: () => self.analysis.serializeScreen(),
       outputMark: () => self.emittedBytes + self.receivedChunks,
+      noteInput: (data, owner) => self.noteLimitStopInput(data, owner),
     });
     this.ptyDataPipeline = new PtyDataPipeline({
       get terminalInfo() {
@@ -871,6 +897,7 @@ export class TerminalProcess {
     if (t.agentState !== "waiting" || t.waitingReason !== "approval") return;
     if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
     if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
+    this.claudeLimitStop.noteDialog();
     this.withdrawCodexContinue();
   }
 
@@ -1058,6 +1085,7 @@ export class TerminalProcess {
     clearUpdateInstalled(this.terminalInfo, Date.now());
     this.codexLimit = null;
     this.codexLimitLook = "none";
+    this.claudeLimitStop.clear();
 
     if (this.ptyDataDisposable) {
       try {
@@ -2126,6 +2154,7 @@ export class TerminalProcess {
     this.observeClaudeUsage(lines, now);
     this.observeUpdateFooter(lines, now);
     this.observeCodexUsageLimit(lines, now);
+    this.observeClaudeLimitStop(lines, now);
     this.observeHandback(now);
   }
 
@@ -2252,7 +2281,12 @@ export class TerminalProcess {
         last === undefined ||
         last.key !== key ||
         (!last.visible && now - last.lastSeenAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS);
-      seen.set(message.window, { key, visible: true, lastSeenAt: now });
+      seen.set(message.window, {
+        key,
+        visible: true,
+        lastSeenAt: now,
+        observedAt: fresh || last === undefined ? now : last.observedAt,
+      });
       if (!fresh) continue;
       events.emit("agent:claude-usage-observed", {
         terminalId: this.id,
@@ -2388,6 +2422,9 @@ export class TerminalProcess {
    * been replaced unseen.
    */
   answerCodexLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
+    if (getLiveAgentId(this.terminalInfo) === "claude") {
+      return this.answerClaudeLimit(query, observedSince);
+    }
     const held = this.codexLimit;
     const t = this.terminalInfo;
     const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({
@@ -2451,7 +2488,129 @@ export class TerminalProcess {
     this.codexContinueArmGeneration++;
     if (!armed) this.withdrawCodexContinue();
     this.codexStopReportedSeq = null;
+    // Each arming starts afresh: a Claude stop already on screen is looked at
+    // now, as the arming's own, rather than when the pane next prints.
+    this.claudeLimitStop.clear();
+    if (armed && getLiveAgentId(this.terminalInfo) === "claude") {
+      const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
+      this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), Date.now(), true);
+    }
     this.trackCodexStop();
+  }
+
+  /** Input as the pty host takes it, kept only for an armed Claude Code pane (#18192). */
+  private noteLimitStopInput(data: string, owner: string | undefined): void {
+    if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
+      this.claudeLimitStop.noteInput(data, owner);
+    }
+  }
+
+  /**
+   * Follow an armed Claude Code pane's stop (#18192). Nothing here runs for a
+   * pane that isn't armed, and leaving Claude, or its run ending, drops it.
+   */
+  private observeClaudeLimitStop(lines: readonly string[], now: number, armLook = false): void {
+    const t = this.terminalInfo;
+    if (
+      !this.codexContinueArmed ||
+      this.samplingFinalFrame ||
+      getLiveAgentId(t) !== "claude" ||
+      !this.isAgentLive ||
+      !this.lifecycle.isAlive
+    ) {
+      if (this.claudeLimitStop.held() !== null) {
+        this.claudeLimitStop.clear();
+        this.trackCodexStop();
+      }
+      return;
+    }
+    const seen = this.claudeUsageSeen;
+    this.claudeLimitStop.observe(
+      lines,
+      {
+        now,
+        cols: readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined,
+        inputSeq: this.inputController.inputSequence,
+        incarnation: t.agentIncarnation ?? 0,
+        observedSince: this.analysis.observedSince(),
+        shownAt: (window, resetText) => {
+          const last = seen.get(window);
+          return last?.key === `reached|null|${resetText}` ? last.observedAt : null;
+        },
+      },
+      armLook
+    );
+    // A dialog on screen as the stop first shows marks it at once.
+    this.noteCodexStopState();
+    this.trackCodexStop();
+  }
+
+  /** {@link answerCodexLimit} for a Claude Code pane's stop, read off its banner alone (#18192). */
+  private answerClaudeLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
+    const t = this.terminalInfo;
+    const held = this.claudeLimitStop.held();
+    const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({
+      reset: { status: "unknown", reason },
+    });
+    if (
+      !this.isAgentLive ||
+      !this.lifecycle.isAlive ||
+      held === null ||
+      !held.shown ||
+      held.incarnation !== (t.agentIncarnation ?? 0)
+    ) {
+      return unknown("no-banner");
+    }
+    if (observedSince === null || observedSince !== held.observedSince) {
+      return unknown("not-observed");
+    }
+    if (query.seq !== undefined && (query.seq !== held.seq || query.run !== this.codexLimitRun)) {
+      return unknown("banner-changed");
+    }
+    const stamp = { seq: held.seq, run: this.codexLimitRun, observedAt: held.observedAt };
+    const reset: CodexLimitReset =
+      "resetsAt" in held.reset
+        ? {
+            status: "known",
+            resetsAt: held.reset.resetsAt,
+            precision: "minute",
+            source: "banner",
+            observedAt: held.observedAt,
+          }
+        : { status: "unknown", reason: held.reset.reason, observedAt: held.observedAt };
+    return held.skipAtStop === null
+      ? { reset, stamp }
+      : { reset, stamp, skipAtStop: held.skipAtStop };
+  }
+
+  /** The stop the live agent's screen holds, for the report and the checks at the reset. */
+  private heldLimitStop(): HeldLimitStop | null {
+    if (getLiveAgentId(this.terminalInfo) === "claude") {
+      const held = this.claudeLimitStop.held();
+      if (held === null) return null;
+      return {
+        seq: held.seq,
+        incarnation: held.incarnation,
+        observedSince: held.observedSince,
+        shown: held.shown,
+        goneReason: held.ownWait ? "own-wait" : "banner-gone",
+        guard: held.guard,
+        judge: (serialized, cols) => judgeClaudeLimitScreen(serialized, cols, held.bannerKey),
+        // Claude can draw its own wait again between the line and its Enter.
+        holdsAtEnter: () => this.claudeLimitStop.held() === held && held.shown,
+      };
+    }
+    const held = this.codexLimit;
+    if (held === null) return null;
+    return {
+      seq: held.seq,
+      incarnation: held.incarnation,
+      observedSince: held.observedSince,
+      shown: this.codexLimitLook === "banner" && held.hiddenSince === null,
+      goneReason: "banner-gone",
+      guard: held.guard,
+      judge: (serialized, cols) => judgeCodexLimitScreen(serialized, cols, held.key),
+    };
   }
 
   /**
@@ -2461,13 +2620,12 @@ export class TerminalProcess {
    * prompt is a new stop.
    */
   private trackCodexStop(): void {
-    const held = this.codexLimit;
+    const held = this.heldLimitStop();
     if (
       !this.codexContinueArmed ||
       this.samplingFinalFrame ||
       held === null ||
-      this.codexLimitLook !== "banner" ||
-      held.hiddenSince !== null ||
+      !held.shown ||
       held.seq === this.codexStopReportedSeq
     ) {
       this.cancelCodexStopSettle();
@@ -2493,17 +2651,16 @@ export class TerminalProcess {
   }
 
   private settleCodexStop(): void {
-    const held = this.codexLimit;
+    const held = this.heldLimitStop();
     const t = this.terminalInfo;
     if (
       !this.codexContinueArmed ||
       held === null ||
-      this.codexLimitLook !== "banner" ||
-      held.hiddenSince !== null ||
+      !held.shown ||
       held.seq === this.codexStopReportedSeq ||
       !this.isAgentLive ||
       t.isExited ||
-      getLiveAgentId(t) !== "codex"
+      !canContinueAtLimitReset(getLiveAgentId(t))
     ) {
       return;
     }
@@ -2545,16 +2702,16 @@ export class TerminalProcess {
     hostBlocker: () => CodexLimitContinueSkipReason | null
   ): CodexLimitContinueSkipReason | null {
     const t = this.terminalInfo;
-    const held = this.codexLimit;
     if (stop.run !== this.codexLimitRun) return "process-changed";
     // Disarmed since main asked: the disarm reaches the host ahead of the write.
     if (!this.codexContinueArmed) return "disarmed";
     if (!this.lifecycle.isAlive || t.isExited || !this.isAgentLive) return "agent-gone";
-    if (getLiveAgentId(t) !== "codex") return "agent-gone";
+    if (!canContinueAtLimitReset(getLiveAgentId(t))) return "agent-gone";
+    const held = this.heldLimitStop();
     if (held === null || held.seq !== stop.seq || held.incarnation !== (t.agentIncarnation ?? 0)) {
       return "banner-changed";
     }
-    if (this.codexLimitLook !== "banner" || held.hiddenSince !== null) return "banner-gone";
+    if (!held.shown) return held.goneReason;
     // A banner seen before a gap in the read may have been replaced unseen.
     if (this.analysis.observedSince() !== held.observedSince) return "not-observed";
     if (this.inputController.inputSequence !== held.guard.inputSeq) return "input-since";
@@ -2599,9 +2756,9 @@ export class TerminalProcess {
     if (this.emittedBytes !== streamOffset) return skipped("output-since");
     if (snapshot?.continuation?.streamOffset !== streamOffset) return skipped("unreadable-screen");
     const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
-    const held = this.codexLimit;
+    const held = this.heldLimitStop();
     if (held === null) return skipped("banner-changed");
-    const verdict = judgeCodexLimitScreen(snapshot.data, cols, held.key);
+    const verdict = held.judge(snapshot.data, cols);
     if ("skip" in verdict) return skipped(verdict.skip);
     const { line } = verdict;
     return new Promise<CodexLimitContinueResult>((resolve) => {
@@ -2630,7 +2787,15 @@ export class TerminalProcess {
         return false;
       };
       this.codexContinueToken = token;
-      this.writeQueue.submit(line, token, () => settle({ status: "continued", line }), admit);
+      this.writeQueue.submit(
+        line,
+        token,
+        () => settle({ status: "continued", line }),
+        admit,
+        undefined,
+        undefined,
+        held.holdsAtEnter
+      );
       // Runs once the lane is past the line, however it ended: refused,
       // abandoned before its Enter, or written (already settled).
       this.writeQueue.stage(() => settle(skipped("not-delivered")));
