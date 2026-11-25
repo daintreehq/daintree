@@ -40,6 +40,7 @@ function fakePtyClient(succeeds = true) {
   const client = {
     on: (event: string, listener: (...args: unknown[]) => void) => emitter.on(event, listener),
     off: (event: string, listener: (...args: unknown[]) => void) => emitter.off(event, listener),
+    emit: (event: string, ...args: unknown[]) => emitter.emit(event, ...args),
     spawn: vi.fn((id: string, options: SpawnCall["options"]) => {
       spawns.push({ id, options });
       queueMicrotask(() => emitter.emit("spawn-result", id, { success: succeeds, id }));
@@ -69,6 +70,24 @@ describe("the command a host's sign-in runs", () => {
 
   it("opens the CLI as it is when it declares no sign-in command", () => {
     expect(agentSignInCommand("gemini", undefined, "posix", quoteLaunchArgOptional)).toBe("gemini");
+  });
+});
+
+describe("liveHostSignInDeps().onGone", () => {
+  it("hears its own terminal exit or be dropped, and stops hearing when told", () => {
+    const { client } = fakePtyClient();
+    refs.ptyClient = client;
+    const gone = vi.fn();
+    const stop = liveHostSignInDeps().onGone("daintree-sign-in-1", gone);
+    const emit = (event: string, id: string) => client.emit(event, id);
+    emit("exit", "other-terminal");
+    expect(gone).not.toHaveBeenCalled();
+    emit("terminal-lost", "daintree-sign-in-1");
+    emit("exit", "daintree-sign-in-1");
+    expect(gone).toHaveBeenCalledTimes(2);
+    stop();
+    emit("exit", "daintree-sign-in-1");
+    expect(gone).toHaveBeenCalledTimes(2);
   });
 });
 

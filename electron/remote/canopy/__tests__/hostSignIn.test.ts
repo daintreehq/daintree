@@ -19,7 +19,7 @@ function fakeDeps(options: { spawn?: HostSignInDeps["spawn"] } = {}) {
     newId: () => `id${++ids}`,
     spawn: vi.fn(options.spawn ?? (async () => ({ spawnedAt: 500 }))),
     kill: vi.fn(),
-    watch: vi.fn(async (target: ProjectPushTarget, terminalId: string) => {
+    watch: vi.fn(async (...[target, terminalId]: Parameters<HostSignInDeps["watch"]>) => {
       const watchId = ++nextWatch;
       watches.set(watchId, { target, terminalId });
       return { watchId, snapshot: { data: "", cols: 80, rows: 24 }, holdsSize: true };
@@ -231,6 +231,24 @@ describe("a host's agent CLI sign-ins", () => {
     await expect(
       s.signIn({ viewerId: "a", op: "input", watchId, data: "y" })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("says a terminal that ended while its spawn was answered ended, and lets its place go", async () => {
+    let finish: (value: { spawnedAt: number }) => void = () => {};
+    const s = setup({
+      spawn: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const started = s.signIn({ viewerId: "a", op: "start", agentId: "claude" }) as Promise<unknown>;
+    await Promise.resolve();
+    const terminalId = s.deps.spawn.mock.calls[0]![0].terminalId;
+    s.goneListeners.get(terminalId)!();
+    finish({ spawnedAt: 1 });
+    await expect(started).rejects.toMatchObject({ code: "INTERNAL" });
+    expect(s.signIns.size).toBe(0);
+    expect(s.goneListeners.has(terminalId)).toBe(false);
   });
 
   it("frees its place when the spawn fails", async () => {

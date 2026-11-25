@@ -1166,6 +1166,32 @@ describe("terminal pool inspection handlers", () => {
       expect(result.map((terminal) => terminal.id)).toEqual(["t-terminal"]);
     });
 
+    it("reads no sign-in's screen for anyone but its dialog (#18196)", async () => {
+      const ptyClient = {
+        getSerializedStateAsync: vi.fn(async () => ({
+          data: "code ABCD-1234",
+          cols: 80,
+          rows: 24,
+        })),
+      };
+
+      registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+      await expect(
+        getHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE)(
+          senderEvent(SENDER_A),
+          "daintree-sign-in-1"
+        )
+      ).resolves.toBeNull();
+      await expect(
+        getHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATES)(senderEvent(SENDER_A), [
+          "daintree-sign-in-1",
+          "t-1",
+        ])
+      ).resolves.toMatchObject({ "daintree-sign-in-1": null, "t-1": { data: "code ABCD-1234" } });
+      expect(ptyClient.getSerializedStateAsync).toHaveBeenCalledTimes(1);
+    });
+
     it("includes hasPty and activityTier fields", async () => {
       const ptyClient = {
         getAllTerminalsAsync: vi.fn(async () => [

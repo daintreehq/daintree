@@ -52,6 +52,8 @@ interface Run {
   spawnedAt: number | null;
   target: ProjectPushTarget;
   ended: boolean;
+  /** Its terminal ended before the spawn answered: there is nothing to show. */
+  goneWhileStarting: boolean;
   endListeners: Set<() => void>;
   stopHearingGone: (() => void) | null;
 }
@@ -147,6 +149,7 @@ export class HostSignIns {
         send: (channel, ...args) => viewer.send({ type: "event", channel, args }),
       },
       ended: false,
+      goneWhileStarting: false,
       endListeners: new Set(),
       stopHearingGone: null,
     };
@@ -157,6 +160,12 @@ export class HostSignIns {
       this.end(viewer);
       throw ended();
     }
+    // Heard from before the spawn, so an exit or a pty-host restart that lands
+    // while the spawn is answered isn't missed.
+    run.stopHearingGone = this.deps.onGone(run.terminalId, () => {
+      if (run.spawnedAt === null) run.goneWhileStarting = true;
+      else this.end(viewer);
+    });
     let started: { spawnedAt: number };
     try {
       started = await this.deps.spawn({
@@ -173,8 +182,16 @@ export class HostSignIns {
       this.settleStart(viewer, run);
       throw ended();
     }
+    if (run.goneWhileStarting) {
+      this.settleStart(viewer, run);
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The sign-in's terminal ended as it started",
+        userMessage:
+          "The sign-in's terminal ended as soon as it started. Retry, or open a terminal on this host to run it.",
+      });
+    }
     run.spawnedAt = started.spawnedAt;
-    run.stopHearingGone = this.deps.onGone(run.terminalId, () => this.end(viewer));
     return { terminalId: run.terminalId, spawnedAt: started.spawnedAt };
   }
 
@@ -211,6 +228,7 @@ export class HostSignIns {
    */
   private settleStart(viewer: CanopyViewer, run: Run): void {
     run.ended = true;
+    run.stopHearingGone?.();
     if (this.runs.get(viewer) === run) this.runs.delete(viewer);
     this.deps.kill(run.terminalId);
   }

@@ -95,6 +95,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
       }
+      // A sign-in's screen is read only by the dialog that started it (#18196).
+      if (isHostSignInTerminalId(terminalId)) return null;
 
       const tailRows = options?.tailRows;
       const serializedState = await ptyClient.getSerializedStateAsync(
@@ -144,6 +146,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     const remote = ctx.endpoint?.kind === "remote-view";
     const results = await Promise.all(
       normalizedIds.map(async (terminalId) => {
+        if (isHostSignInTerminalId(terminalId)) return [terminalId, null] as const;
         try {
           const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
           return [
