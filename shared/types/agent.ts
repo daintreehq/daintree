@@ -80,6 +80,22 @@ export function coerceWaitingReason(value: unknown): WaitingReason | undefined {
   return WAITING_REASONS.has(value as WaitingReason) ? (value as WaitingReason) : undefined;
 }
 
+/**
+ * Which selector an `"approval"` wait shows, set only when the screen names it
+ * (#18170). `"trust"` is a CLI's own folder-trust prompt, matched by the fixed
+ * wording each CLI asks it in. Absent says nothing about the selector: a tool
+ * approval and any other list look alike, and are never told apart.
+ */
+export type ApprovalKind = "trust";
+
+const APPROVAL_KINDS: ReadonlySet<ApprovalKind> = new Set(["trust"]);
+
+/** Normalise an approval kind coming off the wire; unknown values return undefined. */
+export function coerceApprovalKind(value: unknown): ApprovalKind | undefined {
+  if (typeof value !== "string") return undefined;
+  return APPROVAL_KINDS.has(value as ApprovalKind) ? (value as ApprovalKind) : undefined;
+}
+
 export type AgentId = string;
 
 /** Valid triggers for agent state changes */

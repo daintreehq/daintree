@@ -142,7 +142,7 @@ async function terminalServiceForResync(state: PanelState): Promise<ResyncTermin
 
 type HostAgentStateRecord = Pick<
   BackendTerminalInfo,
-  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason"
+  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason" | "approvalKind"
 >;
 
 /**
@@ -171,7 +171,19 @@ export function takeHostAgentState(
       panel.agentIncarnation !== undefined &&
       record.agentIncarnation !== panel.agentIncarnation);
   const observedAt = hostObservedAt(panel);
-  if (!newIncarnation && observedAt !== undefined && record.lastStateChange <= observedAt) {
+  // A selector named or unnamed keeps the wait's time (#18170), so a record
+  // tied with the last report that differs only in that is still news.
+  const kindRefined =
+    record.lastStateChange === observedAt &&
+    record.agentState === panel.agentState &&
+    record.waitingReason === panel.waitingReason &&
+    record.approvalKind !== panel.approvalKind;
+  if (
+    !newIncarnation &&
+    !kindRefined &&
+    observedAt !== undefined &&
+    record.lastStateChange <= observedAt
+  ) {
     return;
   }
   // Taken with the state, as the live listener takes it: the session a wait
@@ -195,7 +207,10 @@ export function takeHostAgentState(
     record.lastStateChange,
     undefined,
     undefined,
-    record.waitingReason
+    record.waitingReason,
+    undefined,
+    undefined,
+    record.approvalKind
   );
 }
 

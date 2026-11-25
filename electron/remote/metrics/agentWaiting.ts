@@ -30,6 +30,9 @@ export function agentWaitingOf(
     agentIncarnation:
       typeof payload.agentIncarnation === "number" ? payload.agentIncarnation : null,
     waitingReason: payload.waitingReason ?? null,
+    ...(payload.waitingReason === "approval" && payload.approvalKind !== undefined
+      ? { approvalKind: payload.approvalKind }
+      : {}),
     refined: payload.previousState === "waiting",
     seenAt: payload.timestamp,
   };

@@ -25,7 +25,7 @@ import {
 import { reportRunHandback } from "./runHandback.js";
 import { clearUpdateInstalled } from "./claudeUpdateObservation.js";
 import { markPromptUnseen, notePromptSeen, seesPromptFirst } from "./promptUnseen.js";
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
 // States where the agent has just settled out of "working" — the moment a
@@ -284,7 +284,8 @@ export class AgentStateService {
     sessionCost?: number,
     sessionTokens?: number,
     temperature?: AgentActivityObservationResult,
-    promptDrawnAt?: number
+    promptDrawnAt?: number,
+    approvalKind?: ApprovalKind
   ): boolean {
     // Detection wins; fall back to the launch hint during the boot window.
     // May be undefined for runtime-detected-only flows; consumers fall back to
@@ -388,6 +389,9 @@ export class AgentStateService {
         ? { terminalClosing: true as const }
         : {}),
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
+      ...(newState === "waiting" && waitingReason === "approval" && approvalKind
+        ? { approvalKind }
+        : {}),
       ...((newState === "completed" || newState === "exited") && sessionCost != null
         ? { sessionCost }
         : {}),
@@ -507,8 +511,10 @@ export class AgentStateService {
 
     if (newState === "waiting") {
       terminal.waitingReason = waitingReason;
+      terminal.approvalKind = waitingReason === "approval" ? approvalKind : undefined;
     } else {
       terminal.waitingReason = undefined;
+      terminal.approvalKind = undefined;
     }
     if (newState !== "working") delete terminal.workingDialogVisible;
     // A respawn starts a run that has shown no prompt yet (#18014).
@@ -539,18 +545,33 @@ export class AgentStateService {
    * reason off a screen the CLI hadn't drawn yet. One read before a later
    * settle that agreed with it, or carried no reason, landed is still that
    * sight, unless anything was typed since it was read, and leaves that
-   * settle where it is.
+   * settle where it is. A selector swapped for another at the same reason is
+   * news too (#18170): `approvalKind` names which one, read off the same
+   * screen. That change leaves the settle where it was, since the screen it
+   * was read off may hold a draft the send gates must still see as typed
+   * after it. `keepSettle` does the same for a reading of any reason, taken
+   * whenever it was read, for a settle the FSM dropped.
    */
   updateWaitingReason(
     terminal: TerminalInfo,
     waitingReason: WaitingReason,
     observedAt: number,
-    promptDrawnAt?: number
+    promptDrawnAt?: number,
+    approvalKind?: ApprovalKind,
+    keepSettle = false
   ): boolean {
     if (terminal.agentState !== "waiting") return false;
+    const kind = waitingReason === "approval" ? approvalKind : undefined;
     const firstSight = seesPromptFirst(terminal, waitingReason, promptDrawnAt);
-    if (terminal.waitingReason === waitingReason && !firstSight) return false;
-    if (terminal.lastStateChange !== undefined && observedAt <= terminal.lastStateChange) {
+    if (terminal.waitingReason === waitingReason && terminal.approvalKind === kind && !firstSight) {
+      return false;
+    }
+    const kindOnly = terminal.waitingReason === waitingReason && !firstSight;
+    if (
+      !keepSettle &&
+      terminal.lastStateChange !== undefined &&
+      observedAt <= terminal.lastStateChange
+    ) {
       const agreed =
         terminal.waitingReason === undefined || terminal.waitingReason === waitingReason;
       const typedSince =
@@ -561,13 +582,15 @@ export class AgentStateService {
       // Never ahead of the clock: a keystroke in the same millisecond still holds.
       observedAt = terminal.lastStateChange;
     }
+    const settledAt =
+      kindOnly || keepSettle ? (terminal.lastStateChange ?? observedAt) : observedAt;
 
     const confidence = this.normalizeConfidence(0.9);
     const payload = {
       agentId: terminal.detectedAgentId ?? terminal.launchAgentId,
       state: "waiting" as const,
       previousState: "waiting" as const,
-      timestamp: observedAt,
+      timestamp: settledAt,
       agentIncarnation: terminal.agentIncarnation ?? 0,
       traceId: terminal.traceId,
       terminalId: terminal.id,
@@ -575,6 +598,7 @@ export class AgentStateService {
       trigger: "heuristic" as const,
       confidence,
       waitingReason,
+      ...(kind !== undefined ? { approvalKind: kind } : {}),
     };
     const validated = AgentStateChangedSchema.safeParse(payload);
     if (!validated.success) {
@@ -592,7 +616,8 @@ export class AgentStateService {
     }
 
     terminal.waitingReason = waitingReason;
-    terminal.lastStateChange = observedAt;
+    terminal.approvalKind = kind;
+    terminal.lastStateChange = settledAt;
     notePromptSeen(terminal, promptDrawnAt);
     events.emit("agent:state-changed", validated.data);
     this.emitTerminalActivity(terminal);
@@ -774,6 +799,7 @@ export class AgentStateService {
       trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
       patternConfidence?: number;
       waitingReason?: WaitingReason;
+      approvalKind?: ApprovalKind;
       sessionCost?: number;
       sessionTokens?: number;
       temperature?: AgentActivityObservationResult;
@@ -812,7 +838,8 @@ export class AgentStateService {
           terminal,
           metadata.waitingReason,
           metadata.rereadAt,
-          metadata.promptDrawnAt
+          metadata.promptDrawnAt,
+          metadata.approvalKind
         );
       }
       return;
@@ -847,7 +874,8 @@ export class AgentStateService {
         undefined,
         undefined,
         temperature,
-        promptDrawnAt
+        promptDrawnAt,
+        metadata?.approvalKind
       );
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
@@ -860,7 +888,8 @@ export class AgentStateService {
         metadata?.sessionCost,
         metadata?.sessionTokens,
         temperature,
-        promptDrawnAt
+        promptDrawnAt,
+        metadata?.approvalKind
       );
     } else if (metadata?.trigger === "output") {
       changed = this.updateAgentState(
@@ -872,7 +901,8 @@ export class AgentStateService {
         undefined,
         undefined,
         temperature,
-        promptDrawnAt
+        promptDrawnAt,
+        metadata?.approvalKind
       );
     } else if (metadata?.trigger === "input") {
       changed = this.updateAgentState(
@@ -884,7 +914,8 @@ export class AgentStateService {
         undefined,
         undefined,
         temperature,
-        promptDrawnAt
+        promptDrawnAt,
+        metadata?.approvalKind
       );
     } else {
       changed = this.updateAgentState(
@@ -896,7 +927,8 @@ export class AgentStateService {
         undefined,
         undefined,
         temperature,
-        promptDrawnAt
+        promptDrawnAt,
+        metadata?.approvalKind
       );
     }
 
@@ -917,7 +949,33 @@ export class AgentStateService {
       promptDrawnAt !== undefined &&
       terminal.promptUnseen === true
     ) {
-      this.updateWaitingReason(terminal, metadata.waitingReason, promptDrawnAt, promptDrawnAt);
+      this.updateWaitingReason(
+        terminal,
+        metadata.waitingReason,
+        promptDrawnAt,
+        promptDrawnAt,
+        metadata.approvalKind
+      );
+    } else if (
+      // The same drop loses a selector the settle read (#18170), a trust
+      // prompt above all: the record would read as no dialog, and a guarded
+      // send would pass it. Taken as read, however late it arrives or however
+      // close behind the drop, and leaving the settle where it was: the
+      // screen may have moved on to a draft the send gates must still count.
+      !changed &&
+      activity === "idle" &&
+      metadata?.waitingReason === "approval" &&
+      terminal.agentState === "waiting" &&
+      (terminal.waitingReason !== "approval" || terminal.approvalKind !== metadata.approvalKind)
+    ) {
+      this.updateWaitingReason(
+        terminal,
+        "approval",
+        getStateChangeTimestamp(),
+        undefined,
+        metadata.approvalKind,
+        true
+      );
     }
   }
 

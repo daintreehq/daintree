@@ -115,6 +115,11 @@ export const AgentDirectoryLiveEntrySchema = z.object({
   agentId: z.string().nullable(),
   agentState: agentStateSchema.nullable(),
   waitingReason: waitingReasonSchema.nullable(),
+  /**
+   * Which selector an approval wait shows, when its screen named it (#18170);
+   * absent otherwise, and for a kind a later host adds.
+   */
+  approvalKind: z.literal("trust").optional().catch(undefined),
   /** Epoch ms of the last observed state change. */
   since: z.number().nullable(),
   /** The pane's own title, cut to a short label; null when it has none. */

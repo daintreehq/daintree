@@ -70,6 +70,8 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   // the graceful quit ahead of one). Absent on every ordinary transition.
   terminalClosing: z.optional(z.literal(true)),
   waitingReason: z.optional(z.enum(["prompt", "question", "approval", "error"])),
+  // Which selector an "approval" wait shows, when the screen named it (#18170).
+  approvalKind: z.optional(z.literal("trust")),
   sessionCost: z.optional(z.number().check(z.nonnegative())),
   sessionTokens: z.optional(nonNegativeInt),
   // Process exit metadata — present only on "completed"/"exited" transitions

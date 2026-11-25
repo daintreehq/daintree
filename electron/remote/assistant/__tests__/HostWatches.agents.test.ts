@@ -327,6 +327,50 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     expect(watches.run(RUN, { operation: "list" }).watches[0]).toMatchObject({ status: "fired" });
   });
 
+  it("hears a folder-trust prompt with the default reasons, naming it on arm and in the notice (#18170)", async () => {
+    reads.set("studio", {
+      status: "read",
+      waitingEvents: true,
+      directory: directory([waiting("t-trust", { approvalKind: "trust" }), waiting("t-tool")]),
+    });
+    const result = await arm();
+    const matched = result.agents?.matches ?? [];
+    expect(matched.find((agent) => agent.terminalId === "t-trust")).toMatchObject({
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+    expect(matched.find((agent) => agent.terminalId === "t-tool")).not.toHaveProperty(
+      "approvalKind"
+    );
+
+    listener?.("studio", heard("t-new", { waitingReason: "approval", approvalKind: "trust" }));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.hostWatch!.agents?.seen).toEqual([
+      expect.objectContaining({ terminalId: "t-new", approvalKind: "trust" }),
+    ]);
+    expect(formatHostWatchLine(queued[0]!.hostWatch!)).toContain(
+      "waiting on its CLI's folder-trust prompt"
+    );
+  });
+
+  it("reports the selector each agent last showed inside the settle, trust or not (#18170)", async () => {
+    await arm();
+    listener?.("studio", heard("t-1", { waitingReason: "approval", approvalKind: "trust" }));
+    listener?.("studio", heard("t-1", { waitingReason: "approval", refined: true }));
+    listener?.("studio", heard("t-2", { waitingReason: "approval" }));
+    listener?.(
+      "studio",
+      heard("t-2", { waitingReason: "approval", approvalKind: "trust", refined: true })
+    );
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    const seen = queued[0]!.hostWatch!.agents?.seen ?? [];
+    expect(seen.find((agent) => agent.terminalId === "t-1")).not.toHaveProperty("approvalKind");
+    expect(seen.find((agent) => agent.terminalId === "t-2")).toMatchObject({
+      approvalKind: "trust",
+    });
+  });
+
   it("puts every wait that lands in one settle in one notice, each with its latest reason", async () => {
     await arm();
     listener?.("studio", heard("t-1", { waitingReason: "question" }));

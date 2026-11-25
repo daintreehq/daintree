@@ -19,6 +19,7 @@ import {
   decisionGateOptionsFor,
   evaluateWakeGate,
   isAtChoiceDialog,
+  isAtTrustPrompt,
   wakeGateOptionsFor,
   type WakeGateSnapshot,
 } from "../terminalWakeGate.js";
@@ -225,6 +226,40 @@ describe("isAtChoiceDialog (#16209)", () => {
     expect(isAtChoiceDialog({ ...AT_DIALOG, detectedAgentId: undefined })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, isExited: true })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, hasPty: false })).toBe(false);
+  });
+});
+
+describe("a folder-trust prompt (#18170)", () => {
+  const AT_TRUST: WakeGateSnapshot = {
+    ...AT_PROMPT,
+    waitingReason: "approval",
+    approvalKind: "trust",
+  };
+
+  it("is a choice dialog the gate refuses like any approval", () => {
+    expect(isAtTrustPrompt(AT_TRUST)).toBe(true);
+    expect(isAtChoiceDialog(AT_TRUST)).toBe(true);
+    expect(evaluateWakeGate(AT_TRUST, ASSISTANT_SEND_GATE)).toEqual({
+      kind: "blocked",
+      reason: "approval",
+    });
+  });
+
+  it("is only a live agent's approval wait that named it", () => {
+    expect(isAtTrustPrompt({ ...AT_TRUST, approvalKind: undefined })).toBe(false);
+    expect(isAtTrustPrompt({ ...AT_TRUST, waitingReason: "prompt" })).toBe(false);
+    expect(isAtTrustPrompt({ ...AT_TRUST, agentState: "working" })).toBe(false);
+    expect(isAtTrustPrompt({ ...AT_TRUST, isExited: true })).toBe(false);
+  });
+
+  it("refuses a send there in its own words, never as a dialog to answer with keys", () => {
+    const trust = choiceDialogRefusalMessage("t-1", AT_TRUST);
+    const dialog = choiceDialogRefusalMessage("t-1", { ...AT_TRUST, approvalKind: undefined });
+    expect(trust).toContain("folder-trust prompt");
+    expect(trust).toContain("Nothing was sent.");
+    expect(trust).not.toContain("Read its screen and answer it with keys.");
+    expect(dialog).toContain("Read its screen and answer it with keys.");
+    expect(dialog).not.toContain("folder-trust");
   });
 });
 

@@ -415,6 +415,54 @@ describe("terminal.getStatus", () => {
     expect(terminals[2]?.waitingReason).toBeUndefined();
   });
 
+  it("names a folder-trust prompt only beside the approval wait it qualifies (#18170)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2", "t3", "t4"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          waitingReason: "approval",
+          approvalKind: "trust",
+        },
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          waitingReason: "approval",
+        },
+        t3: {
+          id: "t3",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          waitingReason: "approval",
+          approvalKind: "trust",
+        },
+        t4: {
+          id: "t4",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          approvalKind: "trust",
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "t2", "t3", "t4"],
+    });
+    expect(terminals[0]).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+    expect(terminals[1]).not.toHaveProperty("approvalKind");
+    expect(terminals[2]).not.toHaveProperty("approvalKind");
+    expect(terminals[3]).toMatchObject({ waitingReason: "prompt" });
+    expect(terminals[3]).not.toHaveProperty("approvalKind");
+  });
+
   it("sources lastTransitionAt from TerminalInstance.lastStateChange", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],

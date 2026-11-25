@@ -126,7 +126,12 @@ export const AgentWaitingPayloadSchema = z
     agentIncarnation: generation.nullable(),
     /** A reason a later host adds is read as unknown, never refused. */
     waitingReason: z.enum(["prompt", "question", "approval", "error"]).nullable().catch(null),
-    /** It was already waiting, and only its reason changed. */
+    /**
+     * Which selector an approval wait shows, when its screen named it (#18170).
+     * Absent from an older host, and a kind a later host adds is read as absent.
+     */
+    approvalKind: z.literal("trust").optional().catch(undefined),
+    /** It was already waiting, and only its reason or its kind changed. */
     refined: z.boolean(),
     /** When the transition was seen, by the host's own clock. */
     seenAt: z.number().finite(),

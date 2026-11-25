@@ -2881,6 +2881,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["prompt", "question", "approval", "error"],
         },
+        approvalKind: {
+          description: "The CLI showed its own folder-trust prompt.",
+          type: "string",
+          const: "trust",
+        },
       },
       required: ["armed", "terminalId"],
       additionalProperties: false,

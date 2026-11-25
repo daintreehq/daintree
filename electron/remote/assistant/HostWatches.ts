@@ -804,6 +804,9 @@ export class HostWatches {
           incarnation: entry.subject.incarnation,
           agentIncarnation: null,
           waitingReason: entry.waitingReason,
+          ...(entry.waitingReason === "approval" && entry.approvalKind !== undefined
+            ? { approvalKind: entry.approvalKind }
+            : {}),
           seenAt: entry.since,
         });
       }
@@ -1125,6 +1128,9 @@ export class HostWatches {
         incarnation: heard.incarnation,
         agentIncarnation: heard.agentIncarnation,
         waitingReason: heard.waitingReason,
+        ...(heard.waitingReason === "approval" && heard.approvalKind !== undefined
+          ? { approvalKind: heard.approvalKind }
+          : {}),
         seenAt: heard.seenAt,
       });
     } else if (record.overflow.has(key) || record.overflow.size < OVERFLOW_AGENTS_MAX) {

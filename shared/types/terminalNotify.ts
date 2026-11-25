@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { APPROVAL_KIND_DESCRIPTION } from "./terminalStatus.js";
 
 /**
  * Terminal notices: an orchestrating pane asks Daintree to tell it when an
@@ -140,6 +141,7 @@ export const TerminalNotifyWhenIdleResultSchema = z.object({
   terminalId: z.string(),
   state: z.enum(AGENT_STATE_VALUES).optional(),
   waitingReason: z.enum(WAITING_REASON_VALUES).optional(),
+  approvalKind: z.literal("trust").optional().describe(APPROVAL_KIND_DESCRIPTION),
 });
 export type TerminalNotifyWhenIdleResult = z.infer<typeof TerminalNotifyWhenIdleResultSchema>;
 

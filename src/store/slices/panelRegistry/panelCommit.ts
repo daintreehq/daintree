@@ -311,6 +311,13 @@ export function commitPtyPanel(
                 (ptyTerminal.agentState ?? existingPty?.agentState) === "waiting"
                   ? (ptyTerminal.waitingReason ?? existingPty?.waitingReason)
                   : undefined,
+              // Taken from whichever record gave the reason, never mixed (#18170).
+              approvalKind:
+                (ptyTerminal.agentState ?? existingPty?.agentState) === "waiting"
+                  ? ptyTerminal.waitingReason !== undefined
+                    ? ptyTerminal.approvalKind
+                    : existingPty?.approvalKind
+                  : undefined,
               lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
               exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
               extensionState: ptyTerminal.extensionState ?? existing.extensionState,
@@ -401,6 +408,12 @@ export function commitPtyPanel(
               waitingReason:
                 (ptyTerminal.agentState ?? existingPty2?.agentState) === "waiting"
                   ? (ptyTerminal.waitingReason ?? existingPty2?.waitingReason)
+                  : undefined,
+              approvalKind:
+                (ptyTerminal.agentState ?? existingPty2?.agentState) === "waiting"
+                  ? ptyTerminal.waitingReason !== undefined
+                    ? ptyTerminal.approvalKind
+                    : existingPty2?.approvalKind
                   : undefined,
               lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
               exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,

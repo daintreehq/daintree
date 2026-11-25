@@ -194,6 +194,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         ...(event.terminalClosing === true ? { terminalClosing: true as const } : {}),
         cwd: event.cwd,
         waitingReason: event.waitingReason,
+        ...(event.approvalKind !== undefined ? { approvalKind: event.approvalKind } : {}),
         sessionCost: event.sessionCost,
         sessionTokens: event.sessionTokens,
         ...(event.agentIncarnation !== undefined

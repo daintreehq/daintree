@@ -304,6 +304,9 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
 
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;
+    if (record.waitingReason === "approval" && record.approvalKind !== undefined) {
+      entry.approvalKind = record.approvalKind;
+    }
   }
 
   // Kept on the pty-host record, so this surface sees it too (#17905).

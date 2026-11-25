@@ -175,6 +175,23 @@ describe("GlobalWorkerSteer (#14551)", () => {
       });
     });
 
+    it("refuses a prompt at a folder-trust prompt as the user's call, not a dialog to key (#18170)", async () => {
+      const send = () =>
+        refusal(steer.prompt(target(), { command: "go", handback: false, machineName: "m" }));
+
+      fake.record = atPrompt({ waitingReason: "approval", approvalKind: "trust" });
+      const trust = await send();
+      fake.record = atPrompt({ waitingReason: "approval" });
+      const dialog = await send();
+
+      expect(trust.code).toBe(WORKER_STEER_REFUSALS.busy);
+      expect(trust.message).toContain("folder-trust prompt");
+      expect(trust.message).toContain("Nothing was sent.");
+      expect(trust.message).not.toContain("Answer a dialog with keys");
+      expect(dialog.message).toContain("Answer a dialog with keys");
+      expect(submits).toHaveLength(0);
+    });
+
     it("is keyed one key at a time, reporting the keys that went in", async () => {
       fake.record = atPrompt({ waitingReason: "approval" });
       fake.screen = "Allow this edit?\n❯ 1. Yes\n  2. No";

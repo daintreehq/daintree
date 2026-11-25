@@ -1,4 +1,10 @@
-import type { AgentId, AgentState, AgentStateChangeTrigger, WaitingReason } from "../agent.js";
+import type {
+  AgentId,
+  AgentState,
+  AgentStateChangeTrigger,
+  ApprovalKind,
+  WaitingReason,
+} from "../agent.js";
 import type { TerminalCheckResult } from "../checkResult.js";
 import type { TerminalHandback } from "../handback.js";
 
@@ -52,6 +58,8 @@ export interface AgentStateChangePayload {
   confidence: number;
   /** Why the agent is waiting (only present when state is "waiting") */
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   /** Extracted session cost in dollars (only present when state is "completed" or "exited") */
   sessionCost?: number;
   /** Extracted session token count (only present when state is "completed" or "exited" and legacy format is used) */

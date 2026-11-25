@@ -376,6 +376,9 @@ export const terminalQueryActionRuns = {
         terminal.waitingReason !== undefined
       ) {
         entry.waitingReason = terminal.waitingReason;
+        if (terminal.waitingReason === "approval" && terminal.approvalKind !== undefined) {
+          entry.approvalKind = terminal.approvalKind;
+        }
       }
 
       // Whatever the agent's state: a working agent with the footer is still working (#17905).

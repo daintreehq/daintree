@@ -1,4 +1,4 @@
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import {
   MAX_DETAILED_NOTICES_PER_LINE,
   NOTIFY_REPLIES_TOTAL_MAX_CHARS,
@@ -19,7 +19,14 @@ import { cutToNewestChars, type NoticeReply } from "./noticeReply.js";
 
 /** What a fired notice reports. Observations only, never a verdict. */
 export type NoticeObservation =
-  | { kind: "state"; state: AgentState; waitingReason?: WaitingReason; handback: boolean }
+  | {
+      kind: "state";
+      state: AgentState;
+      waitingReason?: WaitingReason;
+      /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+      approvalKind?: ApprovalKind;
+      handback: boolean;
+    }
   | { kind: "exit"; exitCode?: number; handback: boolean }
   | { kind: "closed" }
   | { kind: "not-written"; phase: "failed" | "cancelled" | "unknown" | "unconfirmed" }
@@ -51,7 +58,11 @@ export interface FiredNotice {
   lastTransitionAt?: number | null;
 }
 
-function describeState(state: AgentState, waitingReason?: WaitingReason): string {
+function describeState(
+  state: AgentState,
+  waitingReason?: WaitingReason,
+  approvalKind?: ApprovalKind
+): string {
   switch (state) {
     case "waiting":
       switch (waitingReason) {
@@ -60,7 +71,9 @@ function describeState(state: AgentState, waitingReason?: WaitingReason): string
         case "question":
           return "now waiting on a question";
         case "approval":
-          return "now waiting on an approval";
+          return approvalKind === "trust"
+            ? "now waiting on its CLI's folder-trust prompt"
+            : "now waiting on an approval";
         case "error":
           return "now stopped at an error";
         default:
@@ -89,7 +102,7 @@ function describeNotice(notice: FiredNotice): string {
   const obs = notice.observation;
   switch (obs.kind) {
     case "state":
-      return `${id} stopped working, ${describeState(obs.state, obs.waitingReason)}${at}${obs.handback ? ", handback seen" : ""}${notice.awaitingHandback === true ? ", with no done marker yet (another notice follows when it next stops)" : ""}`;
+      return `${id} stopped working, ${describeState(obs.state, obs.waitingReason, obs.approvalKind)}${at}${obs.handback ? ", handback seen" : ""}${notice.awaitingHandback === true ? ", with no done marker yet (another notice follows when it next stops)" : ""}`;
     case "exit":
       return `${id} exited${obs.exitCode !== undefined ? ` (code ${obs.exitCode})` : ""}${at}${obs.handback ? ", handback seen" : ""}`;
     case "closed":
@@ -414,7 +427,11 @@ function describeWatchedAgent(agent: HostWatchNoticeAgent): string {
     agent.agentIncarnation !== null ? `agentIncarnation ${agent.agentIncarnation}` : null,
   ].filter((fact): fact is string => fact !== null);
   const on =
-    agent.waitingReason !== null ? `waiting on ${WAITING_ON[agent.waitingReason]}` : "waiting";
+    agent.waitingReason === "approval" && agent.approvalKind === "trust"
+      ? "waiting on its CLI's folder-trust prompt"
+      : agent.waitingReason !== null
+        ? `waiting on ${WAITING_ON[agent.waitingReason]}`
+        : "waiting";
   const clock =
     agent.seenAt === null
       ? ""

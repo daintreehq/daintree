@@ -15,7 +15,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
-import type { WaitingReason } from "@shared/types/agent";
+import type { ApprovalKind, WaitingReason } from "@shared/types/agent";
 import type { PanelRestoreRecovery, SessionLostReason } from "@shared/types/panel";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -127,6 +127,7 @@ export interface HydrationOptions {
     command?: string;
     agentState?: AgentState;
     waitingReason?: WaitingReason;
+    approvalKind?: ApprovalKind;
     lastStateChange?: number;
     existingId?: string; // Pass to reconnect to existing backend process
     requestedId?: string; // Pass to spawn with a stable ID

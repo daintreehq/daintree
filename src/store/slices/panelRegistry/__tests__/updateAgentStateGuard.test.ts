@@ -181,6 +181,49 @@ describe("updateAgentState store action (#3217)", () => {
     expect((after[seededTerminal.id] as PtyPanelData | undefined)?.lastStateChange).not.toBe(100);
   });
 
+  it("writes when an approval wait's selector changes kind, and clears it off approval (#18170)", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "waiting" as const,
+      waitingReason: "approval" as const,
+      approvalKind: "trust" as const,
+      lastStateChange: 100,
+      lastAgentObservation: { agentState: "waiting" as const, at: 100 },
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+    const read = () => usePanelStore.getState().panelsById[seededTerminal.id] as PtyPanelData;
+    const update = (at: number, reason: "approval" | "prompt", kind?: "trust") =>
+      usePanelStore
+        .getState()
+        .updateAgentState(
+          seededTerminal.id,
+          "waiting",
+          undefined,
+          at,
+          "heuristic",
+          0.9,
+          reason,
+          undefined,
+          undefined,
+          kind
+        );
+
+    update(200, "approval");
+    expect(read().approvalKind).toBeUndefined();
+    expect(read().lastAgentObservation).toEqual({ agentState: "waiting", at: 200 });
+
+    update(300, "approval", "trust");
+    expect(read().approvalKind).toBe("trust");
+
+    // A kind never outlives the approval it qualified.
+    update(400, "prompt", "trust");
+    expect(read().waitingReason).toBe("prompt");
+    expect(read().approvalKind).toBeUndefined();
+  });
+
   // #8592: TerminalAgentStateController.onEnterPressed() writes the optimistic
   // `agentState:"working"` with no trigger, and the backend confirmation arrives
   // with `trigger:"input"`. The guard must let that trigger transition through,

@@ -48,3 +48,27 @@ describe("a relayed notice's transition on the wire (#15726)", () => {
     ]);
   });
 });
+
+describe("a relayed notice's approval kind on the wire (#18170)", () => {
+  const approval = (approvalKind?: string) => ({
+    kind: "state",
+    state: "waiting",
+    waitingReason: "approval",
+    ...(approvalKind !== undefined ? { approvalKind } : {}),
+    handback: false,
+  });
+
+  it("carries a trust prompt, and reads a kind a later host adds as absent, keeping its batch", () => {
+    const parsed = RelayNoticesPayloadSchema.parse({
+      notices: [
+        relayed({ observation: approval("trust") }),
+        relayed({ noticeId: "n-2", observation: approval("tool") }),
+        relayed({ noticeId: "n-3", observation: approval() }),
+      ],
+    });
+    expect(parsed.notices.map((n) => n.noticeId)).toEqual(["n-1", "n-2", "n-3"]);
+    expect(parsed.notices[0]!.observation).toMatchObject({ approvalKind: "trust" });
+    expect(parsed.notices[1]!.observation).not.toMatchObject({ approvalKind: expect.anything() });
+    expect(parsed.notices[2]!.observation).not.toHaveProperty("approvalKind");
+  });
+});

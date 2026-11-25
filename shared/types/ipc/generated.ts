@@ -430,6 +430,7 @@ export interface GeneratedIpcInvokeMap {
             label: string | null;
             attached: boolean | null;
             handback: { observedAt: number; report?: "done" | "needs-you" | undefined } | null;
+            approvalKind?: "trust" | undefined;
             confirmations?:
               | {
                   waiting: { actionId: string; since: number; expiresAt: number }[];

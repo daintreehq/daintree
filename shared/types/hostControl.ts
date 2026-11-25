@@ -682,6 +682,8 @@ export const HostWatchAgentSchema = z.object({
   agentIncarnation: z.number().nullable(),
   /** Null from a host too old to say why. */
   waitingReason: waitingReasonSchema.nullable(),
+  /** Which selector an approval wait showed, when its screen named it (#18170); absent otherwise. */
+  approvalKind: z.literal("trust").optional(),
   /** When it was seen waiting, by that host's own clock; null when the host didn't say. */
   seenAt: z.number().nullable(),
 });

@@ -10,7 +10,7 @@ import type {
   ScheduledRunRef,
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
-import type { AgentState, WaitingReason } from "../agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../agent.js";
 import type { ActionContext } from "../actions.js";
 import type { UpdateInstalledObservation } from "./agent.js";
 
@@ -302,6 +302,8 @@ export interface BackendTerminalInfo {
   agentState?: AgentState;
   /** Why the agent is waiting; only meaningful while agentState is "waiting" */
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -375,6 +377,8 @@ export interface TerminalReconnectResult {
   agentState?: AgentState;
   /** Why the agent is waiting; only meaningful while agentState is "waiting" */
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   spawnedAt?: number;
   activityTier?: "active" | "background";

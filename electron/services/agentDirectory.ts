@@ -245,6 +245,11 @@ function liveEntry(input: {
     agentId: input.agentId,
     agentState,
     waitingReason: agentState === "waiting" ? (terminal?.waitingReason ?? null) : null,
+    ...(agentState === "waiting" &&
+    terminal?.waitingReason === "approval" &&
+    terminal.approvalKind !== undefined
+      ? { approvalKind: terminal.approvalKind }
+      : {}),
     since:
       typeof terminal?.lastStateChange === "number" && terminal.lastStateChange > 0
         ? terminal.lastStateChange

@@ -376,6 +376,31 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.waitingReason).toBeUndefined();
   });
 
+  it("restores an approval wait's kind only beside the approval it qualifies (#18170)", () => {
+    const restore = (fields: Record<string, unknown>) =>
+      buildArgsForBackendTerminal(
+        { id: "t1", cwd: "/p", kind: "terminal", title: "Claude", ...fields },
+        { id: "t1", location: "grid" },
+        "/p"
+      );
+    expect(
+      restore({ agentState: "waiting", waitingReason: "approval", approvalKind: "trust" })
+        .approvalKind
+    ).toBe("trust");
+    expect(
+      restore({ agentState: "waiting", waitingReason: "prompt", approvalKind: "trust" })
+        .approvalKind
+    ).toBeUndefined();
+    expect(
+      restore({ agentState: "working", waitingReason: "approval", approvalKind: "trust" })
+        .approvalKind
+    ).toBeUndefined();
+    expect(
+      restore({ agentState: "waiting", waitingReason: "approval", approvalKind: "tool" })
+        .approvalKind
+    ).toBeUndefined();
+  });
+
   it("drops junk waiting-reason values off the wire", () => {
     const result = buildArgsForBackendTerminal(
       {

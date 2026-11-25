@@ -79,6 +79,7 @@ export function mapTerminalInfo(
     cwd: t.cwd,
     agentState: t.agentState,
     waitingReason: t.waitingReason,
+    approvalKind: t.approvalKind,
     lastStateChange: t.lastStateChange,
     promptUnseen: t.promptUnseen,
     workingDialogVisible: t.workingDialogVisible,

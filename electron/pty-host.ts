@@ -1103,6 +1103,7 @@ events.on("agent:state-changed", (payload) => {
       ...(payload.terminalClosing ? { terminalClosing: true as const } : {}),
       cwd: payload.cwd,
       waitingReason: payload.waitingReason,
+      ...(payload.approvalKind !== undefined ? { approvalKind: payload.approvalKind } : {}),
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
       ...(payload.agentIncarnation !== undefined

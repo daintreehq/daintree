@@ -729,6 +729,8 @@ export type DaintreeEventMap = {
     /** Terminal working directory (the worktree root in the typical case). */
     cwd?: string;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
+    /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+    approvalKind?: import("../../shared/types/agent.js").ApprovalKind;
     sessionCost?: number;
     sessionTokens?: number;
     /**

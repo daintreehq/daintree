@@ -6,6 +6,7 @@ import {
   LAST_HANDBACK_DESCRIPTION,
 } from "./handback.js";
 import {
+  APPROVAL_KIND_DESCRIPTION,
   INPUT_LINE_DESCRIPTION,
   INPUT_LINE_TEXT_DESCRIPTION,
   INPUT_LINE_TRUNCATED_DESCRIPTION,
@@ -104,6 +105,8 @@ export const TerminalStatusEntrySchema = z.object({
   agentId: z.string().nullable(),
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
+  // A kind a later host adds is read as absent, so its row still reads (#18170).
+  approvalKind: z.literal("trust").optional().catch(undefined).describe(APPROVAL_KIND_DESCRIPTION),
   updateInstalled: UpdateInstalledObservationSchema.optional(),
   lastTransitionAt: z.number().optional(),
   lastOutputChangeAt: z.number().optional().describe(LAST_OUTPUT_CHANGE_AT_DESCRIPTION),

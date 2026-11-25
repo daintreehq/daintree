@@ -228,6 +228,49 @@ describe("collectAgentDirectory (#14160)", () => {
     expect(text).not.toContain("private text");
   });
 
+  it("names a folder-trust prompt a waiting worker shows, beside its approval only (#18170)", async () => {
+    const entryFor = async (fields: Record<string, unknown>) => {
+      const directory = await collectAgentDirectory(
+        sources({
+          getLiveGeneration: () => 1,
+          readTerminals: async () => ({
+            terminals: [
+              terminal({ id: "w1", projectId: "p1", detectedAgentId: "claude", ...fields }),
+            ],
+            degraded: false,
+          }),
+        })
+      );
+      return directory.entries.find(
+        (entry) => entry.state === "live" && entry.subject.terminalId === "w1"
+      );
+    };
+    expect(
+      await entryFor({ agentState: "waiting", waitingReason: "approval", approvalKind: "trust" })
+    ).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+    expect(
+      await entryFor({ agentState: "working", waitingReason: "approval", approvalKind: "trust" })
+    ).not.toHaveProperty("approvalKind");
+    expect(
+      await entryFor({ agentState: "waiting", waitingReason: "prompt", approvalKind: "trust" })
+    ).not.toHaveProperty("approvalKind");
+  });
+
+  it("reads a directory entry with a kind a later host adds as one with none (#18170)", async () => {
+    const directory = await collectAgentDirectory(sources());
+    const entries = directory.entries.map((entry) =>
+      entry.state === "live" && entry.subject.terminalId === "w2"
+        ? { ...entry, approvalKind: "tool" }
+        : entry
+    );
+    const parsed = AgentDirectorySchema.parse({ ...directory, entries });
+    const worker = parsed.entries.find(
+      (entry) => entry.state === "live" && entry.subject.terminalId === "w2"
+    );
+    expect(worker).toMatchObject({ waitingReason: "approval" });
+    expect(worker && "approvalKind" in worker ? worker.approvalKind : undefined).toBeUndefined();
+  });
+
   it("tells a finished worker from one that needs the owner, by the marker each printed (#16190)", async () => {
     const handback = (report?: "done" | "needs-you") => ({
       message: "summary",
