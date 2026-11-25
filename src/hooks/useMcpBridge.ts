@@ -70,6 +70,7 @@ import { TerminalCloseManyArgsSchema } from "@shared/types/mcpBatch";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { formatNoPanelMessage } from "@shared/utils/terminalInOtherProject";
+import { arePanelsRestored } from "@/utils/stateHydration/panelRestoreGate";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -570,8 +571,12 @@ function closeApprovalPreviewTarget(args: unknown): McpConfirmPreviewTarget | un
  * The panel a protected single close names that this view doesn't have
  * (#18176), or undefined. Read exactly as `terminal.close` reads it, so the
  * question is never put about a panel the close would then report missing.
+ * Until this view's panels are back, nothing reads as missing: a window that
+ * just took over an assistant is up before its panels are, and the question
+ * waits for them as it always has.
  */
 function missingProtectedCloseTarget(args: unknown): string | undefined {
+  if (!arePanelsRestored()) return undefined;
   const target = closeApprovalPreviewTarget(args);
   if (target?.kind !== "terminalClose" || target.terminalIds.length !== 1) return undefined;
   const terminalId = target.terminalIds[0]!;

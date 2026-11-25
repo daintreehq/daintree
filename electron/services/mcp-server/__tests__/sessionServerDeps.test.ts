@@ -1030,8 +1030,11 @@ describe("a close question with no window to ask in (#18176)", () => {
     restore = undefined;
   });
 
-  /** An assistant running with no view, held by its project as the handshake leaves it. */
-  function viewlessSession(projectId: string) {
+  /** A help session with no pin, held by `viewlessProjectId` as the handshake leaves it when given one. */
+  function unpinnedSession(
+    viewlessProjectId: string | null,
+    role: "project-assistant" | "global-assistant" = "project-assistant"
+  ) {
     const deps = fakeSource();
     const dispatchActionForWebContents = vi.fn(async () => ({
       result: { ok: true, result: null },
@@ -1040,51 +1043,55 @@ describe("a close question with no window to ask in (#18176)", () => {
       dispatchActionForWebContents;
     deps.sessionStore.sessionOriginMap.set("s", "help");
     deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
-    deps.sessionStore.sessionViewlessHelpMap.set("s", projectId);
+    if (viewlessProjectId !== null) {
+      deps.sessionStore.sessionViewlessHelpMap.set("s", viewlessProjectId);
+    }
     const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
       sessionId: "s",
-      role: "project-assistant",
+      role,
     });
-    const ask = () => sessionDeps.requestCloseApproval!("terminal.close", { terminalIds: ["t"] });
-    return { deps, ask, dispatchActionForWebContents };
+    const refusal = () =>
+      sessionDeps.requestCloseApproval!("terminal.close", { terminalIds: ["t"] }).then(
+        () => null,
+        (err: Error) => err.message
+      );
+    return { deps, refusal, dispatchActionForWebContents };
   }
 
-  it("tells a project assistant with Host mode off to open its project in one window here", async () => {
-    const { ask, dispatchActionForWebContents } = viewlessSession(WS_A);
+  it("tells a project assistant with no view how a window takes it over, in the mode it asks in", async () => {
+    const { refusal, dispatchActionForWebContents } = unpinnedSession(WS_A);
 
-    const refusal = await ask().then(
-      () => null,
-      (err: Error) => err.message
-    );
+    const routingOff = await refusal();
+    expect(routingOff).toMatch(/^This assistant isn't attached to a window of this project/);
+    expect(routingOff).toMatch(/Opening the project in one window here takes it over/);
+    expect(routingOff).toMatch(/opening this assistant in the project's Assistant panel/);
 
-    expect(refusal).toMatch(/^This assistant isn't attached to a window of this project/);
-    expect(refusal).toMatch(/Open the project in one window here, which takes this assistant over/);
+    // Read when it asks, not when the session was built.
+    restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const routingOn = await refusal();
+    expect(routingOn).toMatch(/The window that has control of this project takes it over/);
+    expect(routingOn).toMatch(/opening this assistant in the project's Assistant panel/);
+    expect(routingOn).not.toMatch(/one window here/);
+
     expect(dispatchActionForWebContents).not.toHaveBeenCalled();
   });
 
-  it("tells it to take control in a window while Host-mode routing is on", async () => {
-    restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
-    const { ask } = viewlessSession(WS_A);
-
-    const refusal = await ask().then(
-      () => null,
-      (err: Error) => err.message
-    );
-
-    expect(refusal).toMatch(/^This assistant isn't attached to a window of this project/);
-    expect(refusal).toMatch(/take control of it there, which takes this assistant over/);
-    expect(refusal).not.toMatch(/one window here/);
-  });
-
   it.each([
-    ["the global assistant, which no project window takes over", GLOBAL_ASSISTANT_ID, false],
-    ["a session whose viewless binding is gone", WS_A, true],
-  ])("keeps the plain refusal for %s", async (_label, projectId, unbind) => {
-    const { deps, ask } = viewlessSession(projectId);
+    [
+      "the global assistant, which no project window takes over",
+      GLOBAL_ASSISTANT_ID,
+      "global-assistant" as const,
+      false,
+    ],
+    ["a session whose viewless binding is gone", WS_A, "project-assistant" as const, true],
+  ])("refuses %s as any session without a window", async (_label, projectId, role, unbind) => {
+    const ordinary = await unpinnedSession(null).refusal();
+    const { deps, refusal } = unpinnedSession(projectId, role);
     if (unbind) deps.sessionStore.sessionViewlessHelpMap.delete("s");
 
-    await expect(ask()).rejects.toThrow(
-      "No Daintree window is pinned to this session to ask the user."
-    );
+    const message = await refusal();
+    expect(message).not.toBeNull();
+    expect(message).toBe(ordinary);
+    expect(message).not.toMatch(/takes it over/);
   });
 });

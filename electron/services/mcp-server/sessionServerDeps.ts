@@ -1106,8 +1106,11 @@ export function createSessionServerDeps(
   /**
    * Why no window can ask about a close (#18176). A project assistant running
    * with no view gets a window to ask in only once one of its project's
-   * windows takes it over, so it is told how that happens; any other session
-   * without a pin has lost the window it was given.
+   * windows takes it over, so it is told how that happens: on its own (the
+   * one window here with Host mode off, the window with control with it on;
+   * two windows here take it over on neither's say), or by opening it in a
+   * window's Assistant panel, which takes it over whatever drives the
+   * project. Any other session without a pin has lost the window it was given.
    */
   const noCloseApprovalWindow = (): string => {
     const viewless =
@@ -1115,11 +1118,14 @@ export function createSessionServerDeps(
       !isGlobalAssistantId(viewlessProjectId) &&
       deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId;
     if (!viewless) return "No Daintree window is pinned to this session to ask the user.";
-    const lead =
-      "This assistant isn't attached to a window of this project, so nobody can be asked to approve this close.";
-    return isMcpHostRoutingEnabled()
-      ? `${lead} Open the project in a window and take control of it there, which takes this assistant over, and retry once it has.`
-      : `${lead} Open the project in one window here, which takes this assistant over, and retry once it has.`;
+    const takeOver = isMcpHostRoutingEnabled()
+      ? "The window that has control of this project takes it over once it's ready"
+      : "Opening the project in one window here takes it over";
+    return (
+      "This assistant isn't attached to a window of this project, so nobody can be asked to approve this close. " +
+      `${takeOver}, and so does opening this assistant in the project's Assistant panel in a window here. ` +
+      "Retry once it's attached."
+    );
   };
 
   /**

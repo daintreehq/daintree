@@ -917,15 +917,26 @@ describe("McpServerService", () => {
   });
 
   it("asks a viewless assistant's close question in the window that took it over (#18176)", async () => {
+    const closeManifest = () => [
+      createManifestEntry({
+        id: "terminal.close",
+        title: "Close panel",
+        description: "Close a panel",
+      }),
+    ];
+    // The focused window, which never shows this project: nothing may reach it.
+    const elsewhere: DispatchRequest[] = [];
+    const { window } = createMockWindow({
+      getManifest: closeManifest,
+      dispatchAction: (payload) => {
+        elsewhere.push(payload);
+        return { ok: true, result: null };
+      },
+    });
+    // The project's window, which takes the assistant over.
     const requests: DispatchRequest[] = [];
-    const { window, webContents } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "terminal.close",
-          title: "Close panel",
-          description: "Close a panel",
-        }),
-      ],
+    const { webContents } = createMockWindow({
+      getManifest: closeManifest,
       dispatchAction: (payload) => {
         requests.push(payload);
         return payload.approvalOnly === true
@@ -937,6 +948,9 @@ describe("McpServerService", () => {
       },
     });
     await service.start(window);
+    const httpSessions = (
+      service as unknown as { sessionStore: { httpSessions: Map<string, unknown> } }
+    ).sessionStore.httpSessions;
     const helpToken = "help-token-viewless";
     let pin = NO_VIEW_HANDLE;
     service.setHelpTokenValidator((token) => (token === helpToken ? "core" : false));
@@ -967,18 +981,22 @@ describe("McpServerService", () => {
     };
     expect(refusal.code).toBe("CONFIRMATION_REQUIRED");
     expect(refusal.details?.confirmationChannel).toBe("unavailable");
-    expect(refusal.message).toMatch(/which takes this assistant over/);
+    expect(refusal.message).toMatch(/Opening the project in one window here takes it over/);
     expect(requests).toEqual([]);
+    expect(elsewhere).toEqual([]);
 
     // The project's window takes it over: re-pinned, and its transports
     // retired so the client reconnects onto that window.
+    expect(httpSessions.size).toBe(1);
     pin = webContents.id;
     service.resetHelpTransports(helpToken);
+    await vi.waitFor(() => expect(httpSessions.size).toBe(0));
     const adopted = await connectHttpClient(service.currentPort!, auth);
     httpTransports.push(adopted.transport);
     const closed = await close(adopted.client);
 
     expect(closed.isError).not.toBe(true);
+    expect(elsewhere).toEqual([]);
     expect(
       requests.map(({ actionId, args, approvalOnly, approvalReason, requester }) => ({
         actionId,

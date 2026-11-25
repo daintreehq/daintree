@@ -101,6 +101,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({ createTerminalPaintPlane 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn().mockReturnValue("notification-id") }));
 
 const { hydrateAppState } = await import("../stateHydration");
+const { arePanelsRestored } = await import("../stateHydration/panelRestoreGate");
 const { __resetTerminalConfigSyncForTests, applyBootTerminalConfig, beginTerminalConfigRead } =
   await import("@/services/terminalConfigSync");
 const { SCROLLBACK_MAX } = await import("@shared/config/scrollback");
@@ -147,6 +148,38 @@ describe("hydrateAppState with no terminal panels", () => {
     expect(addPanel).not.toHaveBeenCalled();
     expect(createTerminalPaintPlane).not.toHaveBeenCalled();
     expect(peekTerminalService()).toBeNull();
+  });
+
+  // #18176: an assistant's close reads a missing panel as missing only once
+  // the view's panels are back, and a hydration that failed still lets it.
+  it("counts this view's panels as restored once hydration settles, failed or not", async () => {
+    const options = {
+      addPanel: vi.fn().mockResolvedValue("panel-id"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    };
+    let answer: (value: unknown) => void = () => {};
+    appClientMock.hydrate.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+    const done = hydrateAppState(options);
+    await vi.waitFor(() => expect(appClientMock.hydrate).toHaveBeenCalled());
+    expect(arePanelsRestored()).toBe(false);
+    answer({
+      appState: { terminals: [] },
+      terminalConfig: { scrollbackLines: 1000, performanceMode: false },
+      project: { id: "project-1", path: "/project", name: "project-1", lastOpened: 0 },
+      workspaceId: "project-1",
+      agentSettings: { agents: {} },
+    });
+    await done;
+    expect(arePanelsRestored()).toBe(true);
+
+    appClientMock.hydrate.mockRejectedValue(new Error("hydrate failed"));
+    const failed = hydrateAppState(options);
+    expect(arePanelsRestored()).toBe(false);
+    await expect(failed).rejects.toThrow("hydrate failed");
+    expect(arePanelsRestored()).toBe(true);
   });
 
   describe("terminal settings (#14699)", () => {
