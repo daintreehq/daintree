@@ -142,8 +142,13 @@ interface Subscription {
   signIn?: {
     terminalId: string | null;
     watchId: number | null;
-    /** Every stream the view has open on it now, for an assistant's sign-in's ack (#18197). */
-    openWatches: Set<number>;
+    /**
+     * The stream the view has open on it now, with its screen, for an
+     * assistant's sign-in's ack (#18197). The host holds one watch per viewer,
+     * so a newer one replaces it; a stream already seen to end never counts.
+     */
+    liveWatch: number | null;
+    endedWatches: Set<number>;
   };
 }
 
@@ -546,7 +551,7 @@ export class CanopyHostsClient {
       viewerId,
       consumer: name,
       subjectKey: null,
-      signIn: { terminalId: null, watchId: null, openWatches: new Set() },
+      signIn: { terminalId: null, watchId: null, liveWatch: null, endedWatches: new Set() },
     };
     record.signIns.set(name, sub);
     this.byViewer.set(viewerId, sub);
@@ -584,7 +589,7 @@ export class CanopyHostsClient {
     try {
       const answer = await this.callSignIn(sub, parsed);
       if (parsed.op === "unwatch") {
-        sub.signIn.openWatches.delete(parsed.watchId);
+        if (sub.signIn.liveWatch === parsed.watchId) sub.signIn.liveWatch = null;
         if (sub.signIn.watchId === parsed.watchId) sub.signIn.watchId = null;
       }
       if (parsed.op !== "watch") return null;
@@ -593,7 +598,10 @@ export class CanopyHostsClient {
       if (this.byViewer.get(sub.viewerId) !== sub) return { watchId: null, snapshot: null };
       if (view.watchId !== null) {
         sub.signIn.watchId = view.watchId;
-        if (view.snapshot !== null) sub.signIn.openWatches.add(view.watchId);
+        sub.signIn.liveWatch =
+          view.snapshot !== null && !sub.signIn.endedWatches.has(view.watchId)
+            ? view.watchId
+            : null;
       }
       return view;
     } catch (error) {
@@ -695,7 +703,7 @@ export class CanopyHostsClient {
     const sub = this.views.get(webContentsId)?.signIns.get(consumer);
     if (!offer || !sub?.signIn || sub.signIn.terminalId === null) return "gone";
     if (Date.now() >= offer.expiresAt) return "gone";
-    if (sub.signIn.openWatches.size === 0 || !offer.stillShown()) return "not_shown";
+    if (sub.signIn.liveWatch === null || !offer.stillShown()) return "not_shown";
     offer.finish("shown", false);
     return "shown";
   }
@@ -1008,8 +1016,11 @@ export class CanopyHostsClient {
     if (sub.signIn) {
       if (channel !== "canopy:terminal-data") return;
       const chunk = event.args[0] as CanopyTerminalData;
-      // A stream that ended shows nothing live any more.
-      if (chunk?.kind === "ended") sub.signIn.openWatches.delete(chunk.watchId);
+      // A stream that ended shows nothing live any more, its answer still on its way included.
+      if (chunk?.kind === "ended") {
+        sub.signIn.endedWatches.add(chunk.watchId);
+        if (sub.signIn.liveWatch === chunk.watchId) sub.signIn.liveWatch = null;
+      }
       this.options.send(sub.webContentsId, {
         kind: "sign-in-terminal-data",
         hostId,

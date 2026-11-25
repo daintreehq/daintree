@@ -7,7 +7,15 @@ import { signInDialogOpen } from "./signInDialogHold";
 /** A sign-in Main started on a host for the assistant this view shows (#18197), running for this view. */
 export type HostSignInOffer = Omit<Extract<CanopyHostEvent, { kind: "sign-in-offer" }>, "kind">;
 
-const HostSignInOfferDialog = lazy(() => import("./HostSignInOfferDialog"));
+const loadDialog = () => lazy(() => import("./HostSignInOfferDialog"));
+// Made again after a failed load: a lazy component keeps its rejected import.
+let HostSignInOfferDialog = loadDialog();
+
+/**
+ * Past Main's deadline before the dialog is put away unless shown: Main says
+ * `gone` to anything later, and an answer of `shown` may still be on its way.
+ */
+const CLOSE_GRACE_MS = 5_000;
 
 function letGo(consumer: string): void {
   void canopyHostClient.releaseSignIn(consumer).catch(() => {});
@@ -62,7 +70,7 @@ export function HostSignInOffers() {
         showing.current = null;
         setOffer(null);
       },
-      Math.max(0, offer.expiresAt - Date.now())
+      Math.max(0, offer.expiresAt - Date.now()) + CLOSE_GRACE_MS
     );
     return () => clearTimeout(timer);
   }, [offer]);
@@ -81,6 +89,7 @@ export function HostSignInOffers() {
       componentName="HostSignInOffers"
       fallback={NO_FALLBACK}
       onError={() => {
+        HostSignInOfferDialog = loadDialog();
         letGo(offer.consumer);
         close();
       }}
@@ -89,8 +98,13 @@ export function HostSignInOffers() {
         <HostSignInOfferDialog
           offer={offer}
           onSettled={(settled) => {
-            if (settled === "shown") taken.current = true;
-            else close();
+            if (settled === "shown") {
+              taken.current = true;
+              return;
+            }
+            // Its dialog may never have mounted to let it go itself.
+            letGo(offer.consumer);
+            close();
           }}
           onClose={close}
         />

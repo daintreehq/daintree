@@ -66,11 +66,12 @@ const ANSWERS: Record<SignInOfferAnswer, { outcome: HostControlOutcomeCode; deta
   expired: {
     outcome: "expired",
     detail:
-      "The window didn't open it in time, so the host was asked to end it. Ask the person to bring up the window showing you, then call again.",
+      "The window didn't show it live in time, so the host was asked to end it. Ask the person to bring up the window showing you, then call again.",
   },
   cancelled: {
     outcome: "expired",
-    detail: "The call was cancelled before the window opened it, so the host was asked to end it.",
+    detail:
+      "The call was cancelled before the window showed it live, so the host was asked to end it.",
   },
   no_window: {
     outcome: "policy_rejected",

@@ -153,12 +153,13 @@ describe("HostSignInOffers (#18197)", () => {
     expect((await screen.findByTestId("offer-dialog")).getAttribute("data-consumer")).toBe("next");
   });
 
-  it("puts the dialog away once Main says nothing waits on it", async () => {
+  it("puts the dialog away, and lets its sign-in go, once Main says nothing waits on it", async () => {
     render(<HostSignInOffers />);
     await push(offer("ended"));
     await screen.findByTestId("offer-dialog");
     fireEvent.click(screen.getByRole("button", { name: "Gone" }));
     expect(screen.queryByTestId("offer-dialog")).toBeNull();
+    expect(releaseSignIn.mock.calls).toEqual([["ended"]]);
   });
 
   it("puts it away at its deadline unless Main took it as shown", async () => {
@@ -167,8 +168,13 @@ describe("HostSignInOffers (#18197)", () => {
       render(<HostSignInOffers />);
       await push(offer("untaken", Date.now() + 30_000));
       await screen.findByTestId("offer-dialog");
+      // A shown answer may still be on its way at the deadline itself.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByTestId("offer-dialog")).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
       });
       expect(screen.queryByTestId("offer-dialog")).toBeNull();
 

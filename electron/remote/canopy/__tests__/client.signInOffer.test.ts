@@ -225,6 +225,33 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
     await expect(answer).resolves.toBe("shown");
   });
 
+  it("counts only the host's one watch: a replaced one that ends, or one that ended before its answer, shows nothing", async () => {
+    let next = 30;
+    const s = setup({
+      answer: (method, payload) => {
+        if (method !== CanopyLinkMethod.SIGN_IN) return null;
+        if (payload.op === "start") return { terminalId: "daintree-sign-in-1", spawnedAt: 100 };
+        if (payload.op === "watch") {
+          return { watchId: next++, snapshot: { data: "", cols: 80, rows: 24 } };
+        }
+        return null;
+      },
+    });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    // The host replaces 30 with 31 and says nothing of 30; then 31 ends.
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    s.streamEnded("v1", 31);
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    // 32 is said to end before its answer arrives.
+    s.streamEnded("v1", 32);
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    expect(await peek(answer)).toBe(PENDING);
+  });
+
   it("isn't told to a view that no longer shows the assistant when it starts", async () => {
     const s = setup();
     await expect(
