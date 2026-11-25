@@ -127,6 +127,7 @@ describe("cloud host labels", () => {
     expect(cloudStatusLabel(choosing([offer(false)]))).toBe("Waiting for offers");
     expect(cloudStatusLabel(choosing([offer(false), offer(true)]))).toBe("Offers ready");
     expect(cloudChipStatus(choosing([offer(true)]), BOAT_PROVIDER)).toBe("offers ready");
+    expect(cloudChipStatus(choosing([]), BOAT_PROVIDER)).toBe("waiting for offers");
     // Ahead of an operation, a stale reading, or whatever the provider last said.
     expect(
       cloudStatusLabel(

@@ -1144,10 +1144,16 @@ describe("CloudMachineSection with an order waiting on a choice (#18231)", () =>
     <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
   );
 
+  afterEach(() => {
+    vi.mocked(cloudHostsClient.chooseOffer).mockClear();
+    vi.mocked(cloudHostsClient.cancelOrder).mockClear();
+  });
+
   it("offers the choice in place of the machine's state and controls", () => {
     show(waiting(), [AKASH]);
     expect(screen.getByRole("radio", { name: "Europlots" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Lease offer" })).toBeTruthy();
+    expect(screen.getByText(/^Choose an offer: bidders answer the order/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
     expect(screen.queryByTestId("cloud-machine-state")).toBeNull();
@@ -1185,12 +1191,14 @@ describe("CloudMachineSection with an order waiting on a choice (#18231)", () =>
     fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
     await act(async () => {});
     expect(cloudHostsClient.chooseOffer).toHaveBeenCalledWith("build", "dseq-7", "a", 0.036);
+    expect(cloudHostsClient.chooseOffer).toHaveBeenCalledTimes(1);
 
     cleanup();
     show(waiting(), [AKASH]);
     fireEvent.click(screen.getByRole("button", { name: "Cancel order" }));
     await act(async () => {});
     expect(cloudHostsClient.cancelOrder).toHaveBeenCalledWith("build", "dseq-7");
+    expect(cloudHostsClient.cancelOrder).toHaveBeenCalledTimes(1);
   });
 
   it("starts a new order's choice afresh, even for the same bidder at the same price", async () => {
@@ -1231,6 +1239,7 @@ describe("CloudMachineSection with an order waiting on a choice (#18231)", () =>
     view.rerender(section());
     expect(screen.queryByRole("radio")).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel order" })).toBeNull();
+    expect(screen.queryByText(/^Choose an offer: bidders answer the order/)).toBeNull();
     expect(screen.getByTestId("cloud-machine-state").textContent).toContain("Waiting for Akash");
 
     cloud.snapshot = {

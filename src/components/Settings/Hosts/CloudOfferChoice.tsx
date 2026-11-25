@@ -206,11 +206,12 @@ export function CloudOfferChoice({
             <RadioChoiceRow
               key={offer.id}
               bare={settings}
-              className={
-                settings
-                  ? cn(SETTINGS_ROW, checked ? "bg-overlay-selected" : "hover:bg-overlay-soft")
-                  : undefined
-              }
+              // A bidder's name or refusal is the provider's text: one long token still wraps.
+              className={cn(
+                "break-words",
+                settings && SETTINGS_ROW,
+                settings && (checked ? "bg-overlay-selected" : "hover:bg-overlay-soft")
+              )}
               name={name}
               value={offer.id}
               checked={checked}

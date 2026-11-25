@@ -82,6 +82,8 @@ const unavailable = (label: string) => {
 const bones = () => document.querySelectorAll("[data-skeleton-bone]").length;
 const noneText = () => screen.queryByTestId("cloud-offer-none")?.textContent ?? null;
 const slowShown = () => screen.queryByTestId("cloud-offer-still-working") !== null;
+// The live region itself, which says it is waiting to assistive tech.
+const waitingShown = () => screen.queryByRole("status", { name: "Waiting for offers" }) !== null;
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 const settle = () => act(async () => {});
 
@@ -113,8 +115,10 @@ describe("CloudOfferChoice while offers come in", () => {
     expect(button("Lease offer")).toBeNull();
     advance(399);
     expect(bones()).toBe(0);
+    expect(waitingShown()).toBe(false);
     advance(1);
     expect(bones()).toBe(2);
+    expect(waitingShown()).toBe(true);
     advance(4999 - 400);
     expect(slowShown()).toBe(false);
     advance(1);
@@ -130,8 +134,9 @@ describe("CloudOfferChoice while offers come in", () => {
     advance(1);
     expect(noneText()).toContain("No offers have arrived yet.");
     expect(bones()).toBe(0);
-    expect(button("Retry")).toBeTruthy();
-    expect(button("Cancel order")).toBeTruthy();
+    expect(waitingShown()).toBe(false);
+    expect(button("Retry")!.disabled).toBe(false);
+    expect(button("Cancel order")!.disabled).toBe(false);
   });
 
   it("counts from when this device began waiting, so a late look says so at once", () => {
@@ -139,6 +144,7 @@ describe("CloudOfferChoice while offers come in", () => {
     const view = render(ui(pending()));
     expect(noneText()).toContain("Daintree hasn't heard back about the order yet.");
     expect(bones()).toBe(0);
+    expect(button("Retry")).toBeTruthy();
     // A read that finds nothing changes what's said, not when.
     view.rerender(ui(pending({ offersReadAt: T0 + 31_000 })));
     expect(noneText()).toContain("No offers have arrived yet.");
@@ -149,7 +155,7 @@ describe("CloudOfferChoice while offers come in", () => {
     const view = render(ui(pending({ offersReadAt: T0 + 1000 })));
     view.rerender(ui(pending({ offersReadAt: T0 + 31_000, offers: [offer("a", 0.03)] })));
     expect(noneText()).toBeNull();
-    expect(radio("Bidder a")).toBeTruthy();
+    expect(radio("Bidder a").disabled).toBe(false);
   });
 
   it("never flashes the rows for an offer that beats the gate, and holds them once shown", () => {
@@ -213,7 +219,9 @@ describe("CloudOfferChoice while offers come in", () => {
     expect(client.createHost).not.toHaveBeenCalled();
     expect(client.retryCreate).not.toHaveBeenCalled();
     expect(noneText()).toBeNull();
-    advance(2999);
+    advance(400);
+    expect(waitingShown()).toBe(true);
+    advance(2599);
     expect(slowShown()).toBe(false);
     advance(1);
     expect(slowShown()).toBe(true);
@@ -258,6 +266,7 @@ describe("CloudOfferChoice while offers come in", () => {
 
   it.each([
     ["before the rows show", 200],
+    ["while the rows show", 1000],
     ["after it says it's still working", 5200],
   ])("leaves no timer behind once it goes %s", (_when, ms) => {
     const before = vi.getTimerCount();
@@ -337,9 +346,10 @@ describe("CloudOfferChoice offers", () => {
       )
     );
     expect(radio("First").disabled).toBe(true);
+    expect(radio("Second").disabled).toBe(true);
     expect(describedBy(radio("First"))).toBe("Not on your trusted list");
     expect(describedBy(radio("Second"))).toBe("Not audited");
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     advance(31_000);
     expect(radios()).toHaveLength(2);
     expect(noneText()).toBeNull();
@@ -368,13 +378,13 @@ describe("CloudOfferChoice leasing and cancelling", () => {
 
   it("leases the offer picked, of the order shown, at the quote shown", async () => {
     client.chooseOffer.mockResolvedValue(undefined);
-    render(ui(two()));
-    expect(unavailable("Lease offer")).toBe(true);
+    render(ui(two(0.036, 0.03649)));
+    expect(button("Lease offer")!.disabled).toBe(true);
     fireEvent.click(radio("Hurricane"));
     fireEvent.click(button("Lease offer")!);
     await settle();
     expect(client.chooseOffer).toHaveBeenCalledTimes(1);
-    expect(client.chooseOffer).toHaveBeenCalledWith("build", "dseq-1", "b", 0.05);
+    expect(client.chooseOffer).toHaveBeenCalledWith("build", "dseq-1", "b", 0.03649);
   });
 
   it("sends one lease and nothing else while it's out", async () => {
@@ -400,7 +410,7 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     view.rerender(ui(two(0.036, 0.01)));
     expect(radioNames()).toEqual(["Hurricane", "Europlots"]);
     expect(radio("Europlots").checked).toBe(true);
-    expect(unavailable("Lease offer")).toBe(false);
+    expect(button("Lease offer")!.disabled).toBe(false);
   });
 
   it.each([
@@ -412,11 +422,15 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     fireEvent.click(radio("Europlots"));
     view.rerender(ui(moved));
     expect(radios().some((input) => input.checked)).toBe(false);
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     expect(screen.getByTestId("cloud-offer-choice-lost").textContent).toContain("Pick one again");
     view.rerender(ui(two()));
     expect(radio("Europlots").checked).toBe(false);
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
+    // Picking again is the answer to the note, so it goes.
+    fireEvent.click(radio("Europlots"));
+    expect(screen.queryByTestId("cloud-offer-choice-lost")).toBeNull();
+    expect(button("Cancel order")!.disabled).toBe(false);
   });
 
   it("says why a lease was refused, and clears that with the next lease", async () => {
@@ -429,7 +443,7 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     await settle();
     expect(screen.getByRole("alert").textContent).toBe("That offer was withdrawn. Choose another.");
     expect(radio("Europlots").checked).toBe(false);
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     expect(button("Cancel order")!.disabled).toBe(false);
 
     const second = deferred();
@@ -449,12 +463,14 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     fireEvent.click(button("Lease offer")!);
     await settle();
     view.rerender(ui(shown));
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     expect(button("Cancel order")!.disabled).toBe(true);
     expect(radio("Hurricane").disabled).toBe(true);
+    fireEvent.click(button("Cancel order")!);
+    expect(client.cancelOrder).not.toHaveBeenCalled();
 
     view.rerender(ui(two()));
-    expect(unavailable("Lease offer")).toBe(false);
+    expect(button("Lease offer")!.disabled).toBe(false);
     expect(button("Cancel order")!.disabled).toBe(false);
     expect(radio("Hurricane").disabled).toBe(false);
     expect(radio("Europlots").checked).toBe(true);
@@ -471,8 +487,10 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     view.rerender(ui(refreshed));
     await act(async () => answer.resolve());
     expect(button("Cancel order")!.disabled).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     view.rerender(ui(two()));
     expect(button("Cancel order")!.disabled).toBe(false);
+    expect(button("Lease offer")!.disabled).toBe(false);
   });
 
   it("cancels the order shown, holding every action until a later snapshot arrives", async () => {
@@ -482,15 +500,15 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     const view = render(ui(shown));
     fireEvent.click(radio("Europlots"));
     fireEvent.click(button("Cancel order")!);
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     expect(button("Cancel order")!.getAttribute("aria-busy")).toBe("true");
     await act(async () => answer.resolve());
     expect(client.cancelOrder).toHaveBeenCalledWith("build", "dseq-1");
     view.rerender(ui(shown));
-    expect(unavailable("Lease offer")).toBe(true);
+    expect(button("Lease offer")!.disabled).toBe(true);
     expect(button("Cancel order")!.disabled).toBe(true);
     view.rerender(ui(two()));
-    expect(unavailable("Lease offer")).toBe(false);
+    expect(button("Lease offer")!.disabled).toBe(false);
     expect(button("Cancel order")!.disabled).toBe(false);
   });
 
@@ -501,6 +519,7 @@ describe("CloudOfferChoice leasing and cancelling", () => {
     render(ui(pending()));
     fireEvent.click(button("Cancel order")!);
     await settle();
+    expect(client.cancelOrder).toHaveBeenCalledWith("build", "dseq-1");
     expect(screen.getByRole("alert").textContent).toBe("Akash didn't confirm the close yet.");
     expect(button("Cancel order")!.disabled).toBe(false);
   });

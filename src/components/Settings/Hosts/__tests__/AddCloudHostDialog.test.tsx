@@ -1216,7 +1216,11 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     await waitFor(() => expect(getOffers().getAttribute("aria-disabled")).toBeNull());
     fireEvent.click(getOffers());
     await waitFor(() => expect(client.createHost).toHaveBeenCalledTimes(1));
-    expect(client.createHost.mock.calls[0]![0].machineType).toBe("akash-4c-16g");
+    expect(client.createHost.mock.calls[0]![0]).toMatchObject({
+      accountId: "ca_0123456789",
+      name: "build",
+      machineType: "akash-4c-16g",
+    });
   });
 
   it("keeps a list price and Create and connect for a provider that creates at once", async () => {
@@ -1228,7 +1232,7 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     );
     expect(screen.queryByTestId("add-cloud-host-offer-pricing")).toBeNull();
     expect(screen.queryByRole("button", { name: "Get offers" })).toBeNull();
-    expect((await create()).machineType).toBe("akash-4c-16g");
+    expect(await create()).toMatchObject({ name: "build", machineType: "akash-4c-16g" });
   });
 
   it("shows the order's offers ahead of progress or a past error, and leases the one picked", async () => {
@@ -1251,12 +1255,17 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     await waitFor(() =>
       expect(client.chooseOffer).toHaveBeenCalledWith("h-123", "dseq-1", "b", 0.05)
     );
+    expect(client.chooseOffer).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the order in view when its account drops out of the form's list", async () => {
     const { show } = await ordered();
-    show([hostStatus()], [{ ...account("akash"), providerUnavailable: "Akash is gone" }]);
+    show(
+      [hostStatus({ providerUnavailable: "Akash isn't available in this version of Daintree." })],
+      [{ ...account("akash"), providerUnavailable: "Akash is gone" }]
+    );
     expect(screen.getByTestId("add-cloud-host-offers")).toBeTruthy();
+    expect(screen.getByText("Akash isn't available in this version of Daintree.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Connect .* account/ })).toBeNull();
   });
 
@@ -1267,6 +1276,12 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     show([hostStatus({ pendingCreate: order("dseq-2") })]);
     expect((screen.getByRole("radio", { name: "Europlots" }) as HTMLInputElement).checked).toBe(
       false
+    );
+    client.chooseOffer.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
+    await waitFor(() =>
+      expect(client.chooseOffer).toHaveBeenCalledWith("h-123", "dseq-2", "a", 0.036)
     );
   });
 
@@ -1292,6 +1307,7 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
       "build-host is no longer in your host list."
     );
     expect(screen.queryByTestId("add-cloud-host-progress")).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" }).getAttribute("aria-disabled")).toBeNull();
   });
 
   it("hands over to setup once, only after the leased machine runs with nothing under way", async () => {
@@ -1319,6 +1335,8 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     expect(screen.queryByTestId("add-cloud-host-offers")).toBeNull();
     expect(onReady).not.toHaveBeenCalled();
 
+    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "starting" })]);
+    expect(onReady).not.toHaveBeenCalled();
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith({ hostId: "h-123", name: "build-host" });
