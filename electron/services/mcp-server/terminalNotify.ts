@@ -153,6 +153,8 @@ export interface NotifyTerminalInfo {
   lastStateChange?: number;
   /** Its agent run hasn't been observed at its prompt yet: starting up, not in a turn (#18014). */
   promptUnseen?: true;
+  /** Working, with a menu over its turn that would take a typed line (#18167). */
+  workingDialogVisible?: true;
   lastTypedInputAt?: number;
   detectedAgentId?: string;
   launchAgentId?: string;
@@ -2942,6 +2944,7 @@ function gateDiagnostics(info: NotifyTerminalInfo): Record<string, unknown> {
     waitingReason: info.waitingReason,
     lastStateChange: info.lastStateChange,
     promptUnseen: info.promptUnseen,
+    workingDialogVisible: info.workingDialogVisible,
     lastTypedInputAt: info.lastTypedInputAt,
     detectedAgentId: info.detectedAgentId,
     hasPty: info.hasPty,

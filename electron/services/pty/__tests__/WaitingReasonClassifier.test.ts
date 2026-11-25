@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyWaitingReason, hasRateLimitMessage } from "../WaitingReasonClassifier.js";
+import {
+  classifyWaitingReason,
+  endsOnWorkingDialog,
+  hasRateLimitMessage,
+  hasWorkingDialog,
+} from "../WaitingReasonClassifier.js";
 import { findEmptyComposerRow } from "../PromptDetector.js";
 
 describe("classifyWaitingReason", () => {
@@ -691,5 +696,76 @@ describe("Claude Code's unnumbered select dialogs (#16209)", () => {
   it("reads a dismissed dialog with the composer back below it as a prompt", () => {
     const rule = "─".repeat(40);
     expect(classify([...AUTOCOMPACT, "", rule, "❯ ", rule], "claude")).toBe("prompt");
+  });
+});
+
+describe("Codex's safety-buffering picker (#18167)", () => {
+  // Codex 0.171's picker at 80 columns, from its own snapshot: the turn runs on
+  // behind it, and its footer says so.
+  const PICKER = [
+    "  Giving this request a little extra thought",
+    "  If you'd rather not wait, retry with a faster model. It may be less capable",
+    "  of handling complex requests.",
+    "",
+    "",
+    "› 1. Retry with a faster model",
+    "  2. Dismiss and keep waiting",
+    "  3. Learn more",
+    "",
+    "  No action is required. Codex will keep waiting, and this menu will close when",
+    "  the response is ready.",
+    "",
+  ];
+
+  it("reads the open picker in a Codex pane as a menu over a running turn", () => {
+    expect(hasWorkingDialog("codex")).toBe(true);
+    expect(endsOnWorkingDialog(["• Ran npm test", "", ...PICKER], "codex")).toBe(true);
+  });
+
+  it("reads it through colour and a narrow pane's wrap", () => {
+    const narrow = [
+      "\x1b[1m  Giving this request a little extra\x1b[22m",
+      "\x1b[1m  thought\x1b[22m",
+      "",
+      "",
+      "\x1b[36m› 1. Dismiss and keep waiting\x1b[39m",
+      "  2. Learn more",
+      "",
+      "\x1b[2m  No action is required. Codex will\x1b[22m",
+      "\x1b[2m  keep waiting, and this menu will\x1b[22m",
+      "\x1b[2m  close when the response is ready.\x1b[22m",
+    ];
+    expect(endsOnWorkingDialog(narrow, "codex")).toBe(true);
+  });
+
+  it("keeps the picker to the agent whose config names it", () => {
+    expect(hasWorkingDialog("claude")).toBe(false);
+    expect(endsOnWorkingDialog(PICKER, "claude")).toBe(false);
+    expect(endsOnWorkingDialog(PICKER, undefined)).toBe(false);
+  });
+
+  it("never reads the working status a dismissed picker leaves behind", () => {
+    const status = [
+      "• Working (42s • esc to interrupt)",
+      "  Giving this request a little extra thought",
+      "",
+      "› Ask Codex to do anything",
+    ];
+    expect(endsOnWorkingDialog(status, "codex")).toBe(false);
+  });
+
+  it("leaves the stop-and-retry confirmation a choice the person answers", () => {
+    const confirmation = [
+      "•   Stop this attempt and retry?",
+      "",
+      "    This will stop the current attempt and retry in a new thread.",
+      "",
+      "  › 1. Keep waiting",
+      "    2. Stop and retry",
+    ];
+    expect(endsOnWorkingDialog(confirmation, "codex")).toBe(false);
+    expect(classifyWaitingReason(confirmation, true, undefined, undefined, "codex")).toBe(
+      "approval"
+    );
   });
 });

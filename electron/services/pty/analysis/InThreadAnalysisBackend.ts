@@ -236,6 +236,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       const parsed = this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         this.parserTail.feed(data);
+        this.activityMonitor?.noteParsed();
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         // Invalidate before noteAgentOutputActivity reads the viewport: xterm
         // fires per-write callbacks before the onWriteParsed event the cache

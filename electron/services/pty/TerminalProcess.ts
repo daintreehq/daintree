@@ -1164,6 +1164,7 @@ export class TerminalProcess {
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
       promptUnseen: t.promptUnseen,
+      workingDialogVisible: t.workingDialogVisible,
       lastOutputChangeAt: t.lastOutputChangeAt,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,

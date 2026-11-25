@@ -43,6 +43,8 @@ import {
   classifyWaitingReason,
   endsOnChoiceSelector,
   endsOnDrawnSelector,
+  endsOnWorkingDialog,
+  hasWorkingDialog,
   WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
@@ -69,6 +71,8 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 // resize/focus-triggered redraw) to land before a frame is latched.
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
 const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
+// Above the hysteresis threshold, so moving an agent misread as waiting back to busy is never dropped.
+const WORKING_DIALOG_CONFIDENCE = 0.95;
 // Idle-agent polling backoff (#10906). Once a simple-output agent has settled
 // into idle and stayed silent this long, drop the polling cadence to
 // FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS so a prompt sitting idle for an hour
@@ -222,6 +226,12 @@ export interface ActivityStateMetadata {
    * the send gate may measure typing from, as from a settle at the prompt.
    */
   inputRowEmpty?: true;
+  /**
+   * A menu the agent opens over a turn it keeps running opened (true) or
+   * closed (false) on a busy agent (#18167). Closing changes no state: it
+   * only ends the hold the opening put on sends.
+   */
+  workingDialog?: boolean;
 }
 
 /** More rows than any pane has: a viewport read asks for this many and gets them all. */
@@ -318,6 +328,18 @@ export class ActivityMonitor {
   // that didn't is read again, and the row's first empty sight sent, even with
   // the same reason: a run is never at its prompt until it is seen there.
   private idlePromptDrawn = false;
+  // A menu the agent draws over a turn it keeps running (#18167): whether it
+  // was published open, what the last read of the screen saw and when, and
+  // since when reads have found it gone.
+  private workingDialogShown = false;
+  private workingDialogSeen = false;
+  private workingDialogReadAt = 0;
+  private workingDialogGoneSince = 0;
+  // The menu's place was taken by a dialog that waits on an answer (#18167).
+  private workingDialogGaveWayToDialog = false;
+  // When the mirror last finished parsing a chunk: what is on screen can
+  // change then, well after the bytes arrived (#18167).
+  private lastParsedAt = 0;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -503,6 +525,15 @@ export class ActivityMonitor {
 
     // State preservation
     this.state = options?.initialState ?? "idle";
+    // Taking over a working agent, as after an analysis worker is rebuilt, this
+    // monitor owns no hold the one before it put on sends (#18167): it ends any,
+    // and publishes the menu again once it sees it.
+    if (this.state === "busy" && hasWorkingDialog(this.agentId)) {
+      this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+        trigger: "pattern",
+        workingDialog: false,
+      });
+    }
     this.skipInitialStateEmit = options?.skipInitialStateEmit ?? false;
     this.simpleOutputState = simpleOutputState;
 
@@ -1176,6 +1207,8 @@ export class ActivityMonitor {
       return;
     }
     this.waitingReasonReadAt = now;
+    // Drawn over a turn that runs on (#18167): never an approval to publish.
+    if (this.holdForWorkingDialog(now, true)) return;
     const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
     const promptResult = detectPrompt(
       lines,
@@ -1417,6 +1450,12 @@ export class ActivityMonitor {
     this.invalidateSimpleSnapshotCache();
     // Another agent's run: its input row hasn't been seen, whatever the last one showed (#18018).
     this.idlePromptDrawn = false;
+    this.forgetWorkingDialog();
+  }
+
+  /** The mirror finished parsing a chunk: the screen may show it only now. */
+  noteParsed(now: number = Date.now()): void {
+    this.lastParsedAt = now;
   }
 
   notifySubmission(): void {
@@ -1666,8 +1705,16 @@ export class ActivityMonitor {
       }
 
       if (this.state === "idle") {
+        // A menu drawn over a turn that runs on (#18167), however the pane settled.
+        if (this.holdForWorkingDialog(now)) return;
         this.recoverFromVisibleWorking(now);
         this.rereadWaitingReason(now);
+      } else if (
+        this.workingDialogShown ||
+        now - Math.max(this.lastActivityTimestamp, this.lastDataTimestamp) >=
+          SIMPLE_SNAPSHOT_SETTLE_MS
+      ) {
+        this.holdForWorkingDialog(now);
       }
 
       // Completion detection runs every cycle while busy — mirrors the
@@ -2060,6 +2107,103 @@ export class ActivityMonitor {
     }
   }
 
+  /**
+   * Holds the agent working while the screen ends on a menu its CLI opens over
+   * a turn it keeps running (#18167), such as Codex's safety-buffering picker:
+   * its turn goes on, and the menu closes by itself. The menu replaces the
+   * row that says the agent is working, so the pane goes quiet behind it, and
+   * a settle there would read the menu as an approval. Seen open, it is
+   * published as an observation on the working agent, which holds sends until
+   * it closes; an idle agent is moved back to busy.
+   */
+  private holdForWorkingDialog(now: number, fresh = false): boolean {
+    if (this.seesWorkingDialog(now, fresh)) {
+      this.recordWorkingSignal(now);
+      if (this.workingDialogShown) return true;
+      this.workingDialogShown = true;
+      const metadata: ActivityStateMetadata = {
+        trigger: "pattern",
+        patternConfidence: WORKING_DIALOG_CONFIDENCE,
+        workingDialog: true,
+      };
+      if (this.state === "busy") {
+        this.onStateChange(this.terminalId, this.spawnedAt, "busy", metadata);
+      } else {
+        this.becomeBusy(metadata, now);
+      }
+      return true;
+    }
+    // A dialog that does wait on an answer in its place, such as Codex's
+    // stop-and-retry confirmation, keeps sends held until the agent settles on
+    // it, which ends the hold in the same step; anything else ends it now.
+    if (this.workingDialogShown && !this.workingDialogGaveWayToDialog) {
+      this.forgetWorkingDialog();
+    }
+    return false;
+  }
+
+  /**
+   * Whether the menu counts as on screen. The screen is read again, at most
+   * every SIMPLE_SNAPSHOT_MIN_INTERVAL_MS unless `fresh`, until a read lands a
+   * settle window after the last change, the mirror's parse of a chunk
+   * included; and while a menu seen open seems gone, until reads have kept
+   * finding it gone for that window, so a redraw caught halfway never ends
+   * the hold.
+   */
+  private seesWorkingDialog(now: number, fresh = false): boolean {
+    if (!this.getVisibleLines || !hasWorkingDialog(this.agentId)) return false;
+    const changedAt = Math.max(
+      this.lastDataTimestamp,
+      this.simpleSnapshotSettleFrom,
+      this.lastParsedAt
+    );
+    // Read on, while a menu seen open seems gone, until that is confirmed.
+    const closing =
+      this.workingDialogShown &&
+      !this.workingDialogSeen &&
+      this.workingDialogReadAt - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS;
+    if (
+      (fresh || now - this.workingDialogReadAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) &&
+      (closing || this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS)
+    ) {
+      this.workingDialogReadAt = now;
+      const lines = this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      this.workingDialogSeen = endsOnWorkingDialog(lines, this.agentId);
+      this.workingDialogGaveWayToDialog =
+        !this.workingDialogSeen &&
+        this.workingDialogShown &&
+        endsOnDrawnSelector(lines, this.agentId);
+      if (this.workingDialogSeen) this.workingDialogGoneSince = 0;
+      else if (this.workingDialogShown && this.workingDialogGoneSince === 0) {
+        this.workingDialogGoneSince = now;
+      }
+    }
+    if (this.workingDialogSeen) return true;
+    return (
+      this.workingDialogShown &&
+      this.workingDialogReadAt - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS
+    );
+  }
+
+  /**
+   * The menu is gone, or no longer this monitor's to watch. A busy agent's
+   * hold on sends ends with it; an agent going idle ends it by settling.
+   */
+  private forgetWorkingDialog(): void {
+    const shown = this.workingDialogShown;
+    this.workingDialogShown = false;
+    this.workingDialogSeen = false;
+    this.workingDialogGaveWayToDialog = false;
+    this.workingDialogReadAt = 0;
+    this.workingDialogGoneSince = 0;
+    if (shown && this.state === "busy" && !this.isDisposed) {
+      this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+        trigger: "pattern",
+        workingDialog: false,
+      });
+    }
+  }
+
   private recordWorkingSignal(now: number): void {
     this.workingHoldUntil = Math.max(this.workingHoldUntil, now + WORKING_HOLD_MS);
   }
@@ -2076,7 +2220,22 @@ export class ActivityMonitor {
         return;
       }
       this.completionTimer.emitted = false;
+      // A completion line still in view when the menu opened over the turn
+      // (#18167): the completed state already published is undone, and the
+      // hold the menu puts on sends, cleared with it, is put back.
+      const shownBefore = this.workingDialogShown;
+      if (this.holdForWorkingDialog(Date.now())) {
+        if (shownBefore) {
+          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+            trigger: "pattern",
+            patternConfidence: WORKING_DIALOG_CONFIDENCE,
+            workingDialog: true,
+          });
+        }
+        return;
+      }
       this.state = "idle";
+      this.forgetWorkingDialog();
       this.idleSince = Date.now();
       this.patternBuf.clear();
       this.idleWaitingReason = undefined;
@@ -2141,8 +2300,10 @@ export class ActivityMonitor {
   // is pending, the idle emission is left to the completion timer.
   private transitionSimpleToIdle(now: number): void {
     if (this.completionTimer.emitted) return;
+    if (this.holdForWorkingDialog(now)) return;
     if (this.trySimpleCompletion(now)) return;
     this.state = "idle";
+    this.forgetWorkingDialog();
     this.idleSince = now;
     this.patternBuf.clear();
     let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } =

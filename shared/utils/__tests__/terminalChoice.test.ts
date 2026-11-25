@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   endsOnDrawnChoiceDialog,
   endsOnFooteredChoice,
+  endsOnNotedChoice,
   listChoices,
   parseChoiceList,
   planChoice,
@@ -551,6 +552,85 @@ describe("endsOnFooteredChoice (#16209)", () => {
         FOOTER
       )
     ).toBe(false);
+  });
+});
+
+describe("endsOnNotedChoice (#18167)", () => {
+  // The whole note, so a match proves its wrapped rows were joined.
+  const NOTE = [
+    /^No action is required\. Codex will keep waiting, and this menu will close when the response is ready\.$/i,
+  ];
+  // Codex's safety-buffering picker at 80 columns, as its own snapshot draws it.
+  const PICKER = [
+    "  Giving this request a little extra thought",
+    "  If you'd rather not wait, retry with a faster model. It may be less capable",
+    "  of handling complex requests.",
+    "",
+    "",
+    "› 1. Retry with a faster model",
+    "  2. Dismiss and keep waiting",
+    "  3. Learn more",
+    "",
+    "  No action is required. Codex will keep waiting, and this menu will close when",
+    "  the response is ready.",
+  ];
+
+  it("reads a numbered list with its CLI's note under it", () => {
+    expect(endsOnNotedChoice(PICKER, NOTE)).toBe(true);
+    expect(endsOnNotedChoice([...PICKER, "", ""], NOTE)).toBe(true);
+  });
+
+  it("reads the note however the pane wraps it", () => {
+    const narrow = [
+      "  Giving this request a little extra",
+      "  thought",
+      "",
+      "",
+      "› 1. Dismiss and keep waiting",
+      "  2. Learn more",
+      "",
+      "  No action is required. Codex will",
+      "  keep waiting, and this menu will",
+      "  close when the response is ready.",
+    ];
+    expect(endsOnNotedChoice(narrow, NOTE)).toBe(true);
+  });
+
+  it("reads it wherever the highlight is", () => {
+    const moved = PICKER.map((row) =>
+      row.startsWith("›")
+        ? row.replace("›", " ")
+        : row.startsWith("  2.")
+          ? `›${row.slice(1)}`
+          : row
+    );
+    expect(endsOnNotedChoice(moved, NOTE)).toBe(true);
+  });
+
+  it("needs a note pattern to match at all", () => {
+    expect(endsOnNotedChoice(PICKER, [])).toBe(false);
+  });
+
+  it("never counts the note without a list right above it", () => {
+    expect(endsOnNotedChoice(PICKER.slice(-2), NOTE)).toBe(false);
+    const prose = [...PICKER.slice(0, 8), "", "Codex printed this:", "", ...PICKER.slice(-2)];
+    expect(endsOnNotedChoice(prose, NOTE)).toBe(false);
+  });
+
+  it("never counts a note that isn't the last thing drawn", () => {
+    const composer = "─".repeat(40);
+    expect(endsOnNotedChoice([...PICKER, "", composer, "› ", composer], NOTE)).toBe(false);
+    expect(endsOnNotedChoice([...PICKER, "", "› Ask Codex to do anything"], NOTE)).toBe(false);
+  });
+
+  it("never counts a list without its highlight", () => {
+    const unhighlighted = PICKER.map((row) => row.replace("›", " "));
+    expect(endsOnNotedChoice(unhighlighted, NOTE)).toBe(false);
+  });
+
+  it("never counts the note's words run into other text", () => {
+    const run = [...PICKER.slice(0, -1), "  the response is ready. Then it did more."];
+    expect(endsOnNotedChoice(run, [/^No action is required\. .* is ready\.$/i])).toBe(false);
   });
 });
 

@@ -201,6 +201,7 @@ export class AnalysisSession {
     const parsed = this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
+      this.monitor?.noteParsed();
       // xterm's onRender event fires before this callback and invalidates only
       // the viewport rows the parser changed, so the activity read below is
       // fresh without forcing every unchanged row through comparison again.

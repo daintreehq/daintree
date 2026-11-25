@@ -103,7 +103,10 @@ describe("prompt-capable input provenance (#16187)", () => {
 
   it("reads keys at an approval dialog as no prompt, and every other state as one", () => {
     expect(keysReachPrompt({ agentState: "waiting", waitingReason: "approval" })).toBe(false);
+    // Keys at a menu over a running turn pick from it too (#18167).
+    expect(keysReachPrompt({ agentState: "working", workingDialogVisible: true })).toBe(false);
     for (const state of [
+      { agentState: "waiting", waitingReason: "prompt", workingDialogVisible: true },
       { agentState: "working" },
       { agentState: "waiting", waitingReason: "prompt" },
       { agentState: "waiting", waitingReason: "question" },

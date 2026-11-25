@@ -4,6 +4,7 @@ import {
   endsOnChoiceDialog,
   endsOnDrawnChoiceDialog,
   endsOnFooteredChoice,
+  endsOnNotedChoice,
 } from "../../../shared/utils/terminalChoice.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js";
@@ -202,18 +203,21 @@ const PROMPT_CHROME_LINE = /^[\s>❯›⟩$%#│╭╰─╮╯]*$/;
 const APPROVAL_SCAN_LINES = 10;
 const ERROR_SCAN_LINES = 4;
 
-const choiceFooterCache = new Map<string, readonly RegExp[]>();
+const footerPatternCache = new Map<string, readonly RegExp[]>();
 
 /**
- * The select-dialog footers `agentId`'s own config names (#16209). Kept to
- * the agent that draws them: another CLI's prose or output can carry the same
- * words without meaning a dialog is open.
+ * The footers of `kind` that `agentId`'s own config names. Kept to the agent
+ * that draws them: another CLI's prose or output can carry the same words
+ * without meaning a dialog is open.
  */
-function choiceDialogFootersFor(agentId: string | undefined): readonly RegExp[] {
+function footersFor(
+  agentId: string | undefined,
+  kind: "choiceDialogFooterPatterns" | "workingDialogFooterPatterns"
+): readonly RegExp[] {
   if (agentId === undefined) return [];
-  const patterns = getEffectiveAgentConfig(agentId)?.detection?.choiceDialogFooterPatterns ?? [];
-  const key = `${agentId}\0${patterns.join("\0")}`;
-  let compiled = choiceFooterCache.get(key);
+  const patterns = getEffectiveAgentConfig(agentId)?.detection?.[kind] ?? [];
+  const key = `${kind}\0${agentId}\0${patterns.join("\0")}`;
+  let compiled = footerPatternCache.get(key);
   if (compiled === undefined) {
     compiled = patterns.flatMap((pattern) => {
       try {
@@ -222,9 +226,31 @@ function choiceDialogFootersFor(agentId: string | undefined): readonly RegExp[] 
         return [];
       }
     });
-    choiceFooterCache.set(key, compiled);
+    footerPatternCache.set(key, compiled);
   }
   return compiled;
+}
+
+/** The select-dialog footers `agentId`'s own config names (#16209). */
+function choiceDialogFootersFor(agentId: string | undefined): readonly RegExp[] {
+  return footersFor(agentId, "choiceDialogFooterPatterns");
+}
+
+/** Whether `agentId`'s config names a menu it draws over a running turn (#18167). */
+export function hasWorkingDialog(agentId: string | undefined): boolean {
+  return footersFor(agentId, "workingDialogFooterPatterns").length > 0;
+}
+
+/**
+ * Whether the last thing drawn in `lines`, the whole viewport, is a menu
+ * `agentId`'s CLI opens over a turn it keeps running (#18167), closed by the
+ * note its config names. Not a wait: the menu closes by itself.
+ */
+export function endsOnWorkingDialog(lines: string[], agentId: string | undefined): boolean {
+  const notes = footersFor(agentId, "workingDialogFooterPatterns");
+  if (notes.length === 0) return false;
+  const stripped = lines.map((l) => stripAnsi(l));
+  return endsOnNotedChoice(withoutTrailingChecklist(stripped, stripped.length), notes);
 }
 
 /**

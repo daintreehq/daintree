@@ -142,6 +142,14 @@ export const config: AgentConfig = {
     ],
     promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
     promptHintPatterns: ["context\\s+left"],
+    // The safety-buffering picker ("Giving this request a little extra
+    // thought", tui/src/chatwidget/safety_buffering.rs) replaces the status
+    // row while the turn runs on behind it and closes when the response is
+    // ready. Only its footer is the open picker's own: the header also shows
+    // in the working status once the picker is dismissed.
+    workingDialogFooterPatterns: [
+      "^No action is required\\. Codex will keep waiting, and this menu will close when the response is ready\\.$",
+    ],
     completionPatterns: [
       // @generated:codex:completionPatterns:start
       "Task\\s+completed\\s+successfully",
