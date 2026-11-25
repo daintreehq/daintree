@@ -120,6 +120,18 @@ export function hourlyShort(dollars: number | null): string | null {
   return dollars === null ? null : `$${dollars.toFixed(3)}/h`;
 }
 
+/** A month of running, as providers quote one: 730 hours. */
+const HOURS_PER_MONTH = 730;
+
+/** "$0.036 an hour · about $26.28 a month", for an offer's quoted rate. */
+export function offerPriceLabel(hourlyDollars: number): string {
+  const monthly = (hourlyDollars * HOURS_PER_MONTH).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `$${hourlyDollars.toFixed(3)} an hour · about $${monthly} a month`;
+}
+
 export function lifetimeLabel(hours: number | null): string {
   if (hours === null) return "Never";
   return pluralize(hours, "hour");
@@ -382,6 +394,8 @@ export function idleEndSentence(
  * "Machine".
  */
 export function cloudStateWord(status: CloudHostStatus): string {
+  // Ahead of the create under way: nothing more happens until the person chooses.
+  if (status.pendingCreate) return "Choose an offer";
   if (status.operation) {
     switch (status.operation.kind) {
       case "creating":
@@ -409,6 +423,7 @@ export function cloudStateWord(status: CloudHostStatus): string {
  */
 export function cloudStatusLabel(status: CloudHostStatus, stale = false): string {
   const word = cloudStateWord(status);
+  if (status.pendingCreate) return word;
   if (status.operation === null) {
     if (status.machine === "not-created") return word;
     if (status.machine === "unknown") return "Couldn't check the machine";

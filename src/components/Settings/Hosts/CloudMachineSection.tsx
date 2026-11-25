@@ -39,6 +39,7 @@ import { SettingsGroup, SettingsRow, SettingsRowActions } from "../SettingsGroup
 import { SettingsSelect } from "../SettingsSelect";
 import { HostIdleTimeRow } from "./HostIdleTimeRow";
 import { HostKeyReviewDetails } from "./CloudHostKeyReview";
+import { CloudOfferChoice } from "./CloudOfferChoice";
 import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 
 function errorText(err: unknown, fallback: string): string {
@@ -90,6 +91,29 @@ export function CloudMachineSection({
   );
   const now = useNow(status !== null);
   if (!status) return null;
+  // Until the person chooses there is no machine to show, start or stop: only the order.
+  if (status.pendingCreate) {
+    return (
+      <SettingsSection title="Cloud machine" id="host-cloud-machine">
+        <SettingsGroup>
+          <SettingsRow
+            label="Choose an offer"
+            layout="stacked"
+            description="Bidders answer the order with offers. Lease one to create the machine at its price."
+            control={
+              <CloudOfferChoice
+                key={status.pendingCreate.order.id}
+                hostId={hostId}
+                choice={status.pendingCreate}
+                name="cloud-machine-offer"
+                problem={status.lastError?.message ?? null}
+              />
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
+    );
+  }
   // An old reading is the last one, not the machine now: its facts say so.
   // Without its provider nothing is current, however recent the last answer was (#17353).
   const stale =

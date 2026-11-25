@@ -23,6 +23,7 @@ import {
   stoppedBillingSentence,
   machineSpecLabel,
   idleSleepTimerSentence,
+  offerPriceLabel,
 } from "../cloudHostLabels";
 import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
 
@@ -83,6 +84,36 @@ describe("cloud host labels", () => {
       )
     ).toBe("Machine stopping, retrying the save");
     expect(cloudStatusLabel(status({ machine: "stopped" }))).toBe("Machine stopped");
+  });
+
+  it("names an order waiting on the person's choice wherever the machine's state shows", () => {
+    const choosing = status({
+      resourceId: null,
+      machine: "not-created",
+      operation: null,
+      // Whatever went wrong before, the choice is what's wanted now.
+      lastError: { code: "refused", message: "closed", at: 0 },
+      pendingCreate: {
+        kind: "awaiting-offer",
+        order: { id: "dseq-1" },
+        waitingSince: 0,
+        offers: [],
+        offersReadAt: null,
+      },
+    });
+    expect(cloudStatusLabel(choosing)).toBe("Choose an offer");
+    expect(cloudChipStatus(choosing, BOAT_PROVIDER)).toBe("choose an offer");
+    expect(
+      cloudStatusLabel({
+        ...choosing,
+        operation: { id: "o", kind: "creating", startedAt: 0, stage: "" },
+      })
+    ).toBe("Choose an offer");
+  });
+
+  it("prices an offer by the hour and by a month of running", () => {
+    expect(offerPriceLabel(0.036)).toBe("$0.036 an hour · about $26.28 a month");
+    expect(offerPriceLabel(1.5)).toBe("$1.500 an hour · about $1,095.00 a month");
   });
 
   it("tells an unfinished create from a host never created", () => {

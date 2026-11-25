@@ -15,6 +15,15 @@ import type {
   CloudWorktreeRef,
 } from "@shared/types/cloudHosts";
 
+/**
+ * The order commands of a create waiting on an offer (`CloudHostStatus.pendingCreate`)
+ * reach main once its offer flow lands (#18230). Until then they refuse: no provider
+ * places orders yet, so nothing calls them outside tests.
+ */
+function offerOrdersUnavailable(): Promise<void> {
+  return Promise.reject(new Error("This version of Daintree can't act on cloud offers yet."));
+}
+
 /** Cloud accounts and cloud hosts. Credentials go in once and never come back. */
 export const cloudHostsClient = {
   getSnapshot: (): Promise<CloudHostsSnapshot> => window.electron.cloudHosts.getSnapshot(),
@@ -71,6 +80,16 @@ export const cloudHostsClient = {
   stopHost: (hostId: string): Promise<void> => window.electron.cloudHosts.stopHost({ hostId }),
   retryCreate: (hostId: string): Promise<void> =>
     window.electron.cloudHosts.retryCreate({ hostId }),
+  /**
+   * Lease one of the order's offers; the create then carries on as any other. Refused,
+   * leaving the order open, when that offer has gone or the order is no longer the one shown.
+   */
+  chooseOffer: (_hostId: string, _orderId: string, _offerId: string): Promise<void> =>
+    offerOrdersUnavailable(),
+  /** Close the order. One of its offers leased meanwhile is kept: the snapshot says which happened. */
+  cancelOrder: (_hostId: string, _orderId: string): Promise<void> => offerOrdersUnavailable(),
+  /** Read the order's offers again now, rather than at the next refresh. */
+  refreshOffers: (_hostId: string, _orderId: string): Promise<void> => offerOrdersUnavailable(),
   refreshHost: (hostId: string): Promise<void> =>
     window.electron.cloudHosts.refreshHost({ hostId }),
   deleteMachine: (hostId: string, resourceId: string | null): Promise<void> =>

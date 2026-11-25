@@ -37,6 +37,9 @@ vi.mock("@/clients/cloudHostsClient", () => ({
   cloudHostsClient: {
     retryCreate: vi.fn(),
     setLifetime: vi.fn(),
+    chooseOffer: vi.fn(async () => {}),
+    cancelOrder: vi.fn(async () => {}),
+    refreshOffers: vi.fn(async () => {}),
     trustHostKey,
     retryWorktreeCleanup,
     dismissWorktreeCleanup,
@@ -1103,5 +1106,61 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
     show(running("boat"), [BOAT_PROVIDER]);
     expect(idleRow()).toContain(IDLE_STOP_UNKNOWN);
     expect(idleRow()).not.toContain("stops by itself");
+  });
+});
+
+describe("CloudMachineSection with an order waiting on a choice (#18231)", () => {
+  const waiting = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      operation: null,
+      // A restart mid-choice leaves no operation, and whatever went wrong before it.
+      lastError: { code: "refused", message: "The last order was closed.", at: 1 },
+      pendingCreate: {
+        kind: "awaiting-offer",
+        order: { id: "dseq-7" },
+        waitingSince: Date.now(),
+        offers: [
+          {
+            id: "a",
+            hourlyDollars: 0.036,
+            bidder: { id: "akash1a", name: "Europlots", region: "eu-west" },
+            choosable: true,
+            reason: null,
+          },
+        ],
+        offersReadAt: Date.now(),
+      },
+      ...overrides,
+    });
+
+  it("offers the choice the dialog left open, in place of the machine's controls", () => {
+    show(waiting(), [BOAT_PROVIDER]);
+    expect(screen.getByText("Choose an offer")).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Europlots" })).toBeTruthy();
+    expect(screen.getByText("The last order was closed.")).toBeTruthy();
+    // Retry would place a second order; there is no machine to start or check yet.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-state")).toBeNull();
+  });
+
+  it("leases or cancels the order from here", async () => {
+    show(waiting(), [BOAT_PROVIDER]);
+    fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
+    await act(async () => {});
+    expect(cloudHostsClient.chooseOffer).toHaveBeenCalledWith("build", "dseq-7", "a");
+
+    cleanup();
+    show(waiting(), [BOAT_PROVIDER]);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel order" }));
+    await act(async () => {});
+    expect(cloudHostsClient.cancelOrder).toHaveBeenCalledWith("build", "dseq-7");
+  });
+
+  it("goes back to the machine once the choice is made", () => {
+    show(waiting({ pendingCreate: null, lastError: null, operation: null }), [BOAT_PROVIDER]);
+    expect(screen.queryByText("Choose an offer")).toBeNull();
+    expect(screen.getByTestId("cloud-machine-state")).toBeTruthy();
   });
 });
