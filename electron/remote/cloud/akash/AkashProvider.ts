@@ -97,7 +97,7 @@ function unsupported(message: string): AkashApiError {
 
 const PAGE_SIZE = 100;
 /** Ten thousand deployments: past that a listing is refused rather than read without end. */
-const MAX_PAGES = 100;
+const MAX_ROWS = 10_000;
 const MAX_BLOCK_TIMES = 512;
 /** Passes over a list that moves while it is read, before it is refused as never holding still. */
 const MAX_SCANS = 3;
@@ -961,11 +961,13 @@ export class AkashProvider implements CloudProvider {
     let note: LeaseNote | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       let answer: unknown[];
+      let unclear: AkashApiError | null = null;
       try {
         answer = await client.createLease(ctx, lease);
       } catch (error) {
         if (!(error instanceof AkashApiError) || error.kind === "cancelled") throw error;
-        if (error.code === "provider_unreachable" && attempt === 0 && view.leases.length === 0) {
+        const first = attempt === 0 && view.leases.length === 0;
+        if (error.code === "provider_unreachable" && first) {
           throw new AkashApiError(
             "offer-gone",
             "The provider couldn't be reached, so nothing was leased. Choose another offer.",
@@ -973,33 +975,37 @@ export class AkashProvider implements CloudProvider {
             error.code
           );
         }
-        if (error.code === "manifest_not_delivered") {
-          note = UNDELIVERED;
-          continue;
-        }
+        // A refusal Console named before leasing anything, with nothing yet saying a lease stands.
+        if (first && LEASE_REFUSALS.has(error.kind)) throw error;
         if (error.code === "provider_manifest_invalid") {
           const back = await this.readBack(client, ctx, view.id, offer, INVALID);
           return this.answer(client, back, offer, chosen, null, INVALID, ctx.signal);
         }
-        const back = await this.readBack(client, ctx, view.id, offer, note);
-        if (attempt === 0 && back.taken && needsManifest(back.taken, offer)) {
-          note = UNDELIVERED;
-          continue;
+        if (error.code === "manifest_not_delivered") note = UNDELIVERED;
+        unclear = error;
+        answer = [];
+      }
+      if (!unclear) {
+        let made: AkashLease | undefined;
+        try {
+          made = parseItems(answer, akashLeaseSchema).find(
+            (entry) => sameDeployment(entry.id, view.id) && tupleOf(entry.id) === tupleOf(offer)
+          );
+        } catch {
+          made = undefined;
         }
-        return this.answer(client, back, offer, chosen, error, note, ctx.signal);
+        if (made && !replaced(made, offer)) {
+          return this.leased(client, { ...view, leases: [made] }, offer, chosen, ctx.signal);
+        }
       }
-      let made: AkashLease | undefined;
-      try {
-        made = parseItems(answer, akashLeaseSchema).find(
-          (entry) => sameDeployment(entry.id, view.id) && tupleOf(entry.id) === tupleOf(offer)
-        );
-      } catch {
-        made = undefined;
-      }
-      if (made) return this.leased(client, { ...view, leases: [made] }, offer, chosen, ctx.signal);
-      // An answer it can't read says nothing either way; the order does.
+      // Anything else, an answer it can't read included, is settled by what the order holds;
+      // a lease of the chosen bid standing with nothing reported of it gets its manifest again.
       const back = await this.readBack(client, ctx, view.id, offer, note);
-      return this.answer(client, back, offer, chosen, null, note, ctx.signal);
+      if (attempt === 0 && back.taken && needsManifest(back.taken, offer)) {
+        note = UNDELIVERED;
+        continue;
+      }
+      return this.answer(client, back, offer, chosen, unclear, note, ctx.signal);
     }
     const back = await this.readBack(client, ctx, view.id, offer, note ?? UNDELIVERED);
     return this.answer(client, back, offer, chosen, null, note ?? UNDELIVERED, ctx.signal);
@@ -1046,7 +1052,11 @@ export class AkashProvider implements CloudProvider {
     signal: AbortSignal | undefined
   ): Promise<ProviderResource> {
     const { view, taken } = back;
-    if (taken) return withNote(await this.leased(client, view, offer, chosen, signal), note);
+    if (taken) {
+      // The provider reports it after all: the manifest arrived, whatever an answer said.
+      const said = note === UNDELIVERED && taken.status ? null : note;
+      return withNote(await this.leased(client, view, offer, chosen, signal), said);
+    }
     if (view.leases.length > 0) throw otherOfferLeased();
     // Nothing shows: a refusal the Console named stands, unless it said the lease was made.
     if (note === null && error && LEASE_REFUSALS.has(error.kind)) throw error;
@@ -1078,8 +1088,11 @@ export class AkashProvider implements CloudProvider {
           decimal(lease.price.amount) !== decimal(chosen.price.amount)));
     if (!swapped) return resource;
     const rate = lease.price.denom === AKASH_UACT ? akashHourlyDollars(lease.price.amount) : null;
-    const said = `The provider replaced its offer as it was leased: the lease is at ${rate === null ? `${lease.price.amount} ${lease.price.denom} a block` : `$${rate.toFixed(4)} an hour`}, not the offer chosen.`;
-    return { ...resource, error: [said, resource.error].filter(Boolean).join(" ") };
+    // Leased on terms nobody chose: it stops here for the person to keep or delete.
+    return withNote(resource, {
+      machine: "error",
+      problem: `The provider replaced its offer as it was leased: the lease is at ${rate === null ? `${lease.price.amount} ${lease.price.denom} a block` : `$${rate.toFixed(4)} an hour`}, not the offer chosen. Delete it unless that rate is fine.`,
+    });
   }
 
   /**
@@ -1116,7 +1129,7 @@ export class AkashProvider implements CloudProvider {
     if (view.leases.length > 0) {
       return { kind: "leased", resource: await this.resourceOf(client, view, ctx.signal) };
     }
-    await client.closeDeployment(ctx, id.dseq, { retry: false });
+    await this.close(client, ctx, id, false);
     let after: DeploymentView;
     try {
       after = await this.read(client, ctx, id);
@@ -1129,9 +1142,35 @@ export class AkashProvider implements CloudProvider {
         null
       );
     }
-    return after.leases.length > 0
-      ? { kind: "leased", resource: await this.resourceOf(client, after, ctx.signal) }
-      : { kind: "closed" };
+    if (after.leases.length > 0) {
+      return { kind: "leased", resource: await this.resourceOf(client, after, ctx.signal) };
+    }
+    if (after.state !== "closed") {
+      throw new AkashApiError(
+        "outcome-unknown",
+        `Order ${id.dseq} was closed, but the Akash Console still shows it open`,
+        null,
+        null
+      );
+    }
+    return { kind: "closed" };
+  }
+
+  /** Closes a deployment; one the project lost track of meanwhile is looked for in the wallet's others. */
+  private async close(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    id: AkashDeploymentId,
+    retry: boolean
+  ): Promise<void> {
+    try {
+      await client.closeDeployment(ctx, id.dseq, { retry });
+    } catch (error) {
+      if (error instanceof AkashApiError && error.kind === "not-found") {
+        await this.notElsewhere(client, ctx, id);
+      }
+      throw error;
+    }
   }
 
   async rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void> {
@@ -1150,7 +1189,7 @@ export class AkashProvider implements CloudProvider {
     const view = await this.read(client, ctx, id);
     if (view.state === "closed") return;
     // Closing this one machine again after a lost answer closes nothing else.
-    await client.closeDeployment(ctx, id.dseq, { retry: true });
+    await this.close(client, ctx, id, true);
   }
 
   /**
@@ -1252,8 +1291,15 @@ export class AkashProvider implements CloudProvider {
     try {
       view = viewOf(await client.deployment({ ...ctx, projectId: undefined }, id.dseq));
     } catch (error) {
-      if (error instanceof AkashApiError && error.kind === "cancelled") throw error;
-      return;
+      // Not in the wallet's reach either: gone, as far as this key can tell.
+      if (
+        error instanceof AkashApiError &&
+        (error.kind === "not-found" || error.kind === "forbidden")
+      ) {
+        return;
+      }
+      // Couldn't ask: never gone on that word.
+      throw error;
     }
     if (sameDeployment(view.id, id)) {
       throw new AkashApiError(
@@ -1344,8 +1390,9 @@ export class AkashProvider implements CloudProvider {
   ): Promise<DeploymentView[] | null> {
     const views: DeploymentView[] = [];
     let overlap = true;
+    // Every page adds a row, or the next one does once its overlap is dropped.
     for (let page = 0; ; page++) {
-      if (page >= MAX_PAGES) {
+      if (views.length > MAX_ROWS || page > 2 * MAX_ROWS + 1) {
         throw new AkashApiError(
           "bad-response",
           "The Akash Console listed more deployments than Daintree reads",
@@ -1435,7 +1482,17 @@ export class AkashProvider implements CloudProvider {
     signal: AbortSignal | undefined,
     strict: boolean
   ): Promise<string | null> {
-    if (height === null) return null;
+    if (height === null) {
+      if (strict) {
+        throw new AkashApiError(
+          "bad-response",
+          "The Akash Console didn't say which block the deployment was made in",
+          null,
+          null
+        );
+      }
+      return null;
+    }
     const key = `${client.baseUrl} ${height}`;
     const known = this.blockTimes.get(key);
     if (known) return known;
