@@ -374,6 +374,25 @@ describe("re-checking after the command runs", () => {
     expect(recheckPrerequisite).toHaveBeenCalledTimes(2);
   });
 
+  it("types a command nothing can re-check and watches nothing for it", async () => {
+    const opened = await openAtPrompt({
+      ...REQUEST,
+      line: "agent37 ssh setup",
+      target: { kind: "manual" },
+    });
+    expect(opened).toBe("t1");
+    expect(client.write).toHaveBeenCalledWith(
+      "t1",
+      formatForTerminalPaste("agent37 ssh setup", { bracketedPasteMode: true })
+    );
+    expect(__testing.watchCount()).toBe(0);
+    await runCommand();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+    expect(cli.refresh).not.toHaveBeenCalled();
+    expect(client.activity.size).toBe(0);
+  });
+
   it("ignores other terminals' activity", async () => {
     await openAtPrompt();
     await runCommand();

@@ -16,6 +16,7 @@ import { _resetCloudHostsStateForTesting } from "@/components/Hosts/cloud/cloudH
 import { provider as cloudProvider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { AddHostDialog } from "../AddHostDialog";
 import { ClientAppError } from "@/utils/clientAppError";
+import { HOST_PACKAGES_COMMAND, HOST_PACKAGES_INSTRUCTION } from "@shared/config/linuxHostPackages";
 
 // Which kind of host this machine adds: ssh, or (a Windows Shell) WSL distros.
 const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
@@ -741,6 +742,43 @@ describe("AddHostDialog", () => {
     );
   });
 
+  it("shows a refused start's package install as a command to copy, apart from its words (#18181)", async () => {
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        platform: "linux",
+        arch: "x64",
+        install: {
+          path: "/home/node/Applications/Daintree.AppImage",
+          version: "1.4.0",
+          commit: "abcdef0",
+          packaging: "appimage",
+        },
+        hostModeListening: false,
+        hostModeState: null,
+      })
+    );
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    const refusal = `${words} ${HOST_PACKAGES_INSTRUCTION}`;
+    remoteHosts.startHostMode!.mockRejectedValueOnce(
+      new ClientAppError("UNSUPPORTED", refusal, refusal)
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    const fix = await screen.findByTestId("host-root-command");
+    expect(fix.textContent).toContain("On Debian or Ubuntu, run this on studio as root, then try again");
+    expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+    // The words are announced without the command, and it runs there, never here.
+    expect(screen.getByText(words).getAttribute("role")).toBe("alert");
+    expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
+  });
+
   it("saves what turning Host mode on saw there, not the check before it", async () => {
     const box = probeResult({
       platform: "linux",
@@ -1459,6 +1497,32 @@ describe("AddHostDialog", () => {
           "signed in here, as https://www.agent37.com/docs/agents-api/ssh describes"
         );
         expect(screen.getByText(/Connection closed by UNKNOWN port 65535/)).toBeTruthy();
+      });
+
+      it("offers the declared sign-in line, to copy or open in a terminal (#18181)", async () => {
+        const declared = {
+          ...TUNNELLED,
+          capabilities: {
+            ...TUNNELLED.capabilities,
+            tunnel: {
+              ...TUNNELLED.capabilities.tunnel,
+              installCommand: "npm install -g agent37",
+              signInCommand: "agent37 ssh setup",
+            },
+          },
+        };
+        cloud = { providers: [declared], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(CLOSED));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        const note = screen.getByTestId("add-host-tunnel-closed");
+        expect(note.textContent).toContain("so it has to be signed in here.");
+        expect(note.textContent).not.toContain("describes");
+        const signIn = screen.getByTestId("tunnel-sign-in-command");
+        expect(signIn.textContent).toContain("Sign in to agent37 on this device");
+        expect(signIn.textContent).toContain("agent37 ssh setup");
+        // It was found, so signing in is what's left.
+        expect(screen.queryByTestId("tunnel-install-command")).toBeNull();
       });
 
       it("says it when ssh, starting a master, kept only its own last line", async () => {
