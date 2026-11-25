@@ -204,6 +204,53 @@ describe("telling a relayed assistant which tier an action needs (#16764)", () =
     expect(body.error?.code).toBe("TIER_NOT_PERMITTED");
     expect(body.unavailable?.minimumTier).toBe("full");
   });
+
+  // A call draws the line where the lookup does (#18163).
+  it("tells the global Assistant's core relay a call it never sends isn't there", async () => {
+    const recordDenial = vi.fn(() => ({ tripped: false }));
+    const notifyTierMismatch = vi.fn(() => true);
+    const relay = await relayed("core", { relay: GLOBAL_RELAY, recordDenial, notifyTierMismatch });
+
+    const called = await relay.client.callTool({
+      name: "agentSessionHistory.resume",
+      arguments: {},
+      _meta: { [RELAY_CALL_ID_META_KEY]: "call-miss" },
+    });
+
+    expect(errorCode(called as { content: unknown })).toBe("NOT_FOUND");
+    expect(recordDenial).not.toHaveBeenCalled();
+    expect(notifyTierMismatch).not.toHaveBeenCalled();
+    expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
+    // One record, a lookup miss rather than a refusal, still naming the Shell's call.
+    expect(relay.deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(relay.deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "agentSessionHistory.resume",
+        relayCallId: "call-miss",
+        outcome: {
+          kind: "result",
+          value: expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({ code: "NOT_FOUND" }),
+          }),
+        },
+      })
+    );
+  });
+
+  it("refuses the same call to a project assistant's core relay as a tier gap", async () => {
+    const recordDenial = vi.fn(() => ({ tripped: false }));
+    const relay = await relayed("core", { recordDenial });
+
+    const called = await relay.client.callTool({
+      name: "agentSessionHistory.resume",
+      arguments: {},
+    });
+
+    expect(errorCode(called as { content: unknown })).toBe("TIER_NOT_PERMITTED");
+    expect(recordDenial).toHaveBeenCalledWith("relay-session", "tierMismatch");
+    expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("waiting on a relayed close (#15728)", () => {
@@ -311,8 +358,9 @@ describe("a relayed session (#13493)", () => {
     const relay = await relayed("full");
     const result = await relay.client.callTool({ name: "host.switch", arguments: {} });
 
+    // No tier gives a relay one, so it isn't there for it (#18163).
     expect(result.isError).toBe(true);
-    expect(errorCode(result as { content: unknown })).toBe("TIER_NOT_PERMITTED");
+    expect(errorCode(result as { content: unknown })).toBe("NOT_FOUND");
     expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
   });
 
@@ -1146,7 +1194,7 @@ describe("plugin actions for this machine's global Assistant", () => {
     expect(listed).not.toContain(REACH);
     expect(searched).not.toContain(REACH);
     expect(called.isError).toBe(true);
-    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(errorCode(called)).toBe("NOT_FOUND");
     expect(session.dispatchedReach()).toBe(0);
   });
 
@@ -1160,7 +1208,7 @@ describe("plugin actions for this machine's global Assistant", () => {
     expect(listed).not.toContain(REACH);
     expect(searched).not.toContain(REACH);
     expect(called.isError).toBe(true);
-    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(errorCode(called)).toBe("NOT_FOUND");
     expect(session.dispatchedReach()).toBe(1);
   });
 });
