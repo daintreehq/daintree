@@ -42,8 +42,8 @@ function SignInTerminal({
     if (!acknowledge) return undefined;
     let disposed = false;
     let sent = false;
-    // Main takes it only while this view is on screen; a hidden or minimized
-    // window says so again once it is shown.
+    // Main takes it only while this view is on screen showing the assistant;
+    // a hidden window or cached view says so again once it is shown.
     const attempt = () => {
       if (disposed || sent || !live.current || document.visibilityState !== "visible") return;
       sent = true;
@@ -59,12 +59,18 @@ function SignInTerminal({
     tryAcknowledge.current = attempt;
     document.addEventListener("visibilitychange", attempt);
     window.addEventListener("focus", attempt);
+    // A cached project view made active again hears it from Main, not from visibility.
+    const app = window.electron?.app;
+    const offRevealed = app?.onViewRevealed?.(attempt);
+    const offWarm = app?.onViewWarmActivated?.(attempt);
     attempt();
     return () => {
       disposed = true;
       tryAcknowledge.current = () => {};
       document.removeEventListener("visibilitychange", attempt);
       window.removeEventListener("focus", attempt);
+      offRevealed?.();
+      offWarm?.();
     };
   }, [acknowledge, consumer]);
 

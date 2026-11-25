@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import { signInDialogOpen } from "./signInDialogHold";
 
@@ -11,6 +12,8 @@ const HostSignInOfferDialog = lazy(() => import("./HostSignInOfferDialog"));
 function letGo(consumer: string): void {
   void canopyHostClient.releaseSignIn(consumer).catch(() => {});
 }
+
+const NO_FALLBACK = () => null;
 
 /**
  * Opens an agent CLI sign-in Main started on a host for the assistant this
@@ -48,16 +51,26 @@ export function HostSignInOffers() {
   }, []);
 
   if (offer === null) return null;
+  const close = () => {
+    showing.current = null;
+    setOffer(null);
+  };
   return (
-    <Suspense fallback={null}>
-      <HostSignInOfferDialog
-        key={offer.consumer}
-        offer={offer}
-        onClose={() => {
-          showing.current = null;
-          setOffer(null);
-        }}
-      />
-    </Suspense>
+    // A dialog that couldn't load (a chunk gone after a rebuild) ends its sign-in
+    // rather than the app, and leaves room for the next one.
+    <ErrorBoundary
+      key={offer.consumer}
+      variant="component"
+      componentName="HostSignInOffers"
+      fallback={NO_FALLBACK}
+      onError={() => {
+        letGo(offer.consumer);
+        close();
+      }}
+    >
+      <Suspense fallback={null}>
+        <HostSignInOfferDialog offer={offer} onClose={close} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }

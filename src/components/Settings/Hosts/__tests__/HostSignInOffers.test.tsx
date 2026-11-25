@@ -5,6 +5,7 @@ import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 
 const releaseSignIn = vi.hoisted(() => vi.fn(async (_consumer: string) => undefined));
 vi.mock("@/clients/canopyHostClient", () => ({ canopyHostClient: { releaseSignIn } }));
+const dialogFails = vi.hoisted(() => ({ value: false }));
 // The dialog itself is covered on its own; what it is handed is what matters here.
 vi.mock("../HostSignInOfferDialog", () => ({
   default: ({
@@ -13,18 +14,21 @@ vi.mock("../HostSignInOfferDialog", () => ({
   }: {
     offer: { hostId: string; hostName: string; agentId: string; consumer: string };
     onClose: () => void;
-  }) => (
-    <div
-      data-testid="offer-dialog"
-      data-consumer={offer.consumer}
-      data-host={`${offer.hostId}/${offer.hostName}`}
-      data-agent={offer.agentId}
-    >
-      <button type="button" onClick={onClose}>
-        Close
-      </button>
-    </div>
-  ),
+  }) => {
+    if (dialogFails.value) throw new Error("chunk gone");
+    return (
+      <div
+        data-testid="offer-dialog"
+        data-consumer={offer.consumer}
+        data-host={`${offer.hostId}/${offer.hostName}`}
+        data-agent={offer.agentId}
+      >
+        <button type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    );
+  },
 }));
 
 import { HostSignInOffers } from "../HostSignInOffers";
@@ -54,6 +58,7 @@ async function push(event: CanopyHostEvent) {
 
 describe("HostSignInOffers (#18197)", () => {
   beforeEach(() => {
+    dialogFails.value = false;
     releaseSignIn.mockClear();
     subscribed = 0;
     Object.defineProperty(window, "electron", {
@@ -114,5 +119,21 @@ describe("HostSignInOffers (#18197)", () => {
     expect(screen.queryByTestId("offer-dialog")).toBeNull();
     await push(offer("third"));
     expect((await screen.findByTestId("offer-dialog")).getAttribute("data-consumer")).toBe("third");
+  });
+
+  it("ends the sign-in, not the app, when its dialog can't load, and takes the next offer", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<HostSignInOffers />);
+    dialogFails.value = true;
+    await push(offer("broken"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByTestId("offer-dialog")).toBeNull();
+    expect(releaseSignIn.mock.calls).toEqual([["broken"]]);
+
+    dialogFails.value = false;
+    await push(offer("next"));
+    expect((await screen.findByTestId("offer-dialog")).getAttribute("data-consumer")).toBe("next");
   });
 });

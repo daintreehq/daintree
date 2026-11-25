@@ -146,6 +146,39 @@ describe("HostAgentSignInDialog on a sign-in an assistant started (#18197)", () 
     expect(client.signInShown).toHaveBeenCalledTimes(2);
   });
 
+  it("says so again when Main makes this cached view active again, and stops hearing on close", async () => {
+    const revealed = new Set<() => void>();
+    const warm = new Set<() => void>();
+    const listen = (set: Set<() => void>) => (callback: () => void) => {
+      set.add(callback);
+      return () => set.delete(callback);
+    };
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: { app: { onViewRevealed: listen(revealed), onViewWarmActivated: listen(warm) } },
+    });
+    client.signInShown.mockResolvedValueOnce("not_shown");
+    client.signInShown.mockResolvedValueOnce("not_shown");
+    const { unmount } = render(dialog());
+    await settle();
+    fireEvent.click(screen.getByTestId("pane-live"));
+    await settle();
+    expect(client.signInShown).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      for (const callback of warm) callback();
+      await Promise.resolve();
+    });
+    expect(client.signInShown).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      for (const callback of revealed) callback();
+      await Promise.resolve();
+    });
+    expect(client.signInShown).toHaveBeenCalledTimes(3);
+    unmount();
+    expect(revealed.size + warm.size).toBe(0);
+    Object.defineProperty(window, "electron", { configurable: true, value: undefined });
+  });
+
   it("waits while this view is hidden, and while its stream isn't live", async () => {
     render(dialog());
     await settle();
