@@ -8,7 +8,12 @@ import {
   type CommandResult,
   type CommandRunner,
 } from "../commandRunner.js";
-import { createSshCommandChannel, streamToFileScript } from "../remoteShell.js";
+import {
+  createSshCommandChannel,
+  execAsLogin,
+  loginShellArgs,
+  streamToFileScript,
+} from "../remoteShell.js";
 import { shellQuote } from "../sshTransport.js";
 
 const result = (code: number, stderr = ""): CommandResult => ({
@@ -120,5 +125,51 @@ describe("the ssh command channel", () => {
     const channel = createSshCommandChannel({ target: "bigbox", controlPath: "/cm", run });
     await channel.sendFile("/l/a", "/r/a");
     expect(calls.map((c) => c.command)).toEqual(["scp"]);
+  });
+});
+
+describe("a command as another login on a cloud machine", () => {
+  it("names the login on the route's alias and shares or leaves no master", () => {
+    const args = loginShellArgs("root", "dtc-abc", "id -u");
+    expect(args.slice(-3)).toEqual(["--", "root@dtc-abc", `sh -c ${shellQuote("id -u")}`]);
+    expect(args).toContain("ControlMaster=no");
+    expect(args).toContain("ControlPath=none");
+    expect(args).toContain("BatchMode=yes");
+    expect(args).not.toContain("ControlMaster=auto");
+    expect(() => loginShellArgs("-oProxyCommand=x", "dtc-abc", "true")).toThrow();
+    expect(() => loginShellArgs("root", "dtc-abc", "a\nb")).toThrow();
+  });
+
+  it("runs through the route's own ssh wrapper, or answers as ssh would when it can't be reached", async () => {
+    const seen: Array<[string, readonly string[], CommandOptions | undefined]> = [];
+    const run: CommandRunner = async (command, args, options) => {
+      seen.push([command, args, options]);
+      return result(0);
+    };
+    await execAsLogin(
+      {
+        resolve: async () => ({ target: "dtc-abc", sshPath: "/app/machines/abc/ssh" }),
+        login: "root",
+        run,
+      },
+      "true",
+      { timeoutMs: 1_000 }
+    );
+    expect(seen[0]![0]).toBe("/app/machines/abc/ssh");
+    expect(seen[0]![1]).toContain("root@dtc-abc");
+    expect(seen[0]![2]).toMatchObject({ timeoutMs: 1_000, env: { SSH_ASKPASS_REQUIRE: "never" } });
+
+    const refused = await execAsLogin(
+      {
+        resolve: async () => {
+          throw Object.assign(new Error("stopped"), { detail: "The machine is stopped." });
+        },
+        login: "root",
+        run,
+      },
+      "true"
+    );
+    expect(refused).toMatchObject({ code: 255, stderr: "The machine is stopped." });
+    expect(seen).toHaveLength(1);
   });
 });
