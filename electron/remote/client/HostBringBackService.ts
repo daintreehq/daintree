@@ -77,20 +77,19 @@ const REFUSALS: Record<HostStartRefusal, string | null> = {
   busy: "Daintree is being installed there, or the host changed, from this machine.",
 };
 
-function clip(text: string | null): string | null {
+function clip(text: string | null, max = HOST_BRING_BACK_OBSERVED_MAX): string | null {
   if (text === null) return null;
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
-  return trimmed.length > HOST_BRING_BACK_OBSERVED_MAX
-    ? `${trimmed.slice(0, HOST_BRING_BACK_OBSERVED_MAX - 1)}…`
-    : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
-/** One observation and then another, as sentences. */
-function followedBy(first: string, then: string | null): string {
-  const lead = first.trim();
-  if (then === null || then.trim() === lead) return lead;
-  return `${/[.!?]$/.test(lead) ? lead : `${lead}.`} ${then.trim()}`;
+/** One observation and then another, as sentences; the first takes half the room at most. */
+function followedBy(first: string, then: string | null): string | null {
+  const lead = clip(first, Math.floor(HOST_BRING_BACK_OBSERVED_MAX / 2));
+  const after = clip(then);
+  if (lead === null || after === null || after === lead) return lead ?? after;
+  return `${/[.!?…]$/.test(lead) ? lead : `${lead}.`} ${after}`;
 }
 
 function linkUp(state: HostConnectionState): boolean {
@@ -191,6 +190,8 @@ export class HostBringBackService {
     let dialing = false;
     let settled = false;
     let lastStatus = deps.linkState(hostId).status;
+    /** When the host was first seen saying it was restarting, before this attempt's own dial. */
+    let restartSeenAt: number | null = restarting(deps.linkState(hostId)) ? startedAt : null;
     const abort = new AbortController();
     const cleanups: Array<() => void> = [];
 
@@ -261,6 +262,8 @@ export class HostBringBackService {
         if (settled) return;
         const previous = lastStatus;
         lastStatus = state.status;
+        // Said during a wake that takes a while: its settle period runs from when it was said.
+        if (!dialStarted && restartSeenAt === null && restarting(state)) restartSeenAt = now();
         // It said it was shutting down after this attempt began dialling (an
         // update starting just now): no start until it has had its while.
         if (dialStarted && !restartWaited && restarting(state)) {
@@ -383,7 +386,7 @@ export class HostBringBackService {
       // itself, as an update does, before anything starts it.
       const afterSettle = (): void => {
         if (settled) return;
-        const wait = settleMs - Math.max(0, now() - startedAt);
+        const wait = settleMs - Math.max(0, now() - (restartSeenAt ?? now()));
         if (!restarting(deps.linkState(hostId))) {
           startDial();
           return;

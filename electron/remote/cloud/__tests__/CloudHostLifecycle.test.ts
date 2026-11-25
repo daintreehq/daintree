@@ -4869,23 +4869,6 @@ describe("CloudHostLifecycle wake for an explicit Bring back (#18183)", () => {
     await expect(
       env.lifecycle.wakeIfAsleep("build", env.bindingId, gaveUp.signal, () => {})
     ).resolves.toBe(false);
-    // A worktree's cleanup due to stop it.
-    env.store.updateBinding(env.bindingId, (current) => ({
-      ...current,
-      worktreeCleanup: {
-        attemptId: "cleanup-1",
-        mutationId: null,
-        choice: "stop",
-        resourceId: "bx_23456789",
-        worktree: { hostId: null, projectId: "project-1", worktreeId: "/repo" },
-        phase: "due",
-        error: null,
-        requestedAt: 0,
-      },
-    }));
-    await expect(
-      env.lifecycle.wakeIfAsleep("build", env.bindingId, signal, () => {})
-    ).resolves.toBe(false);
     expect(env.provider.start).not.toHaveBeenCalled();
   });
 
@@ -4899,6 +4882,36 @@ describe("CloudHostLifecycle wake for an explicit Bring back (#18183)", () => {
     ).resolves.toBe(false);
     expect(env.provider.start).not.toHaveBeenCalled();
     expect(env.lifecycle.statuses()[0]!.operation).toBeNull();
+  });
+
+  it("sends nothing when a person's Start and then their Stop come while the wake reads", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      () => {}
+    );
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const starting = env.lifecycle.startMachine("build");
+    const stopping = env.lifecycle.stopMachine("build");
+    answer(resource(ASLEEP));
+    await expect(woke).resolves.toBe(false);
+    await starting.catch(() => {});
+    await stopping;
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.intent).toBe("stop");
   });
 
   it("hears the start sent only once the provider took it", async () => {
@@ -5304,6 +5317,25 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     supported.mockRestore();
     lifecycle.providersChanged();
     await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
+  });
+
+  it("never lets an explicit Bring back wake a machine whose worktree's cleanup is due (#18183)", async () => {
+    const { lifecycle, provider, store, state, accounts } = await marked();
+    state.machine = resource({ machine: "stopped", rawState: "sleeping", asleep: true });
+    await lifecycle.refresh("build");
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    // Its provider is away as the cleanup comes due, so it waits, due, to run.
+    const unavailable = vi
+      .spyOn(accounts, "providerUnavailable")
+      .mockReturnValue("Its plugin is disabled");
+    await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    unavailable.mockRestore();
+    expect(cleanupOf(store)).toMatchObject({ phase: "due" });
+    const bindingId = store.bindings()[0]!.id;
+    await expect(
+      lifecycle.wakeIfAsleep("build", bindingId, new AbortController().signal, () => {})
+    ).resolves.toBe(false);
+    expect(provider.start).not.toHaveBeenCalled();
   });
 
   it("ends a start under way before its stop, so the machine doesn't come back up", async () => {

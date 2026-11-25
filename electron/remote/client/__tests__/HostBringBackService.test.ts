@@ -609,6 +609,46 @@ describe("HostBringBackService", () => {
     });
   });
 
+  it("gives a host that says it is restarting during a long cloud wake its while from when it said so", async () => {
+    let running!: (started: boolean) => void;
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return new Promise<boolean>((resolve) => {
+          running = resolve;
+        });
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    await vi.advanceTimersByTimeAsync(40_000);
+    w.setLink(unreachable(null, { restarting: true }));
+    running(true);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+    expect(w.calls).not.toContain("redial");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(w.calls).toContain("redial");
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "woken", wake: "sent" });
+  });
+
+  it("keeps what the dial saw when a cloud machine's start failed at length", async () => {
+    const long = `The provider refused the start: ${"x".repeat(600)}`;
+    const blocker = "The machine's host key changed. Review it in the host's details.";
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: () => Promise.reject(new Error(long)),
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.setLink(unreachable(blocker, { stoppedRetrying: true }));
+    const settled = await answer;
+    expect(settled.observed!.endsWith(blocker)).toBe(true);
+    expect(settled.observed!.startsWith("The provider refused the start:")).toBe(true);
+    expect(settled.observed!.length).toBeLessThanOrEqual(500);
+  });
+
   it("dials nothing once a cloud host's attempt is cancelled while its machine starts", async () => {
     let running!: (started: boolean) => void;
     const w = world({
