@@ -358,7 +358,7 @@ describe("CloudProviderRegistry", () => {
         delete provider[missing];
         refuses(provider, new RegExp(`stops and starts machines but has no ${missing}$`));
         const notCallable = fakeProvider("akash", () => resource());
-        (notCallable as Record<string, unknown>)[missing] = {};
+        (notCallable as unknown as Record<string, unknown>)[missing] = {};
         refuses(notCallable, new RegExp(`has no ${missing}$`));
       }
       const neither = fakeProvider("akash", () => resource());
@@ -385,7 +385,7 @@ describe("CloudProviderRegistry", () => {
       };
       for (const [member, value] of Object.entries(members)) {
         const provider = deleteOnly();
-        (provider as Record<string, unknown>)[member] = value;
+        (provider as unknown as Record<string, unknown>)[member] = value;
         refuses(provider, new RegExp(`has no stop but has ${member}$`));
       }
     });
@@ -425,7 +425,7 @@ describe("CloudProviderRegistry", () => {
       (undeclared as { offerCreate?: OfferCreate }).offerCreate = offerCreate();
       refuses(undeclared, /has an offer create but declares no createMode/);
       const brokenPrepare = fakeProvider("akash", () => resource());
-      (brokenPrepare as Record<string, unknown>).prepareCreate = "soon";
+      (brokenPrepare as unknown as Record<string, unknown>).prepareCreate = "soon";
       refuses(brokenPrepare, /prepareCreate that can't be called/);
       const prepared = fakeProvider("akash", () => resource());
       prepared.prepareCreate = vi.fn();
@@ -440,7 +440,7 @@ describe("CloudProviderRegistry", () => {
       const missingGroup = declaring("akash", { createMode: "offers" });
       refuses(missingGroup, /creates through offers but has no offerCreate/);
       const nullGroup = declaring("akash", { createMode: "offers" });
-      (nullGroup as Record<string, unknown>).offerCreate = null;
+      (nullGroup as unknown as Record<string, unknown>).offerCreate = null;
       refuses(nullGroup, /creates through offers but has no offerCreate/);
       for (const method of Object.keys(offerCreate()) as (keyof OfferCreate)[]) {
         for (const replacement of [undefined, "later"]) {
