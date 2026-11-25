@@ -74,6 +74,7 @@ export const config: AgentConfig = {
   // in a root-owned folder. It pipes into a shell, so it stays copy-only. On
   // macOS and Windows the package manager (Homebrew, WinGet), which runs without
   // a shell, comes last.
+  signInArgs: ["auth", "login"],
   install: {
     docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {

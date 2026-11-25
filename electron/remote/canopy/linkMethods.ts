@@ -31,6 +31,12 @@ export const CanopyLinkMethod = {
    * says as unread rather than as no work.
    */
   ASSISTANT_WORK: "canopy.assistant-work",
+  /**
+   * Shell → Host: one step of an agent CLI's sign-in the person started on
+   * this host (#18196): start it, watch it, type into it, size it. Its
+   * terminal ends with its viewer. A host from before this answers UNSUPPORTED.
+   */
+  SIGN_IN: "canopy.sign-in",
 } as const;
 
 /**
@@ -95,3 +101,29 @@ export const CanopyAssistantWorkAnswerSchema = z.object({
   reading: AssistantWorkHostReadingSchema,
 });
 export type CanopyAssistantWorkAnswer = z.infer<typeof CanopyAssistantWorkAnswerSchema>;
+
+/** The most a sign-in's typing carries in one call, as a Canopy pane's does. */
+export const MAX_SIGN_IN_INPUT_LENGTH = 64_000;
+
+const watchId = z.number().int().safe();
+const gridSize = z.number().int().min(1).max(1_000);
+
+export const CanopySignInPayloadSchema = z.discriminatedUnion("op", [
+  z.object({ viewerId, op: z.literal("start"), agentId: z.string().min(1).max(64) }),
+  z.object({ viewerId, op: z.literal("watch") }),
+  z.object({
+    viewerId,
+    op: z.literal("input"),
+    watchId,
+    data: z.string().min(1).max(MAX_SIGN_IN_INPUT_LENGTH),
+  }),
+  z.object({ viewerId, op: z.literal("resize"), watchId, cols: gridSize, rows: gridSize }),
+  z.object({ viewerId, op: z.literal("unwatch"), watchId }),
+]);
+export type CanopySignInPayload = z.infer<typeof CanopySignInPayloadSchema>;
+
+/** A host's answer to a sign-in's start: the terminal it runs in, by this incarnation. */
+export const CanopySignInStartAnswerSchema = z.object({
+  terminalId: z.string().min(1).max(128),
+  spawnedAt: z.number(),
+});

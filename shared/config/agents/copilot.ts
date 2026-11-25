@@ -87,6 +87,7 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @github/copilot@latest",
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://github.com/github/copilot-cli#readme",
     byOs: {

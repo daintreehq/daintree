@@ -38,6 +38,7 @@ export const config: AgentConfig = {
   packages: {
     brew: "block-goose-cli",
   },
+  signInArgs: ["configure"],
   install: {
     docsUrl: "https://block.github.io/goose/docs/getting-started/installation",
     byOs: {

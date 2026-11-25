@@ -28,6 +28,7 @@ export const config: AgentConfig = {
     curl: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
     pypi: "uv tool upgrade mistral-vibe",
   },
+  signInArgs: ["--setup"],
   install: {
     docsUrl: "https://github.com/mistralai/mistral-vibe#readme",
     byOs: {

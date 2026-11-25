@@ -41,7 +41,10 @@ import type { ResourceProfile } from "../../../shared/types/resourceProfile.js";
 import { deriveAgentObservationLevel } from "../../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../../window/powerPolicy.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
-import { isDecisionsRelayTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
+import {
+  isDecisionsRelayTerminalId,
+  isHostSignInTerminalId,
+} from "../../../shared/config/terminalScreenPersistence.js";
 
 /**
  * Stamp main's current PATH onto a Windows spawn message.
@@ -329,12 +332,14 @@ export class ShardRecoveryCoordinator {
    * again under the same Worker name, updating that Worker or giving it a new
    * claim secret. Nor a relay update (#16201), which nobody asked to run, nor a
    * removal (#16202), which would ask to delete the relay
-   * again. Dropped before any replay, and reported lost so their panes and
+   * again, nor an agent CLI sign-in (#18196) whose dialog went with the crash.
+   * Dropped before any replay, and reported lost so their panes and
    * inventory let them go.
    */
   private dropNeverReplayedSpawns(shard: PtyShard): void {
     for (const id of [...this.deps.pendingSpawns.keys()]) {
-      const neverReplayed = isHostThrowawayTerminalId(id) || isDecisionsRelayTerminalId(id);
+      const neverReplayed =
+        isHostThrowawayTerminalId(id) || isDecisionsRelayTerminalId(id) || isHostSignInTerminalId(id);
       if (!neverReplayed || this.deps.ownerKey(id) !== shard.key) continue;
       this.deps.pendingSpawns.delete(id);
       this.deps.displacedSpawns.delete(id);

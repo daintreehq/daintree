@@ -49,6 +49,18 @@ export function isDecisionsRelayTerminalId(terminalId: string): boolean {
 }
 
 /**
+ * Every agent CLI sign-in a Shell starts on a host has a terminal id starting
+ * with this (#18196). The person pastes codes and keys at its prompts, so its
+ * screen never reaches a session snapshot, and its command runs once: nothing
+ * that replays a terminal runs a sign-in nobody asked for again.
+ */
+export const HOST_SIGN_IN_TERMINAL_PREFIX = "daintree-sign-in-";
+
+export function isHostSignInTerminalId(terminalId: string): boolean {
+  return terminalId.startsWith(HOST_SIGN_IN_TERMINAL_PREFIX);
+}
+
+/**
  * Whether a terminal's screen stays in memory only: never written to a session
  * snapshot, so a restart brings back none of it. The pty-host knows a terminal
  * only by its id, so the policy is carried by the id itself. A removal's screen
@@ -56,5 +68,9 @@ export function isDecisionsRelayTerminalId(terminalId: string): boolean {
  * Daintree didn't act on.
  */
 export function isScreenNeverSaved(terminalId: string): boolean {
-  return isHostThrowawayTerminalId(terminalId) || isDecisionsRelayTerminalId(terminalId);
+  return (
+    isHostThrowawayTerminalId(terminalId) ||
+    isDecisionsRelayTerminalId(terminalId) ||
+    isHostSignInTerminalId(terminalId)
+  );
 }

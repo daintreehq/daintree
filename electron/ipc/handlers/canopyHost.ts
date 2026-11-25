@@ -7,6 +7,8 @@ import type {
   CanopyHostChannel,
   CanopyHostResult,
   HostAssistantDirectory,
+  HostSignInStep,
+  HostSignInTerminal,
 } from "../../../shared/types/ipc/canopyHost.js";
 import type {
   AssistantOpenDestination,
@@ -100,6 +102,41 @@ export const canopyHostNamespace = defineIpcNamespace({
           channel,
           args
         ) as Promise<AssistantViewerResult>,
+      { withContext: true }
+    ),
+    /**
+     * Start an agent CLI's own sign-in in a terminal on a connected host
+     * (#18196), for the view's `consumer`; it ends when the consumer lets go.
+     */
+    startSignIn: op(
+      CANOPY_HOST_METHOD_CHANNELS.startSignIn,
+      async (
+        ctx,
+        consumer: string,
+        hostId: string,
+        agentId: string
+      ): Promise<HostSignInTerminal> =>
+        requireRemoteService("canopyHosts").startSignIn(
+          ctx.webContentsId,
+          consumer,
+          hostId,
+          agentId
+        ),
+      { withContext: true }
+    ),
+    /** Watch, type into, size or let go of the stream of the consumer's sign-in. */
+    signInStep: op(
+      CANOPY_HOST_METHOD_CHANNELS.signInStep,
+      async (ctx, consumer: string, step: HostSignInStep): Promise<CanopyTerminalView | null> =>
+        requireRemoteService("canopyHosts").signInStep(ctx.webContentsId, consumer, step),
+      { withContext: true }
+    ),
+    /** The consumer closed its sign-in: its terminal on the host ends. */
+    releaseSignIn: op(
+      CANOPY_HOST_METHOD_CHANNELS.releaseSignIn,
+      async (ctx, consumer: string): Promise<void> => {
+        getRemoteService("canopyHosts")?.releaseSignIn(ctx.webContentsId, consumer);
+      },
       { withContext: true }
     ),
     /** The consumer stopped showing its assistant. */

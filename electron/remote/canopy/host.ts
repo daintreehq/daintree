@@ -11,8 +11,10 @@ import {
   CanopyInvokePayloadSchema,
   CanopyLinkMethod,
   CanopyReleasePayloadSchema,
+  CanopySignInPayloadSchema,
   type CanopyAssistantsAnswer,
 } from "./linkMethods.js";
+import type { HostSignIns } from "./hostSignIn.js";
 import type { CanopyViewerParams, CanopyViewers } from "./viewer.js";
 import {
   agentDirectoryForLanes,
@@ -57,6 +59,8 @@ export interface CanopyHostOptions {
   }) => Promise<AgentDirectory>;
   /** Which of this host's workers an assistant made or holds; absent, none is read. */
   readAssistantWork?: () => Promise<AssistantWorkHostReading>;
+  /** Agent CLI sign-ins Shells start here (#18196); absent, a Shell's is refused as unknown. */
+  signIns?: HostSignIns;
 }
 
 /**
@@ -222,6 +226,31 @@ export function installCanopyHostWith(
         };
       }
     );
+    const signIns = options.signIns;
+    if (signIns) {
+      // A person's sign-in: only a start opens its viewer, and every later
+      // step needs the viewer that started it.
+      session.registerCallHandler(
+        CanopyLinkMethod.SIGN_IN,
+        CanopySignInPayloadSchema,
+        async (payload) => {
+          const viewer = viewers.signIn(
+            prefix + payload.viewerId,
+            paramsFor(payload.viewerId, true),
+            payload.op === "start"
+          );
+          if (!viewer) {
+            if (payload.op === "unwatch") return null;
+            throw new AppError({
+              code: "NOT_FOUND",
+              message: "No sign-in was started by this viewer",
+              userMessage: "That sign-in isn't running any more.",
+            });
+          }
+          return signIns.handle(viewer, payload);
+        }
+      );
+    }
     session.registerCallHandler(
       CanopyLinkMethod.RELEASE,
       CanopyReleasePayloadSchema,

@@ -44,6 +44,7 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @openai/codex@latest",
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://github.com/openai/codex",
     byOs: {

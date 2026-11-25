@@ -37,6 +37,7 @@ export const config: AgentConfig = {
   update: {
     curl: "curl -fsSL https://cli.kiro.dev/install | bash",
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://kiro.dev/cli/",
     byOs: {

@@ -943,6 +943,13 @@ export interface AgentConfig {
   externalLinks?: AgentExternalLink[];
   help?: AgentHelpConfig;
   install?: AgentInstallHelp;
+  /**
+   * The CLI's own sign-in command, as arguments after {@link command}, run in
+   * a terminal on a host when the person asks to sign it in there (#18196).
+   * Unset, the CLI opens as it is, and signs in from its own first-run screen
+   * or command. Daintree only starts it: it never reads what the CLI saves.
+   */
+  signInArgs?: readonly string[];
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;
