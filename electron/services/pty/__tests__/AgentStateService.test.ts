@@ -599,7 +599,7 @@ describe("AgentStateService", () => {
       });
     });
 
-    it("names a trust prompt a re-read found where another selector was, keeping the settle", () => {
+    it("names a trust prompt a re-read found where another selector was", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
         agentState: "waiting",
@@ -616,60 +616,21 @@ describe("AgentStateService", () => {
       });
 
       expect(terminal.approvalKind).toBe("trust");
-      expect(terminal.lastStateChange).toBe(1_000);
+      expect(terminal.lastStateChange).toBe(5_000);
       expect(changes).toEqual([
         expect.objectContaining({
           previousState: "waiting",
           waitingReason: "approval",
           approvalKind: "trust",
-          timestamp: 1_000,
+          timestamp: 5_000,
         }),
       ]);
-      // A read no newer than that settle is refused, kind and all.
-      expect(service.updateWaitingReason(terminal, "approval", 1_000)).toBe(false);
+      // A read no newer than that one is refused, kind and all.
+      expect(service.updateWaitingReason(terminal, "approval", 5_000)).toBe(false);
       expect(terminal.approvalKind).toBe("trust");
     });
 
-    it("takes a selector settled in the same millisecond as the title report that dropped it", () => {
-      const service = new AgentStateService();
-      const terminal = createTerminal({
-        agentState: "waiting",
-        // As late as the settle, or later by the record's own clock.
-        lastStateChange: Date.now() + 60_000,
-        detectedAgentId: "claude",
-      } as Partial<TerminalInfo>);
-
-      service.handleActivityState(terminal, "idle", {
-        trigger: "timeout",
-        waitingReason: "approval",
-      });
-
-      expect(terminal.waitingReason).toBe("approval");
-    });
-
-    it("never moves the settle for a kind dropped over a draft, so the draft still reads as typed after it", () => {
-      const service = new AgentStateService();
-      const terminal = createTerminal({
-        agentState: "waiting",
-        waitingReason: "approval",
-        approvalKind: "trust",
-        lastStateChange: 1_000,
-        lastTypedInputAt: 2_000,
-        detectedAgentId: "claude",
-      } as Partial<TerminalInfo>);
-
-      service.handleActivityState(terminal, "idle", {
-        trigger: "pattern",
-        waitingReason: "approval",
-        rereadAt: 5_000,
-      });
-
-      expect(terminal.approvalKind).toBeUndefined();
-      expect(terminal.lastStateChange).toBe(1_000);
-      expect(terminal.lastTypedInputAt! > terminal.lastStateChange!).toBe(true);
-    });
-
-    it("publishes a selector settled on a record a title report already put waiting", () => {
+    it("publishes a selector settled on a record a title report already put waiting, dated by its read", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
         agentState: "waiting",
@@ -678,22 +639,25 @@ describe("AgentStateService", () => {
         hasPty: true,
       } as Partial<TerminalInfo>);
       const changes = capture();
+      const settle = (readAt: number) =>
+        service.handleActivityState(terminal, "idle", {
+          trigger: "timeout",
+          waitingReason: "approval",
+          approvalKind: "trust",
+          readAt,
+        });
 
-      service.handleActivityState(terminal, "idle", {
-        trigger: "timeout",
-        waitingReason: "approval",
-        approvalKind: "trust",
-      });
+      settle(3_000);
 
       expect(terminal.waitingReason).toBe("approval");
       expect(terminal.approvalKind).toBe("trust");
-      // The settle stays where the title put it: typing since then still counts.
-      expect(terminal.lastStateChange).toBe(1_000);
+      // Typing after the read, not after the report's arrival, still holds a send.
+      expect(terminal.lastStateChange).toBe(3_000);
       expect(changes).toEqual([
         expect.objectContaining({
           waitingReason: "approval",
           approvalKind: "trust",
-          timestamp: 1_000,
+          timestamp: 3_000,
         }),
       ]);
       expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
@@ -701,12 +665,35 @@ describe("AgentStateService", () => {
         reason: "approval",
       });
       // The same settle again is no news.
-      service.handleActivityState(terminal, "idle", {
-        trigger: "timeout",
-        waitingReason: "approval",
-        approvalKind: "trust",
-      });
+      settle(3_500);
       expect(changes).toHaveLength(1);
+    });
+
+    it("dates a dropped selector to a read in the same millisecond, never to one before a newer wait", () => {
+      const service = new AgentStateService();
+      const record = (lastStateChange: number) =>
+        createTerminal({
+          agentState: "waiting",
+          lastStateChange,
+          detectedAgentId: "claude",
+        } as Partial<TerminalInfo>);
+      const settle = (terminal: TerminalInfo, readAt: number) =>
+        service.handleActivityState(terminal, "idle", {
+          trigger: "timeout",
+          waitingReason: "approval",
+          approvalKind: "trust",
+          readAt,
+        });
+
+      const tied = record(2_000);
+      settle(tied, 2_000);
+      expect(tied).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+
+      // The pane went working and settled again after this screen was read.
+      const newer = record(2_000);
+      settle(newer, 1_500);
+      expect(newer.waitingReason).toBeUndefined();
+      expect(newer.approvalKind).toBeUndefined();
     });
   });
 

@@ -171,19 +171,7 @@ export function takeHostAgentState(
       panel.agentIncarnation !== undefined &&
       record.agentIncarnation !== panel.agentIncarnation);
   const observedAt = hostObservedAt(panel);
-  // A selector named or unnamed keeps the wait's time (#18170), so a record
-  // tied with the last report that differs only in that is still news.
-  const kindRefined =
-    record.lastStateChange === observedAt &&
-    record.agentState === panel.agentState &&
-    record.waitingReason === panel.waitingReason &&
-    record.approvalKind !== panel.approvalKind;
-  if (
-    !newIncarnation &&
-    !kindRefined &&
-    observedAt !== undefined &&
-    record.lastStateChange <= observedAt
-  ) {
+  if (!newIncarnation && observedAt !== undefined && record.lastStateChange <= observedAt) {
     return;
   }
   // Taken with the state, as the live listener takes it: the session a wait

@@ -530,42 +530,6 @@ describe("resyncHostTerminals", () => {
     );
   });
 
-  it("takes a host record tied with its last report that names the selector differently (#18170)", async () => {
-    panel("t-1", {
-      agentState: "waiting",
-      waitingReason: "approval",
-      lastStateChange: 90,
-      lastAgentObservation: { agentState: "waiting", at: 90 },
-      agentIncarnation: 1,
-    });
-    getForProject.mockResolvedValue([
-      {
-        id: "t-1",
-        cwd: "/",
-        agentState: "waiting",
-        waitingReason: "approval",
-        approvalKind: "trust",
-        lastStateChange: 90,
-        agentIncarnation: 1,
-      },
-    ]);
-
-    await resyncHostTerminals("proj-1", current);
-
-    expect(store.updateAgentState).toHaveBeenCalledWith(
-      "t-1",
-      "waiting",
-      undefined,
-      90,
-      undefined,
-      undefined,
-      "approval",
-      undefined,
-      undefined,
-      "trust"
-    );
-  });
-
   it("takes a host report newer than its last one over this machine's later overlay (#16062)", async () => {
     // The host's clock runs a minute behind this one: the pane's own revert
     // from directing is stamped ahead of anything the host can report.

@@ -235,11 +235,16 @@ export interface ActivityStateMetadata {
    * only ends the hold the opening put on sends.
    */
   workingDialog?: boolean;
+  /**
+   * When an `approval` settle's screen was read (#18170): the time to date it
+   * by when the record was already waiting and the FSM drops it.
+   */
+  readAt?: number;
 }
 
 /** What a settle read off the screen, as its idle report carries it. */
 type SettleReading = Required<Pick<ActivityStateMetadata, "waitingReason">> &
-  Pick<ActivityStateMetadata, "approvalKind" | "promptDrawnAt" | "inputRowEmpty">;
+  Pick<ActivityStateMetadata, "approvalKind" | "readAt" | "promptDrawnAt" | "inputRowEmpty">;
 
 /** More rows than any pane has: a viewport read asks for this many and gets them all. */
 const WHOLE_VIEWPORT_ROWS = 1000;
@@ -1116,6 +1121,7 @@ export class ActivityMonitor {
     this.idlePromptDrawn = promptDrawn === "empty";
     const reading: SettleReading = {
       waitingReason: reason,
+      ...(reason === "approval" ? { readAt: now } : {}),
       ...(approvalKind !== undefined ? { approvalKind } : {}),
     };
     if (promptDrawn === null) return reading;
@@ -1256,24 +1262,14 @@ export class ActivityMonitor {
       // that drew its prompt into a pane read before it had drawn anything.
       if (this.idlePromptDrawn || promptDrawn !== "empty") return;
     } else if (
-      // One selector swapped for another (#18170) admits no send either way.
-      !(reason === "approval" && this.idleWaitingReason === "approval") &&
+      // A trust prompt is a selector by how it is read (#18170), whatever
+      // checks below know its shape; it admits no send.
+      !(reason === "approval" && approvalKind !== undefined) &&
       // A fresh pane draws its input row as high as a dialog it replaced, out of the bottom rows.
       composerRow === undefined &&
       !drawnComposer &&
       !(reason === "approval" && (drawnSelector || endsOnChoiceSelector(read, rows, this.agentId)))
     ) {
-      // The approval it settled on still holds a send, but a trust prompt no
-      // longer drawn is no longer named (#18170): a draft in the input row
-      // that replaced it would otherwise go on reading as one.
-      if (this.idleWaitingReason === "approval" && this.idleApprovalKind !== undefined) {
-        this.idleApprovalKind = undefined;
-        this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
-          trigger: "pattern",
-          waitingReason: "approval",
-          rereadAt: now,
-        });
-      }
       return;
     }
     this.idleWaitingReason = reason;

@@ -445,9 +445,7 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     monitor.onData("selector under the input row");
     show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, " ❯ 1. Allow", "   2. Deny"]));
     vi.advanceTimersByTime(5000);
-    // The approval holds; only the trust prompt it named is gone (#18170).
-    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
-    expect(onStateChange.mock.calls[0]?.[3]).not.toHaveProperty("approvalKind");
+    expect(reasonUpdates(onStateChange)).toEqual([]);
 
     // Boxed, with the ASCII highlight, or lettered.
     for (const selector of [
@@ -458,7 +456,7 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
       show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, ...selector]));
       vi.advanceTimersByTime(5000);
     }
-    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+    expect(reasonUpdates(onStateChange)).toEqual([]);
   });
 
   it("never re-reads a prompt off an input row left above a newer dialog", () => {
@@ -473,9 +471,7 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     show(fresh([RULE, INPUT_ROW, RULE, "", " Pick one:", "   a) keep", "   b) drop"]));
     vi.advanceTimersByTime(5000);
 
-    // The approval holds; only the trust prompt it named is gone (#18170).
-    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
-    expect(onStateChange.mock.calls[0]?.[3]).not.toHaveProperty("approvalKind");
+    expect(reasonUpdates(onStateChange)).toEqual([]);
   });
 });
 
