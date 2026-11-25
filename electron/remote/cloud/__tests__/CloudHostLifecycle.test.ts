@@ -3956,7 +3956,10 @@ describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346
 });
 
 describe("CloudHostLifecycle with a provider whose machines can only be deleted (#18228)", () => {
-  const ONLY_DELETED = { code: "UNSUPPORTED", userMessage: expect.stringMatching(/only be deleted/) };
+  const ONLY_DELETED = {
+    code: "UNSUPPORTED",
+    userMessage: expect.stringMatching(/only be deleted/),
+  };
 
   /** A machine of that provider, imported, with what a refusal must leave alone watched from here. */
   async function imported(initial: Partial<ProviderResource> = {}) {
@@ -4038,7 +4041,10 @@ describe("CloudHostLifecycle with a provider whose machines can only be deleted 
     expect(store.bindings()[0]!.resourceId).toBeNull();
     await lifecycle.startMachine("build");
     expect(provider.create).toHaveBeenCalledTimes(2);
-    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", resourceId: "bx_23456789" });
+    expect(lifecycle.statuses()[0]).toMatchObject({
+      machine: "running",
+      resourceId: "bx_23456789",
+    });
   });
 
   it("deletes a confirmed machine as any other", async () => {
@@ -5757,7 +5763,10 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     hostName: null,
   };
   const WORKTREE = { hostId: null, projectId: MARK.projectId, worktreeId: ROOT };
-  const request = (accountId: string, lifetimeHours: number | null = 2): CloudHostCreateRequest => ({
+  const request = (
+    accountId: string,
+    lifetimeHours: number | null = 2
+  ): CloudHostCreateRequest => ({
     accountId,
     name: "build",
     machineType: "default",
