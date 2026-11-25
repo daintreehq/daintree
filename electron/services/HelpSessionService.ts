@@ -2437,10 +2437,9 @@ export class HelpSessionService {
   /**
    * The PTY host lost a lane's run and replays it (#18177): the replay may run
    * another conversation than the pointer names, so a kept lane isn't marked
-   * until a capture says which.
+   * until a capture says which, during a quit too.
    */
   noteStandingRunUnsettled(terminalId: string): void {
-    if (this.quitHeldTerminals?.has(terminalId)) return;
     const unsettled: Record<string, boolean> = {};
     for (const [slotKey, run] of this.laneRuns) {
       if (run.terminalId !== terminalId || !run.confirmed) continue;

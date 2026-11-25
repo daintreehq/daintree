@@ -387,6 +387,20 @@ export class GlobalAssistantService {
       agentId = pending.agentId;
       this.launchAgentId = agentId;
     }
+    // A restore after a restart reopens its conversation on the agent it ran,
+    // which a hand-off may have made another than a Start chooses (#18177).
+    // Held as chosen, as that run was, so a change of default leaves it be.
+    let restoredElsewhere = false;
+    if (
+      exact !== null &&
+      pending &&
+      pending.agentSessionId === exact &&
+      pending.agentId !== agentId
+    ) {
+      agentId = pending.agentId;
+      this.launchAgentId = agentId;
+      restoredElsewhere = true;
+    }
     const resume =
       pending && pending.agentId === agentId && pending.agentSessionId ? pending : null;
     // Awaited, so a Start right after a Cancel finds the conversation free to take.
@@ -406,7 +420,7 @@ export class GlobalAssistantService {
     // The agent it will run, when no default chose it, is checked here: the CLI
     // may have gone, or be too old for its wiring. The conversation is kept.
     // A hand-off's agent was checked as it was asked for.
-    if (!choice && (pinned !== null || !this.followsDefault)) {
+    if (!choice && (pinned !== null || !this.followsDefault || restoredElsewhere)) {
       const usable = await this.canRun(agentId);
       if (!usable || superseded()) {
         await releaseResume();
@@ -432,7 +446,12 @@ export class GlobalAssistantService {
     }
 
     const terminalId = `terminal-${randomUUID()}`;
-    const run: Run = { sessionId: session.sessionId, terminalId, agentId, chosen: choice !== null };
+    const run: Run = {
+      sessionId: session.sessionId,
+      terminalId,
+      agentId,
+      chosen: choice !== null || restoredElsewhere,
+    };
     this.starting = run;
 
     if (superseded()) {

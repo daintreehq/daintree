@@ -287,24 +287,19 @@ export class PendingHelpHibernationStore {
   /**
    * Keep a lane running across restarts, or stop keeping it (#18177), with
    * whether a run of it is live now. Resolves whether the choice reached disk;
-   * one that didn't is undone here too, so what is held is what a crash would
-   * find. Asked again for a choice already held, a failed write is retried.
+   * one that didn't is still held, and written again by the next write, an
+   * ask for the same choice, or a flush.
    */
   async setKeepRunning(slotKey: string, keep: boolean, running = false): Promise<boolean> {
     const before = this.keepRunning.get(slotKey);
     if (keep ? before?.running === running : before === undefined) {
+      // Saved once the write already carrying it lands.
+      await this.writeChain.catch(() => undefined);
       return this.dirty ? this.write() : true;
     }
-    const applied = keep ? { running } : undefined;
-    if (applied) this.keepRunning.set(slotKey, applied);
+    if (keep) this.keepRunning.set(slotKey, { running });
     else this.keepRunning.delete(slotKey);
-    const saved = await this.write();
-    // Undone only while nothing changed it again meanwhile.
-    if (!saved && this.keepRunning.get(slotKey) === applied) {
-      if (before) this.keepRunning.set(slotKey, before);
-      else this.keepRunning.delete(slotKey);
-    }
-    return saved;
+    return this.write();
   }
 
   /**
@@ -333,8 +328,9 @@ export class PendingHelpHibernationStore {
   }
 
   /** Resolves once every queued write has landed, writing again what failed to. */
-  flush(): Promise<void> {
-    return this.dirty ? this.persist() : this.writeChain.catch(() => undefined);
+  async flush(): Promise<void> {
+    await this.writeChain.catch(() => undefined);
+    if (this.dirty) await this.persist();
   }
 
   /**

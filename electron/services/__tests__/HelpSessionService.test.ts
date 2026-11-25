@@ -4523,13 +4523,22 @@ describe("HelpSessionService", () => {
 
           await service.holdStandingRunsForQuit(new Set(["term-1"]));
           service.noteStandingRunEnded("term-0");
-          service.noteStandingRunUnsettled("term-0");
-          service.noteStandingRunEnded("term-1");
 
           expect(Object.fromEntries(marks)).toEqual({
             [lane]: true,
             [slotKey("proj-1", 1)]: false,
           });
+        });
+
+        it("unmarks a run the PTY host loses during the quit until a capture confirms its conversation", async () => {
+          await launchSlot(0, "term-0", "conv-0");
+          const lanes = service.snapshotLaneTerminals();
+          await service.holdStandingRunsForQuit(new Set());
+
+          service.noteStandingRunUnsettled("term-0");
+          expect(marks.get(lane)).toBe(false);
+          await service.noteQuitCapture(lanes.get("term-0")!, "conv-replayed");
+          expect(marks.get(lane)).toBe(true);
         });
 
         it("holds a run the quit's snapshot didn't see, as one on a shard that didn't answer", async () => {
@@ -4545,6 +4554,7 @@ describe("HelpSessionService", () => {
           await launchSlot(0, "term-0", "parent-conv", { forkedConversation: true });
           const lanes = service.snapshotLaneTerminals();
           await service.holdStandingRunsForQuit(new Set());
+          expect(marks.get(lane)).toBe(false);
 
           await service.noteQuitCapture(lanes.get("term-0")!, "parent-or-fork");
 
@@ -4600,19 +4610,21 @@ describe("HelpSessionService", () => {
           expect(service.isLaneKeptRunning("proj-1", 0)).toBe(false);
         });
 
-        it("marks nothing when turned on over a fork, a replayed run, or one whose agent quit", async () => {
+        it("marks nothing when turned on over a fork, a replayed run, one whose agent quit, or one no session holds", async () => {
           keptLanes.clear();
           await launchSlot(0, "term-0", "parent", { forkedConversation: true });
           await launchSlot(1, "term-1", "conv-1");
           await launchSlot(2, "term-2", "conv-2");
+          const revoked = await launchSlot(3, "term-3", "conv-3");
           service.noteStandingRunUnsettled("term-1");
           service.noteStandingRunEnded("term-2");
+          await service.revokeSession(revoked.sessionId);
 
-          for (const slot of [0, 1, 2]) await service.setLaneKeepRunning("proj-1", slot, true);
+          for (const slot of [0, 1, 2, 3]) await service.setLaneKeepRunning("proj-1", slot, true);
 
           expect(
             hibernationStore.setKeepRunning.mock.calls.map(([, , running]) => running)
-          ).toEqual([false, false, false]);
+          ).toEqual([false, false, false, false]);
         });
 
         it("says whether a kept project lane runs, for the last window's close", async () => {

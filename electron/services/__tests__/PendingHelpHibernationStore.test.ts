@@ -805,7 +805,7 @@ describe("PendingHelpHibernationStore", () => {
       expect(writes.count).toBe(before + 1);
     });
 
-    it("undoes a choice that wasn't saved, and writes again what failed when asked again", async () => {
+    it("says a choice wasn't saved, holds it, and writes it again when asked for again", async () => {
       const store = new PendingHelpHibernationStore(filePath);
       await store.load();
       await store.set(kept, entry("conv-0"));
@@ -813,20 +813,29 @@ describe("PendingHelpHibernationStore", () => {
 
       writes.fail = true;
       expect(await store.setKeepRunning(kept, false)).toBe(false);
-      expect(store.isKeptRunning(kept)).toBe(true);
-      expect(await store.setKeepRunning(sibling, true)).toBe(false);
-      expect(store.isKeptRunning(sibling)).toBe(false);
+      expect(store.isKeptRunning(kept)).toBe(false);
+      expect(await store.setKeepRunning(kept, false)).toBe(false);
 
-      // A mark changed while the disk failed is written by the next ask that changes nothing.
-      await store.setRunning({ [kept]: false });
       writes.fail = false;
       const before = writes.count;
-      expect(await store.setKeepRunning(kept, true, false)).toBe(true);
+      expect(await store.setKeepRunning(kept, false)).toBe(true);
       expect(writes.count).toBe(before + 1);
       const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
         keepRunning?: Record<string, unknown>;
       };
-      expect(onDisk.keepRunning).toEqual({ [kept]: {} });
+      expect(onDisk.keepRunning).toBeUndefined();
+      expect(await store.setKeepRunning(kept, false)).toBe(true);
+      expect(writes.count).toBe(before + 1);
+    });
+
+    it("answers an ask for the choice a pending write carries once that write lands", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      writes.fail = true;
+      const first = store.setKeepRunning(kept, true);
+      const again = store.setKeepRunning(kept, true);
+      expect(await first).toBe(false);
+      expect(await again).toBe(false);
     });
 
     it("lands what failed to write when flushed", async () => {
