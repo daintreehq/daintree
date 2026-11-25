@@ -2047,6 +2047,8 @@ export class CloudHostLifecycle {
       // A host gone without its orders marked (a record from an older write): they close.
       if (order.state !== "close" && !this.deps.store.binding(order.bindingId)) {
         this.markClosing(order.id);
+      } else if (order.state === "open") {
+        void this.readOffers(order.id).catch(() => {});
       }
     }
     this.settleOrdersDue(true);
