@@ -16,6 +16,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { stageGlobalAssistantReplacement } from "@/store/globalAssistantReplaceConfirmStore";
+import { stageGlobalAssistantResume } from "@/store/globalAssistantResumeConfirmStore";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached } from "@/lib/viewCacheState";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -659,6 +660,61 @@ async function requestGlobalAssistantReplacement(
   return staged ? { outcome: "awaiting-confirmation" } : unavailable;
 }
 
+/** How a request to reopen an earlier global conversation went (#18169). */
+export type GlobalAssistantResumeOutcome = GlobalAssistantReplaceOutcome;
+
+/** The name a request is put to the person under: its plugin's, else a generic one. */
+function askerName(ctx: ActionContext): string {
+  const caller = ctx.callerPluginId;
+  return caller
+    ? (usePluginRuntimeStore.getState().pluginMetaById.get(caller)?.displayName ??
+        pluginManifestIdFromInstanceKey(caller))
+    : "A plugin";
+}
+
+/**
+ * Put a request to reopen one of a global session's earlier conversations to
+ * the person (#18169), as a hand-off is (#18140): nothing switches until they
+ * approve it in the dialog, so the caller hears only whether it was asked.
+ * Only a conversation main lists for that session now is asked about, under
+ * the title main read for it; turned away where nobody would see the
+ * question, and while another waits here.
+ */
+async function requestGlobalAssistantResume(
+  args: { agentSessionId: string; slot?: 0 | 1 },
+  ctx: ActionContext
+): Promise<{ outcome: GlobalAssistantResumeOutcome }> {
+  const unavailable = { outcome: "unavailable" as const };
+  const unseen = () => isProjectViewCached() || getViewHostId() !== null;
+  if (unseen()) return unavailable;
+  let sessions: Awaited<ReturnType<typeof window.electron.help.listGlobalAssistantSessions>>;
+  let listing: Awaited<ReturnType<typeof window.electron.help.listGlobalAssistantPastSessions>>;
+  try {
+    sessions = await window.electron.help.listGlobalAssistantSessions();
+    // Unnamed, it is the session that coordinates (#18143).
+    const slot =
+      args.slot ?? (sessions.find((session) => session.coordinating) ?? sessions[0])?.slot;
+    if (slot === undefined) return unavailable;
+    listing = await window.electron.help.listGlobalAssistantPastSessions(slot);
+  } catch (err) {
+    logError("Couldn't read the global assistant to ask about reopening a conversation", err);
+    return unavailable;
+  }
+  const state = sessions.find((session) => session.slot === listing.slot);
+  const session = listing.sessions.find((row) => row.sessionId === args.agentSessionId);
+  if (!state || !session || state.phase === "launching" || unseen()) return unavailable;
+  const staged = stageGlobalAssistantResume({
+    slot: listing.slot,
+    agentId: session.agentId,
+    agentSessionId: session.sessionId,
+    title: session.title,
+    expected: { generation: state.generation, phase: state.phase },
+    pluginName: askerName(ctx),
+    namesSession: sessions.some((other) => other.slot !== listing.slot && other.occupied),
+  });
+  return staged ? { outcome: "awaiting-confirmation" } : unavailable;
+}
+
 // Agents a launch here last refused as too old. Version probes are cached for
 // hours, so the next launch of one reads the CLI afresh and sees an update
 // made since, as the panel's "Check again" does.
@@ -1093,6 +1149,8 @@ export const helpActionRuns = {
       readArgs<{ agentId: string; prompt: string; terminalId?: string }>(args),
       ctx
     ),
+  "help.resumeGlobalConversation": async (args, ctx) =>
+    requestGlobalAssistantResume(readArgs<{ agentSessionId: string; slot?: 0 | 1 }>(args), ctx),
   "help.resumePastSession": async (args) => {
     const picked = readArgs<
       { agentId: "claude" | "codex"; sessionId: string; slot?: number } | undefined

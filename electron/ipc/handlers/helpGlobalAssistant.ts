@@ -472,7 +472,8 @@ export async function handleResumeGlobalAssistantConversation(
       throw new AppError({
         code: "STALE_GENERATION",
         message: err.message,
-        userMessage: "The global assistant changed since you chose that conversation. Nothing was switched.",
+        userMessage:
+          "The global assistant changed since you chose that conversation. Nothing was switched.",
       });
     }
     if (err instanceof AppError && err.code === "INTERNAL") {

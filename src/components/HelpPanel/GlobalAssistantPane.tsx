@@ -1,6 +1,14 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeftRight, CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
+import {
+  ArrowLeftRight,
+  CircleHelp,
+  CircleStop,
+  Ellipsis,
+  Eraser,
+  Globe,
+  History,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -18,7 +26,9 @@ import { getAgentConfig } from "@/config/agents";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { useCanopyStore } from "@/store/canopyStore";
+import { stageGlobalAssistantResume } from "@/store/globalAssistantResumeConfirmStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
@@ -28,7 +38,11 @@ import {
   type GlobalAssistantSlot,
 } from "@shared/config/globalAssistantSessions";
 import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
-import type { GlobalAssistantInputStamp, GlobalAssistantView } from "@shared/types/ipc/help";
+import type {
+  GlobalAssistantInputStamp,
+  GlobalAssistantView,
+  HelpPastSession,
+} from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
 import { useGlobalAssistantSessions } from "./useGlobalAssistantSessions";
 import { GlobalSessionTabs, globalSessionPanelId, globalSessionTabId } from "./GlobalSessionTabs";
@@ -45,6 +59,11 @@ import { refocusStartAfterCancel } from "./refocusStartAfterCancel";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
 import { AssistantPluginMenuItems } from "@/components/Plugin/AssistantPluginMenuItems";
+import { isListedAssistantAgent } from "./pastSessionsNote";
+
+const LazyHelpPastSessionsPalette = lazy(() =>
+  import("./HelpPastSessionsPalette").then((m) => ({ default: m.HelpPastSessionsPalette }))
+);
 
 function subscribeViewCache(onChange: () => void): () => void {
   return subscribeProjectViewLifecycle(() => onChange());
@@ -336,6 +355,36 @@ export function GlobalAssistantPane({
     }
   };
 
+  // An earlier conversation of this session's can replace whatever it runs
+  // (#18169): offered while nothing is starting, for an agent whose
+  // transcripts can be listed. One whose agent isn't known yet asks main.
+  const offersEarlier =
+    view !== null &&
+    !boundElsewhere &&
+    !targetEnded &&
+    (view.phase === "running"
+      ? controllable
+      : view.phase === "absent" && (slot === GLOBAL_ASSISTANT_SLOT || view.occupied)) &&
+    (agentId === null || isListedAssistantAgent(agentId));
+  const isEarlierOpen = usePaletteStore((s) => s.activePaletteId === "global-assistant-sessions");
+  // Stays mounted once opened so the palette's exit animation can run.
+  const [earlierMounted, setEarlierMounted] = useState(false);
+  if (isEarlierOpen && !earlierMounted) setEarlierMounted(true);
+  // Asked about as the session is shown at the pick: one changed by the time
+  // the person answers reopens nothing.
+  const handlePickEarlier = (session: HelpPastSession) => {
+    if (view === null || view.slot !== slot) return;
+    stageGlobalAssistantResume({
+      slot,
+      agentId: session.agentId,
+      agentSessionId: session.sessionId,
+      title: session.title,
+      expected: { generation: view.generation, phase: view.phase },
+      pluginName: null,
+      namesSession: several,
+    });
+  };
+
   const confirmingHere = pendingConfirm !== null && pendingConfirm.slot === slot;
   const confirmName = several ? `global assistant session ${sessionNumber}` : "global assistant";
   const stopLabel = several ? `Stop session ${sessionNumber}` : "Stop global assistant";
@@ -436,6 +485,18 @@ export function GlobalAssistantPane({
                     <DropdownMenuSeparator />
                   </>
                 )}
+                {offersEarlier && (
+                  <DropdownMenuItem
+                    focusHandoff
+                    onSelect={() =>
+                      usePaletteStore.getState().openPalette("global-assistant-sessions")
+                    }
+                    data-testid="help-global-resume-earlier"
+                  >
+                    <History className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                    Resume an earlier conversation…
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={onOpenDocs}>
                   <CircleHelp className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Open docs
@@ -497,6 +558,15 @@ export function GlobalAssistantPane({
           </>,
           controlsHost
         )}
+
+      {earlierMounted && !boundElsewhere && (
+        <Suspense fallback={null}>
+          <LazyHelpPastSessionsPalette
+            workspace={null}
+            global={{ slot, onPick: handlePickEarlier }}
+          />
+        </Suspense>
+      )}
 
       {tabsShown && (
         <GlobalSessionTabs

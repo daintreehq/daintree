@@ -13,6 +13,7 @@ export type PaletteId =
   | "theme"
   | "resume-sessions"
   | "assistant-sessions"
+  | "global-assistant-sessions"
   | "log-level"
   | "recent-dictations"
   | "host-switcher";

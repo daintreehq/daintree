@@ -254,6 +254,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId`, `prompt?` |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.replaceGlobalAssistant` | Replace global assistant | safe | `agentId`, `prompt`, `terminalId?` |
+| `help.resumeGlobalConversation` | Resume earlier global assistant conversation | safe | `agentSessionId`, `slot?` |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.shortcuts` | Keyboard shortcuts | safe | — |
 | `help.shortcutsAlt` | Keyboard shortcuts (Alt) | safe | — |

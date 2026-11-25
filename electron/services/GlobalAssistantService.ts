@@ -561,7 +561,10 @@ export class GlobalAssistantService {
       try {
         this.deps.confirmSwitch?.(run.sessionId);
       } catch (err) {
-        console.warn("[GlobalAssistant] Writing the switch to an earlier conversation failed:", err);
+        console.warn(
+          "[GlobalAssistant] Writing the switch to an earlier conversation failed:",
+          err
+        );
       }
     }
     this.starting = null;

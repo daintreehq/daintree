@@ -585,6 +585,7 @@ export const BUILT_IN_ACTION_IDS = [
   "help.openCommandsFolder",
   "help.newSessionWithAgent",
   "help.replaceGlobalAssistant",
+  "help.resumeGlobalConversation",
   "help.resumePastSession",
 
   // -- assistantControlActions --

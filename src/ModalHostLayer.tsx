@@ -30,6 +30,10 @@ import {
   declineGlobalAssistantReplacement,
   useGlobalAssistantReplaceConfirmStore,
 } from "@/store/globalAssistantReplaceConfirmStore";
+import {
+  declineGlobalAssistantResume,
+  useGlobalAssistantResumeConfirmStore,
+} from "@/store/globalAssistantResumeConfirmStore";
 import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { declineFailedMcpConfirmation } from "@/store/mcpConfirmStore";
 import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
@@ -69,6 +73,7 @@ import {
   LazyRecipeRunConfirmDialog,
   LazyScheduleRunConfirmDialog,
   LazyGlobalAssistantReplaceConfirmDialog,
+  LazyGlobalAssistantResumeConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -306,6 +311,8 @@ export function ModalHostLayer({
   const layoutApplyConfirmKey = useLayoutApplyConfirmStore((s) => s.current?.requestId ?? "");
   // Mounted only once a plugin has asked, so a view no plugin asks loads nothing.
   const globalReplaceRequestSeq = useGlobalAssistantReplaceConfirmStore((s) => s.requestSeq);
+  // Mounted only once an earlier global conversation was asked for (#18169).
+  const globalResumeRequestSeq = useGlobalAssistantResumeConfirmStore((s) => s.requestSeq);
 
   return (
     <>
@@ -550,6 +557,19 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGlobalAssistantReplaceConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && globalResumeRequestSeq > 0 && (
+        <ErrorBoundary
+          variant="component"
+          componentName="GlobalAssistantResumeConfirmDialog"
+          resetKeys={[globalResumeRequestSeq]}
+          // A resume nobody can be asked about switches nothing.
+          onError={() => declineGlobalAssistantResume()}
+        >
+          <Suspense fallback={null}>
+            <LazyGlobalAssistantResumeConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

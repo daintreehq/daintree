@@ -2333,7 +2333,8 @@ export class HelpSessionService {
       }
       return work;
     }
-    const theirs = previous !== undefined && incoming(previous) ? previous.conversationOwnershipId : undefined;
+    const theirs =
+      previous !== undefined && incoming(previous) ? previous.conversationOwnershipId : undefined;
     this.setPreviousConversation(
       slotKey,
       {
