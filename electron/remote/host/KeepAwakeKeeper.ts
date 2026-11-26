@@ -61,7 +61,7 @@ const LISTENER_GRACE_MS = 5 * 60_000;
 const GAP_MS = 2 * PING_EVERY_MS;
 
 const EXPIRED =
-  "The link Daintree gave this host to send requests through while it sees work expired. Connect to it from Daintree to renew it.";
+  "The link Daintree gave this host to send requests through while it sees work expired. Connect to the host from Daintree to get a new one.";
 const REFUSED =
   "Agent 37 no longer accepts the link Daintree gave this host to send requests through.";
 const NOT_ARRIVED = "A request through the link Daintree gave this host never arrived at it.";
@@ -229,7 +229,6 @@ export class KeepAwakeKeeper {
     if (reached) {
       candidate.verified = true;
       candidate.reachedAt = this.now();
-      this.noteReached(candidate);
       this.lastSentAt = this.mono();
     } else if (outcome?.kind === "retry") {
       this.noteRetry();
@@ -302,11 +301,13 @@ export class KeepAwakeKeeper {
     this.generation += 1;
     this.controller?.abort();
     this.controller = null;
+    // What it saw is about the machine, not one URL: only another machine's URL, or none, forgets
+    // the last pass; only another machine's forgets what reached it.
+    const machine = next?.resourceId ?? null;
+    if (machine === null || machine !== this.held?.resourceId) this.lastBusyPass = null;
     this.held = next;
     this.fallback = null;
-    this.lastBusyPass = null;
-    // What reached it is about the machine, not one URL: only another machine's URL forgets it.
-    if (next && this.lastRequest && this.lastRequest.resourceId !== next.resourceId) {
+    if (machine !== null && this.lastRequest && this.lastRequest.resourceId !== machine) {
       this.lastRequest = null;
       this.gap = null;
     }
@@ -394,14 +395,16 @@ export class KeepAwakeKeeper {
     this.retryAt = Number.NEGATIVE_INFINITY;
     held.verified = true;
     held.reachedAt = this.now();
-    this.noteReached(held);
     // The URL it replaced stays behind it while that one outlasts it, to go back to once it expires.
     if (this.fallback && this.fallback.expiresAt <= held.expiresAt) this.fallback = null;
     this.lastSentAt = startedAt;
   }
 
-  private noteReached(held: HeldUrl): void {
-    this.lastRequest = { resourceId: held.resourceId, at: held.reachedAt ?? this.now() };
+  /** Whether the request reached this listener; one that did is what the host last saw reach it. */
+  private arrived(listener: KeepAwakeListener, nonce: string, held: HeldUrl): boolean {
+    const arrived = listener.take(nonce);
+    if (arrived) this.lastRequest = { resourceId: held.resourceId, at: this.now() };
+    return arrived;
   }
 
   /** A busy pass: one too long after the last, or with the clocks apart, is a gap of unknown cause. */
@@ -436,13 +439,13 @@ export class KeepAwakeKeeper {
       status = response.status;
       await response.body?.cancel().catch(() => {});
     } catch {
-      const arrived = listener.take(nonce);
+      const arrived = this.arrived(listener, nonce, held);
       // Run out while its answer was awaited, it can hold nothing up from now on.
       if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
       // Arrived, its answer slow or lost on the way back: it went through the edge all the same.
       return arrived ? { kind: "reached" } : { kind: "retry" };
     }
-    const arrived = listener.take(nonce);
+    const arrived = this.arrived(listener, nonce, held);
     if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
     if (status >= 200 && status < 300) {
       return arrived ? { kind: "reached" } : { kind: "lost", problem: NOT_ARRIVED };

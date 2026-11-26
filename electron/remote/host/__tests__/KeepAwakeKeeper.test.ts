@@ -606,6 +606,28 @@ describe("what the keeper observed (#17976)", () => {
     expect(env.keeper.status().gap!.from).toBeGreaterThan(env.keeper.status().gap!.to);
   });
 
+  it("still sees a gap across a URL for the same machine taken in between", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(1, 10_000);
+    const from = env.now();
+    env.advance(5 * 60_000);
+    await env.arm(URL_B, env.now() + 8 * DAY);
+    await env.passes(1, 10_000);
+    expect(env.keeper.status().gap?.from).toBe(from);
+  });
+
+  it("counts a request that reached it while its answer came back after the URL expired", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm(URL_A, env.now() + 2 * 60_000);
+    env.answer(() => ({ status: 204, reaches: true, after: () => env.stepWall(2 * 60_000) }));
+    await env.passes(1, 60_000);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: null });
+    expect(env.keeper.status().lastRequest).toEqual({ resourceId: RESOURCE, at: env.now() });
+  });
+
   it("sees no gap across a stretch the host spent idle", async () => {
     const env = setup();
     await env.keeper.open();

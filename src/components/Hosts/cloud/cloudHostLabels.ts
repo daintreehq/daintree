@@ -344,7 +344,7 @@ function awaySentence(
     return { connected: held, offline: held };
   }
   if (keepAwake?.kind === "expired") {
-    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host sent requests through expired ${dayTime(keepAwake.expiredAt)}.`;
+    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host held expired ${dayTime(keepAwake.expiredAt)}.`;
     return { connected: withSeen(expired), offline: withSeen(`${expired} Connecting renews it.`) };
   }
   if (keepAwake?.kind === "none" && keepAwake.problem) {
@@ -360,8 +360,8 @@ function awaySentence(
 
 /** "3 minutes", "2 hours", "less than a minute": how far apart two times are. */
 function apart(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  return minutes < 1 ? "less than a minute" : durationLabel(minutes * 60);
+  if (ms < 60_000) return "less than a minute";
+  return durationLabel(Math.round(ms / 60_000) * 60);
 }
 
 /**
@@ -375,7 +375,12 @@ function seenSentences(
   keepAwake: NonNullable<IdleSleepMachine["keepAwake"]>
 ): string {
   const out: string[] = [];
-  if (keepAwake.kind !== "held" && keepAwake.lastRequestAt !== undefined && !keepAwake.sleep) {
+  // Said once: with the link while one is held, or with the sleep when that's the one it follows.
+  if (
+    keepAwake.kind !== "held" &&
+    keepAwake.lastRequestAt !== undefined &&
+    keepAwake.lastRequestAt !== keepAwake.sleep?.lastRequestAt
+  ) {
     out.push(`The host's last request reached it ${dayTime(keepAwake.lastRequestAt)}.`);
   }
   const sleep = keepAwake.sleep;
@@ -389,7 +394,7 @@ function seenSentences(
   const gap = keepAwake.gap;
   if (gap) {
     out.push(
-      `The host's checks for work were interrupted before ${dayTime(gap.to)}, for a reason it can't tell (a delay or a clock change). ${name} reported no sleep then.`
+      `Before ${dayTime(gap.to)}, the host's checks for work came late or its clock jumped, for a reason it can't tell. ${name} reported no sleep then.`
     );
   }
   return out.join(" ");

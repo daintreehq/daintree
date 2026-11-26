@@ -35,7 +35,7 @@ const CALL_TIMEOUT_MS = 30_000;
 const ARM_TIMEOUT_MS = 60_000;
 
 const TOO_OLD =
-  "The Daintree on this machine is too old to send requests through a link while it sees work with no device connected. Update it to let it.";
+  "The Daintree on this machine is too old to send requests through a link while it sees work with no device connected. Update Daintree there to let it.";
 
 type KeepAwakeProvider = CloudProvider & Required<Pick<CloudProvider, "keepAwakeUrl">>;
 
@@ -78,6 +78,39 @@ function withoutLink(text: string, url?: string): string {
 
 /** Within this of a gap's ends, a reported sleep explains it: the host's and the provider's clocks differ. */
 const CLOCK_SLACK_MS = 60_000;
+
+/**
+ * A gap the host saw that a sleep the provider reported falls inside. One run
+ * backwards is a clock stepped back, never a sleep.
+ */
+function explains(gap: { from: number; to: number }, sleptAt: number): boolean {
+  return (
+    gap.from < gap.to && sleptAt >= gap.from - CLOCK_SLACK_MS && sleptAt <= gap.to + CLOCK_SLACK_MS
+  );
+}
+
+/** What hosts from before #17976 say, in the words the details use now. */
+const LEGACY_PROBLEMS: ReadonlyArray<readonly [string, string]> = [
+  [
+    "The link Daintree gave this host to keep Agent 37 from sleeping it expired. Connect to it from Daintree to renew it.",
+    "The link Daintree gave this host to send requests through while it sees work expired. Connect to the host from Daintree to get a new one.",
+  ],
+  [
+    "Agent 37 no longer accepts the link Daintree gave this host to keep it awake.",
+    "Agent 37 no longer accepts the link Daintree gave this host to send requests through.",
+  ],
+  [
+    "This host couldn't open a port for Agent 37 to reach it, so it can't keep the machine awake.",
+    "This host couldn't open a port for Agent 37 to reach it, so it sends no requests while it sees work.",
+  ],
+];
+
+/** A host's sentence, with what an older one says put as the details say it now. */
+function currentWords(text: string): string {
+  let out = text;
+  for (const [old, now] of LEGACY_PROBLEMS) out = out.split(old).join(now);
+  return out;
+}
 
 /** A view of what the host holds, apart from when it last said so: that alone isn't news. */
 function viewKey(view: CloudKeepAwake | null): string {
@@ -147,13 +180,12 @@ export class CloudKeepAwakeLinks {
    */
   private readonly lastRequestAt = new Map<string, number>();
   /** The latest gap of unknown cause the host said it saw. */
-  private readonly gaps = new Map<string, { from: number; to: number }>();
   /**
-   * The host's last request as first heard after a sleep was recorded: one
-   * it reports apart from that is a request since, and the sleep is over.
-   * Null when it had reported none; absent until heard.
+   * The latest gap of unknown cause the host said it saw, and whether a sleep
+   * the provider reported fell inside it: decided once, so a later sleep
+   * taking the stored one's place leaves it as it was.
    */
-  private readonly sleepBaseline = new Map<string, number | null>();
+  private readonly gaps = new Map<string, { from: number; to: number; explained: boolean }>();
   /** Stored expiries already seen passing, so the details change once when one runs out. */
   private readonly expiredSeen = new Set<string>();
   private disposed = false;
@@ -197,12 +229,7 @@ export class CloudKeepAwakeLinks {
     }
     const gap = this.gaps.get(binding.id);
     // A sleep the provider reported inside it is what it was, and is said as that.
-    const explained =
-      gap &&
-      sleep &&
-      sleep.sleptAt >= Math.min(gap.from, gap.to) - CLOCK_SLACK_MS &&
-      sleep.sleptAt <= Math.max(gap.from, gap.to) + CLOCK_SLACK_MS;
-    if (gap && !explained) seen.gap = { ...gap };
+    if (gap && !gap.explained) seen.gap = { from: gap.from, to: gap.to };
     return seen;
   }
 
@@ -224,17 +251,20 @@ export class CloudKeepAwakeLinks {
     const stored = binding.keepAwakeSleep;
     if (stored?.resourceId === resourceId && stored.sleptAt === sleptAt) return;
     const before = viewKey(this.statusFor(bindingId));
-    const lastRequestAt = this.lastRequestAt.get(bindingId);
-    if (lastRequestAt === undefined) this.sleepBaseline.delete(bindingId);
-    else this.sleepBaseline.set(bindingId, lastRequestAt);
+    const known = this.lastRequestAt.get(bindingId);
+    // Already heard of a request after it (this read was slow to come back): over before it's said.
+    const over = known !== undefined && known > sleptAt;
+    const sleep: StoredKeepAwakeSleep = {
+      resourceId,
+      sleptAt,
+      lastRequestAt: over ? null : (known ?? null),
+      ...(over ? { cleared: true as const } : {}),
+    };
     this.deps.store.updateBinding(bindingId, (current) =>
-      current.resourceId === resourceId
-        ? {
-            ...current,
-            keepAwakeSleep: { resourceId, sleptAt, lastRequestAt: lastRequestAt ?? null },
-          }
-        : current
+      current.resourceId === resourceId ? { ...current, keepAwakeSleep: sleep } : current
     );
+    const gap = this.gaps.get(bindingId);
+    if (gap && !gap.explained && explains(gap, sleptAt)) gap.explained = true;
     if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
   }
 
@@ -292,7 +322,6 @@ export class CloudKeepAwakeLinks {
       this.problems,
       this.lastRequestAt,
       this.gaps,
-      this.sleepBaseline,
       this.checkedAt,
       this.confirmedAt,
       this.retryAt,
@@ -495,7 +524,7 @@ export class CloudKeepAwakeLinks {
   /** Why the host holds no link, said only while it holds none. */
   private noteProblem(bindingId: string, message: string): void {
     const before = viewKey(this.statusFor(bindingId));
-    this.problems.set(bindingId, withoutLink(message));
+    this.problems.set(bindingId, withoutLink(currentWords(message)));
     if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
   }
 
@@ -536,7 +565,7 @@ export class CloudKeepAwakeLinks {
       this.confirmedAt.delete(bindingId);
       // A reason found here (a refusal, a failed mint) stays through its pause, though the host
       // itself says nothing of it.
-      if (problem) this.problems.set(bindingId, withoutLink(problem));
+      if (problem) this.problems.set(bindingId, withoutLink(currentWords(problem)));
       else if (!this.retryAt.has(bindingId)) this.problems.delete(bindingId);
       if (this.deps.store.binding(bindingId)?.keepAwake) {
         this.deps.store.updateBinding(bindingId, (binding) => {
@@ -558,21 +587,21 @@ export class CloudKeepAwakeLinks {
           ? status.lastRequest.at
           : undefined;
     if (at !== undefined) this.lastRequestAt.set(bindingId, at);
-    if (status.gap) this.gaps.set(bindingId, { ...status.gap });
-    const sleep = this.deps.store.binding(bindingId)?.keepAwakeSleep;
-    if (sleep?.resourceId !== resourceId || sleep.cleared) return;
-    const reported = at ?? null;
-    if (!this.sleepBaseline.has(bindingId)) {
-      // The first word after the sleep: what it says may be a request from before it, heard late.
-      this.sleepBaseline.set(bindingId, reported);
-      if (reported !== null && reported <= sleep.sleptAt)
-        this.pairSleep(bindingId, sleep, reported);
-      return;
+    const stored = this.deps.store.binding(bindingId)?.keepAwakeSleep;
+    const sleep = stored?.resourceId === resourceId ? stored : null;
+    if (status.gap) {
+      const { from, to } = status.gap;
+      const last = this.gaps.get(bindingId);
+      const same = last?.from === from && last.to === to;
+      const explained =
+        (same && last.explained) || (sleep !== null && explains({ from, to }, sleep.sleptAt));
+      this.gaps.set(bindingId, { from, to, explained });
     }
-    if (reported === null || reported === this.sleepBaseline.get(bindingId)) return;
-    this.sleepBaseline.set(bindingId, reported);
-    if (reported <= sleep.sleptAt) {
-      this.pairSleep(bindingId, sleep, reported);
+    // The request it was recorded beside, said again, is no news; nor is a host that forgot.
+    if (!sleep || sleep.cleared || at === undefined || at === sleep.lastRequestAt) return;
+    if (at <= sleep.sleptAt) {
+      // A request from before it, heard of only now.
+      this.pairSleep(bindingId, sleep, at);
       return;
     }
     // A request reached the host since the sleep: kept, marked over, so a repeat of it isn't news.

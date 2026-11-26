@@ -595,7 +595,20 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
       `The host's last request reached it ${dayTime(lastRequestAt)}.`
     );
     expect(apartFor(2 * 3_600_000)).toContain("2 hours after");
-    expect(apartFor(20_000)).toContain("less than a minute after");
+    expect(apartFor(59_000)).toContain("less than a minute after");
+    expect(apartFor(60_000)).toContain(", 1 minute after");
+    expect(apartFor(0)).toContain("less than a minute after");
+    // With the link gone, a later request than the one the sleep follows is said too, once.
+    const later = sentence({
+      kind: "none",
+      problem: null,
+      lastRequestAt: sleptAt + 120_000,
+      sleep: { sleptAt, lastRequestAt },
+    });
+    expect(later.split("last request reached it")).toHaveLength(2);
+    expect(
+      sentence({ kind: "none", problem: null, lastRequestAt, sleep: { sleptAt, lastRequestAt } })
+    ).not.toContain("last request reached it");
 
     function apartFor(ms: number) {
       return sentence({ ...held, sleep: { sleptAt, lastRequestAt: sleptAt - ms } });
@@ -606,7 +619,7 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     const gap = { from: Date.UTC(2026, 10, 19, 14, 0), to: Date.UTC(2026, 10, 19, 14, 9) };
     const said = sentence({ kind: "held", expiresAt, confirmedAt, reached: true, gap });
     expect(said).toContain(
-      `The host's checks for work were interrupted before ${dayTime(gap.to)}, for a reason it can't tell (a delay or a clock change). Agent 37 reported no sleep then.`
+      `Before ${dayTime(gap.to)}, the host's checks for work came late or its clock jumped, for a reason it can't tell. Agent 37 reported no sleep then.`
     );
     expect(said).not.toContain("put it to sleep");
     noClaim(said);
