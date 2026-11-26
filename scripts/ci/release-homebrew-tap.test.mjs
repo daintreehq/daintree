@@ -602,10 +602,16 @@ describe("release-macos.yml Homebrew install check (#16420)", () => {
       rmSync(paths[0], { force: true });
       expect(runInstallStep(dir, "Check app and zap paths are gone").status).toBe(0);
 
-      symlinkSync(path.join(dir, "nowhere"), path.join(dir, "Daintree.app"));
+      mkdirSync(path.join(dir, "Daintree.app"));
       const app = runInstallStep(dir, "Check app and zap paths are gone");
       expect(app.status).toBe(1);
       expect(app.stdout).toMatch(/::error::.*Daintree\.app is still installed/);
+
+      rmSync(path.join(dir, "Daintree.app"), { recursive: true });
+      symlinkSync(path.join(dir, "nowhere"), path.join(dir, "Daintree.app"));
+      const appLink = runInstallStep(dir, "Check app and zap paths are gone");
+      expect(appLink.status).toBe(1);
+      expect(appLink.stdout).toMatch(/::error::.*Daintree\.app is still installed/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

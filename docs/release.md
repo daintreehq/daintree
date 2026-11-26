@@ -133,7 +133,7 @@ Every stable macOS release updates the cask in [`daintreehq/homebrew-tap`](https
 
 | Secret | Description |
 | --- | --- |
-| `HOMEBREW_TAP_DEPLOY_KEY` | Private half of the write-enabled deploy key "daintree release (GitHub Actions)" on `daintreehq/homebrew-tap`. Only the tap checkout uses it, and keeps it for the push; the source checkout keeps `persist-credentials: false`. Without it the job skips with a notice and the release still publishes |
+| `HOMEBREW_TAP_DEPLOY_KEY` | Private half of the write-enabled deploy key "daintree release (GitHub Actions)" on `daintreehq/homebrew-tap`. Only the tap checkout uses it, and keeps it for the push; the source checkout keeps `persist-credentials: false`. Without it the job passes with a notice and pushes nothing, `verify-homebrew-install` skips, and the release still publishes |
 
 To check a cask change by hand, generate it for a published version and validate it in a throwaway tap:
 
