@@ -156,8 +156,15 @@ export interface OfferCreate {
    * already was. Never ends a lease: when one of its offers was leased it
    * leaves the order and answers `leased` with that machine and its rate,
    * which only `delete` ends, so a lease whose answer was lost is still bound.
+   * `sentOfferId` is the offer whose lease Daintree sent on this order, when
+   * it did: a lease found on other terms than that offer's comes back as an
+   * `error` machine saying so, for the person to keep or delete.
    */
-  closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
+  closeOrder(
+    credentials: ProviderCredentials,
+    orderId: string,
+    sentOfferId?: string
+  ): Promise<CloseOrderOutcome>;
 }
 
 /**

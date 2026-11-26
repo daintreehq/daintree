@@ -264,20 +264,26 @@ function markOfDefinition(definition: unknown): AkashMark | null | undefined {
  * The mark a deployment was created with, from the SDL Console stored for it
  * (a deployment's own route, `consoleSettings`), which a rename never
  * touches: the JSON definition when Console kept one, else its YAML text.
- * Null when the stored SDL carries none; undefined when Console stored no SDL
- * Daintree can read.
+ * Null when the stored SDL carries none; undefined when Console stored no
+ * SDL; false when it stored one Daintree can't read, which can't say whose
+ * the deployment is.
  */
-export function akashStoredMark(settings: unknown): AkashMark | null | undefined {
+export function akashStoredMark(settings: unknown): AkashMark | null | undefined | false {
   if (typeof settings !== "object" || settings === null) return undefined;
   const { definition, sdl } = settings as { definition?: unknown; sdl?: unknown };
   const fromDefinition = markOfDefinition(definition);
   if (fromDefinition !== undefined) return fromDefinition;
-  if (typeof sdl !== "string" || sdl.trim() === "") return undefined;
-  try {
-    return markOfDefinition(loadYaml(sdl, { json: true }));
-  } catch {
-    return undefined;
+  if (typeof sdl !== "string" || sdl.trim() === "") {
+    return definition === null || definition === undefined ? undefined : false;
   }
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(sdl, { json: true });
+  } catch {
+    return false;
+  }
+  const fromSdl = markOfDefinition(parsed);
+  return fromSdl === undefined ? false : fromSdl;
 }
 
 /** A new display name with the old name's mark kept, so a renamed deployment is still found. */

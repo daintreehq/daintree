@@ -364,7 +364,10 @@ export interface StoredCreateOrder {
   placedAt: number;
   /** When this device began waiting on the choice; null before then. */
   waitingSince: number | null;
-  /** The offer whose lease was sent, while `leasing`. */
+  /**
+   * The offer whose lease was sent: while `leasing`, and kept once that
+   * order is closing, so a lease its close finds is checked against it.
+   */
   offerId: string | null;
 }
 
@@ -834,7 +837,7 @@ function readCreateOrder(raw: unknown): StoredCreateOrder | null {
     orderIds,
     placedAt: num(value.placedAt) ?? 0,
     waitingSince: num(value.waitingSince),
-    offerId: state === "leasing" ? offerId : null,
+    offerId: state === "leasing" || state === "close" ? offerId : null,
   };
 }
 

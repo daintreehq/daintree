@@ -1350,7 +1350,15 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     ]);
     expect(screen.getByText(swapped)).toBeTruthy();
     expect(onReady).not.toHaveBeenCalled();
-    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
+    // A poll that missed on the way up holds nothing back once the machine runs.
+    show([
+      hostStatus({
+        pendingCreate: null,
+        resourceId: "dseq-1",
+        machine: "running",
+        lastError: { code: "rate-limited", message: "Try again in a few minutes.", at: 1 },
+      }),
+    ]);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith({ hostId: "h-123", name: "build-host" });
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "stopped" })]);

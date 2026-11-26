@@ -172,10 +172,10 @@ interface DeploymentView {
   definition: unknown;
   /**
    * The mark in that stored SDL, which a rename never touches: null when it
-   * carries none, undefined when the view has no stored SDL to read (a list
-   * row, or Console kept none Daintree reads).
+   * carries none, undefined when the view has no stored SDL (a list row, or
+   * Console kept none), false when Console stored one Daintree can't read.
    */
-  stored: AkashMark | null | undefined;
+  stored: AkashMark | null | undefined | false;
 }
 
 function viewOf(raw: unknown): DeploymentView {
@@ -210,7 +210,11 @@ function viewOf(raw: unknown): DeploymentView {
  * create of Daintree's made, or renamed out of its mark with no SDL to read.
  */
 function markOf(view: DeploymentView): AkashMark | null {
-  if (view.stored) return view.stored;
+  return view.stored ? view.stored : nameMarkOf(view);
+}
+
+/** The mark at the end of a deployment's name alone, which a rename can change. */
+function nameMarkOf(view: DeploymentView): AkashMark | null {
   const { createKey, labels } = view.name;
   return createKey === null ? null : { labels, createKey };
 }
@@ -286,7 +290,9 @@ function replaced(lease: AkashLease, offer: AkashOfferId): boolean {
  * request again to send it. Never for a lease on other terms: that one is said.
  */
 function needsManifest(lease: AkashLease, offer: AkashOfferId): boolean {
-  return lease.state === "active" && !lease.status && !swapped(lease, offer);
+  // Only a lease that names the chosen bid itself: one that doesn't say can't be sent to.
+  const bseq = (lease.id as { bseq?: unknown }).bseq;
+  return lease.state === "active" && !lease.status && bseq === offer.bseq && !swapped(lease, offer);
 }
 
 /**
@@ -296,6 +302,15 @@ function needsManifest(lease: AkashLease, offer: AkashOfferId): boolean {
  */
 function swapped(lease: AkashLease, offer: AkashOfferId): boolean {
   return replaced(lease, offer) || !quoted(lease.price, offer);
+}
+
+/** A lease on terms nobody chose: it stops as failed, for the person to keep or delete. */
+function swapNote(lease: AkashLease): LeaseNote {
+  const rate = leaseHourly(lease);
+  return {
+    machine: "error",
+    problem: `The provider replaced its offer as it was leased: the lease is at ${rate === null ? `${lease.price.amount} ${lease.price.denom} a block` : `$${rate.toFixed(4)} an hour`}, not the offer chosen. Delete it unless that rate is fine.`,
+  };
 }
 
 /** The rate a lease runs at in dollars an hour; null when Daintree can't price its denom. */
@@ -798,7 +813,8 @@ export class AkashProvider implements CloudProvider {
     listOffers: (credentials, orderId) => this.listOffers(credentials, orderId),
     leaseOffer: (credentials, orderId, offerId, expected) =>
       this.leaseOffer(credentials, orderId, offerId, expected),
-    closeOrder: (credentials, orderId) => this.closeOrder(credentials, orderId),
+    closeOrder: (credentials, orderId, sentOfferId) =>
+      this.closeOrder(credentials, orderId, sentOfferId),
   };
 
   /**
@@ -908,7 +924,18 @@ export class AkashProvider implements CloudProvider {
     const id = parseAkashResourceId(orderId);
     const bids = await this.bidsOf(client, ctx, id);
     // No bid names the order's wallet yet, so the order itself is read to be sure it is this one.
-    if (bids.length === 0) await this.read(client, ctx, id);
+    if (bids.length === 0) {
+      const view = await this.read(client, ctx, id);
+      // Closed, or leased, with nothing bid: no choice is coming, and its close settles it.
+      if (view.state !== "active" || view.leases.length > 0) {
+        throw new AkashApiError(
+          "not-found",
+          "That order isn't waiting on a choice any more",
+          null,
+          null
+        );
+      }
+    }
     const open = new Map<string, number>();
     for (const bid of bids) {
       if (bid.state === "open") open.set(tupleOf(bid.id), (open.get(tupleOf(bid.id)) ?? 0) + 1);
@@ -1044,13 +1071,14 @@ export class AkashProvider implements CloudProvider {
             error.code
           );
         }
-        // A refusal Console named before leasing anything, with nothing yet saying a lease stands.
-        if (first && CALLER_REFUSALS.has(error.kind)) throw error;
+        // A manifest's codes say the lease was made, whatever status carried them.
         if (error.code === "provider_manifest_invalid") {
           const back = await this.readBack(client, ctx, view.id, offer, INVALID);
           return this.answer(client, back, offer, null, INVALID, ctx.signal);
         }
         if (error.code === "manifest_not_delivered") note = UNDELIVERED;
+        // A refusal Console named before leasing anything, with nothing yet saying a lease stands.
+        else if (first && CALLER_REFUSALS.has(error.kind)) throw error;
         unclear = error;
         answer = [];
       }
@@ -1153,13 +1181,9 @@ export class AkashProvider implements CloudProvider {
     const resource = await this.resourceOf(client, view, signal);
     const lease = view.leases.find((entry) => tupleOf(entry.id) === tupleOf(offer));
     if (!lease) return resource;
-    const rate = leaseHourly(lease);
-    const machine = { ...resource, leaseHourlyDollars: rate };
+    const machine = { ...resource, leaseHourlyDollars: leaseHourly(lease) };
     if (!swapped(lease, offer)) return machine;
-    return withNote(machine, {
-      machine: "error",
-      problem: `The provider replaced its offer as it was leased: the lease is at ${rate === null ? `${lease.price.amount} ${lease.price.denom} a block` : `$${rate.toFixed(4)} an hour`}, not the offer chosen. Delete it unless that rate is fine.`,
-    });
+    return withNote(machine, swapNote(lease));
   }
 
   /**
@@ -1170,12 +1194,16 @@ export class AkashProvider implements CloudProvider {
    * can close a deployment only while it is unleased: a `MsgCloseDeployment`
    * that lands after a `MsgCreateLease` in the same block closes the new
    * lease. So a lease another Console client sends between the read and the
-   * close is ended by it, and is reported, never prevented, from here; the
-   * lifecycle's own lease and close of one order are kept apart there (#18251).
+   * close is ended by it, and is reported, never prevented, from here. That
+   * Daintree's own lease and close of one order never overlap is the
+   * lifecycle's to ensure (#18251). `sentOfferId` is the offer whose lease
+   * Daintree sent on this order, when it did: a lease found on other terms
+   * comes back failed, saying so, at the rate it runs at.
    */
   private async closeOrder(
     credentials: ProviderCredentials,
-    orderId: string
+    orderId: string,
+    sentOfferId?: string
   ): Promise<CloseOrderOutcome> {
     const client = this.clientFor(credentials.apiUrl);
     const ctx = this.account(credentials);
@@ -1192,7 +1220,7 @@ export class AkashProvider implements CloudProvider {
         null
       );
     }
-    if (view.leases.length > 0) return this.leasedOrder(client, view, ctx.signal);
+    if (view.leases.length > 0) return this.leasedOrder(client, view, sentOfferId, ctx.signal);
     await this.close(client, ctx, id, false);
     let after: DeploymentView;
     try {
@@ -1206,7 +1234,7 @@ export class AkashProvider implements CloudProvider {
         null
       );
     }
-    if (after.leases.length > 0) return this.leasedOrder(client, after, ctx.signal);
+    if (after.leases.length > 0) return this.leasedOrder(client, after, sentOfferId, ctx.signal);
     if (after.state !== "closed") {
       throw new AkashApiError(
         "outcome-unknown",
@@ -1218,16 +1246,31 @@ export class AkashProvider implements CloudProvider {
     return { kind: "closed" };
   }
 
-  /** An order one of whose offers was leased: that machine, at the rate its lease runs at. */
+  /**
+   * An order one of whose offers was leased: that machine, at the rate its
+   * lease runs at, failed and saying so when it isn't the lease of the offer
+   * Daintree sent on the terms it quoted.
+   */
   private async leasedOrder(
     client: AkashConsoleClient,
     view: DeploymentView,
+    sentOfferId: string | undefined,
     signal: AbortSignal | undefined
   ): Promise<CloseOrderOutcome> {
+    const lease = currentLease(view.leases);
+    const resource = await this.resourceOf(client, view, signal);
+    let sent: AkashOfferId | null = null;
+    try {
+      sent = sentOfferId === undefined ? null : parseAkashOfferId(sentOfferId);
+    } catch {
+      // An id this build can't read says nothing of the terms: the lease is answered as it is.
+    }
+    const chosen = sent && view.leases.find((entry) => tupleOf(entry.id) === tupleOf(sent));
+    const note = !sent || !lease ? null : chosen ? (swapped(chosen, sent) ? chosen : null) : lease;
     return {
       kind: "leased",
-      resource: await this.resourceOf(client, view, signal),
-      hourlyDollars: leaseHourly(currentLease(view.leases)),
+      resource: note ? withNote(resource, swapNote(note)) : resource,
+      hourlyDollars: leaseHourly(lease),
     };
   }
 
@@ -1455,12 +1498,15 @@ export class AkashProvider implements CloudProvider {
 
   /**
    * The deployments in `state` that `eligible` lets through and whose mark
-   * `carries` what is looked for. The name's mark is searched for first. When
-   * that finds none, every deployment of the project is read, and the stored
-   * SDL of each one whose name carries no mark: a rename on the Akash Console
-   * can take the mark off the name, never out of the SDL. A scan that can't
-   * finish refuses rather than answer with nothing, so whatever the caller is
-   * recovering is kept.
+   * `carries` what is looked for, each checked against the SDL Console stored
+   * for it, which a rename never touches. The name's mark is searched for
+   * first. When that finds none, every deployment of the project is read,
+   * and the stored SDL of each that may be the one: a name with no mark, a
+   * name whose mark another deployment's name repeats (pasted from it), and a
+   * name that carries what is looked for after all (put back meanwhile). A
+   * scan that can't finish refuses rather than answer with nothing, so
+   * whatever the caller is recovering is kept. Only a miss scans: a create
+   * whose search finds one of its deployments isn't looked for further.
    */
   private async marked(
     client: AkashConsoleClient,
@@ -1470,29 +1516,41 @@ export class AkashProvider implements CloudProvider {
     eligible: (view: DeploymentView) => boolean,
     carries: (mark: AkashMark | null) => boolean
   ): Promise<DeploymentView[]> {
+    const wanted = (view: DeploymentView) => eligible(view) && carries(markOf(view));
     const first = await this.everyDeployment(client, ctx, state, search);
-    const hits = first.views.filter((view) => eligible(view) && carries(markOf(view)));
+    const named = first.views.filter((view) => eligible(view) && carries(nameMarkOf(view)));
+    const hits = await this.withStoredMarks(client, ctx, named, wanted);
     if (hits.length > 0) return hits;
     const all = first.plain
       ? first.views
       : (await this.everyDeployment(client, ctx, state, undefined)).views;
-    // A name that still carries a mark is that create's: only one without may have lost it.
-    const unmarked = all.filter((view) => eligible(view) && view.name.createKey === null);
-    const read = await this.withStoredMarks(client, ctx, unmarked);
-    return read.filter((view) => eligible(view) && carries(markOf(view)));
+    const keys = new Map<string, number>();
+    for (const view of all) {
+      const key = view.name.createKey;
+      if (key !== null) keys.set(key, (keys.get(key) ?? 0) + 1);
+    }
+    const candidates = all.filter((view) => {
+      if (!eligible(view)) return false;
+      const key = view.name.createKey;
+      return key === null || keys.get(key)! > 1 || carries(nameMarkOf(view));
+    });
+    return this.withStoredMarks(client, ctx, candidates, wanted);
   }
 
   /**
    * Each listed deployment read again on its own route, a few at a time, for
-   * the SDL Console stored and its leases now; the list's groups are kept,
-   * since that route carries none. One that can't be read fails them all.
+   * the SDL Console stored and its name, state and leases now; the list's
+   * groups are kept, since that route carries none. Only those `keep` takes
+   * are held on to. One that can't be read, or whose stored SDL can't be
+   * read, fails them all.
    */
   private async withStoredMarks(
     client: AkashConsoleClient,
     ctx: AkashRequestContext,
-    rows: readonly DeploymentView[]
+    rows: readonly DeploymentView[],
+    keep: (view: DeploymentView) => boolean
   ): Promise<DeploymentView[]> {
-    const views: DeploymentView[] = [];
+    const kept: Array<DeploymentView | undefined> = [];
     let next = 0;
     const worker = async (signal: AbortSignal) => {
       while (next < rows.length) {
@@ -1507,20 +1565,24 @@ export class AkashProvider implements CloudProvider {
             null
           );
         }
-        views[index] = {
-          ...row,
-          state: detail.state,
-          leases: detail.leases,
-          definition: detail.definition,
-          stored: detail.stored,
-        };
+        // Its identity can't be read: never taken for one that isn't the create's.
+        if (detail.stored === false) {
+          throw new AkashApiError(
+            "bad-response",
+            `The Akash Console stored an SDL for deployment ${row.id.dseq} that Daintree can't read`,
+            null,
+            null
+          );
+        }
+        const view: DeploymentView = { ...detail, groups: row.groups };
+        if (keep(view)) kept[index] = view;
       }
     };
     await allOrNone(
       ctx.signal,
       Array.from({ length: Math.min(DETAIL_READS, rows.length) }, () => worker)
     );
-    return views;
+    return kept.filter((view): view is DeploymentView => view !== undefined);
   }
 
   /** Every page, read again from the start when the list moved under it; refused when it never holds still. */

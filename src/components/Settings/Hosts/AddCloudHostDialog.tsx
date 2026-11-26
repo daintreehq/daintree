@@ -266,13 +266,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const checkTunnelAgain = () => setTunnelTry((n) => n + 1);
 
   // Hand over to setup once the machine runs; never while an order waits on a choice, nor
-  // while the create's failure is shown (a lease on terms nobody chose still runs).
+  // while the machine's failure is shown (a lease on terms nobody chose still runs). A missed
+  // poll or a slow start, which a running machine has got past, doesn't hold it back.
   const ready =
     added !== null &&
     status?.machine === "running" &&
     status.operation === null &&
     !status.pendingCreate &&
-    !status.lastError;
+    status.lastError?.code !== "failed";
   // A stopped import only gets here once someone starts it; a running one at once.
   const handedOver = useRef(false);
   useEffect(() => {

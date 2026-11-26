@@ -110,6 +110,7 @@ type Plan =
   | "hang"
   | "hang-commit"
   | "swap"
+  | "swap-lost"
   | "fail";
 
 interface FakeOrder {
@@ -120,6 +121,8 @@ interface FakeOrder {
   machine: ProviderResource | null;
   /** The rate its lease runs at, once leased. */
   leasedAt?: number;
+  /** The offer whose lease the bidder swapped for another as it was leased. */
+  swappedFrom?: string;
 }
 
 /** An offer-based provider's account: orders, their offers, and the machines leased from them. */
@@ -242,9 +245,11 @@ class FakeOffers {
       this.machines.set(leased.resourceId, machine(leased.resourceId, order.labels));
       if (plan === "lost") throw lost();
       if (plan === "hang-commit") return this.hang<ProviderResource>(credentials.signal);
-      if (plan === "swap") {
+      if (plan === "swap" || plan === "swap-lost") {
         // The bidder swapped its offer as it was leased: it runs, at a rate nobody chose.
         order.leasedAt = 1.8;
+        order.swappedFrom = offerId;
+        if (plan === "swap-lost") throw lost();
         return {
           ...leased,
           machine: "error" as const,
@@ -256,19 +261,29 @@ class FakeOffers {
     }
   );
 
-  readonly closeOrder = vi.fn(async (_credentials: unknown, orderId: string) => {
-    if (this.plan("close") === "fail") throw lost();
-    const order = this.orders.get(orderId);
-    if (order?.state === "leased") {
-      return {
-        kind: "leased" as const,
-        resource: order.machine!,
-        hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
-      };
+  readonly closeOrder = vi.fn(
+    async (_credentials: unknown, orderId: string, sentOfferId?: string) => {
+      if (this.plan("close") === "fail") throw lost();
+      const order = this.orders.get(orderId);
+      if (order?.state === "leased") {
+        // A lease on other terms than the offer sent says so, as the provider's close does.
+        const swapped = sentOfferId !== undefined && order.swappedFrom === sentOfferId;
+        return {
+          kind: "leased" as const,
+          resource: swapped
+            ? {
+                ...order.machine!,
+                machine: "error" as const,
+                error: "The provider replaced its offer as it was leased.",
+              }
+            : order.machine!,
+          hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
+        };
+      }
+      if (order) order.state = "closed";
+      return { kind: "closed" as const };
     }
-    if (order) order.state = "closed";
-    return { kind: "closed" as const };
-  });
+  );
 
   /** A lease made where this device never saw it: the person's console, say. */
   leaseElsewhere(orderId: string, hourlyDollars = 0.5): string {
@@ -883,7 +898,8 @@ describe("offer-based create (#18230)", () => {
       expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`);
       expect(env.status()?.machine).toBe("running");
       expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
-      expect(env.api.closeOrder).toHaveBeenCalledWith(expect.anything(), choice.order.id);
+      // Told the offer whose lease went out, so a lease on other terms would say so.
+      expect(env.api.closeOrder).toHaveBeenCalledWith(expect.anything(), choice.order.id, "a");
       expect(env.store.createOrders()).toEqual([]);
     });
 
@@ -1395,6 +1411,52 @@ describe("a leased machine's price (#18233)", () => {
     env.crash();
     await env.accounts.catalog(env.account.id);
     expect(statusOf(env, hostId)).toMatchObject(failed);
+  });
+
+  it("says so of a swapped lease whose answer was lost and its close found", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.6)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("swap-lost");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.6).catch(() => {});
+    await env.settled();
+    // The close was told the offer whose lease went out, and found the lease on other terms.
+    expect(env.api.closeOrder).toHaveBeenCalledWith(expect.anything(), choice.order.id, "a");
+    const failed = {
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 1.8,
+      lastError: { code: "failed", message: "The provider replaced its offer as it was leased." },
+    };
+    expect(statusOf(env, hostId)).toMatchObject(failed);
+    expect(env.store.createOrders()).toEqual([]);
+    await env.lifecycle.refresh(hostId);
+    expect(statusOf(env, hostId)).toMatchObject({ ...failed, machine: "running" });
+  });
+
+  it("checks a lease its close finds after a restart against the offer that was sent", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.6)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    // The lease goes out and lands swapped; the run ends before its answer is handled.
+    env.api.plans.lease.push("hang-commit");
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.6).catch(() => {});
+    await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    env.api.orders.get(choice.order.id)!.swappedFrom = "a";
+    env.api.orders.get(choice.order.id)!.leasedAt = 1.8;
+    expect(env.store.createOrders()).toMatchObject([{ state: "leasing", offerId: "a" }]);
+    env.crash();
+    await env.lifecycle.retryCreate(hostId).catch(() => {});
+    await env.settled();
+    expect(env.api.closeOrder).toHaveBeenCalledWith(expect.anything(), choice.order.id, "a");
+    expect(statusOf(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 1.8,
+      lastError: { code: "failed" },
+    });
   });
 
   it.each([0.25, 0])(
