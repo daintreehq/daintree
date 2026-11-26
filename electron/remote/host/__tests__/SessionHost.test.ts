@@ -23,7 +23,7 @@ import { ControlKind, EventKind } from "../../link/messages.js";
 import type { EnqueueResult } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
-import { LinkMethod } from "../linkMethods.js";
+import { LinkMethod, type SshHostKeysAnswer } from "../linkMethods.js";
 import { ANSWER_RETRY_MS, SessionHost } from "../SessionHost.js";
 
 type Listener = (body: unknown) => void;
@@ -1756,5 +1756,39 @@ describe("SessionHost agent activity (#13359)", () => {
     expect(link.call.mock.calls.map(([method]) => method)).toEqual([
       LinkMethod.ENDPOINT_AGENT_ACTIVITY,
     ]);
+  });
+});
+
+describe("SessionHost SSH host keys (#18257)", () => {
+  function hostWith(readSshHostKeys?: () => Promise<SshHostKeysAnswer>) {
+    host.dispose();
+    host = new SessionHost(server, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry,
+      ...(readSshHostKeys ? { readSshHostKeys } : {}),
+    });
+  }
+
+  it("answers on every link of a session, including a resumed one", async () => {
+    const answer: SshHostKeysAnswer = { status: "unsupported-platform", platform: "darwin" };
+    const read = vi.fn(async () => answer);
+    hostWith(read);
+    const first = fakeLink();
+    server.attach("s1", first);
+    await expect(first.runCall(LinkMethod.SSH_HOST_KEYS, null)).resolves.toBe(answer);
+
+    first.drop();
+    const resumed = fakeLink();
+    server.attach("s1", resumed, true);
+    await expect(resumed.runCall(LinkMethod.SSH_HOST_KEYS, {})).resolves.toBe(answer);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(() => first.runCall(LinkMethod.SSH_HOST_KEYS, null)).toThrow("no handler");
+  });
+
+  it("registers nothing without a reader, so the Shell is told UNSUPPORTED", () => {
+    hostWith();
+    const link = fakeLink();
+    server.attach("s1", link);
+    expect(() => link.runCall(LinkMethod.SSH_HOST_KEYS, null)).toThrow("no handler");
   });
 });

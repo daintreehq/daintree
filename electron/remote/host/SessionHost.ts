@@ -35,6 +35,7 @@ import {
   type HostInfo,
   type HostProjectList,
   type ProjectDescription,
+  type SshHostKeysAnswer,
 } from "./linkMethods.js";
 import { RemoteViewEndpoint, type RemoteEndpointTransport } from "./RemoteViewEndpoint.js";
 
@@ -118,6 +119,8 @@ export interface SessionHostOptions {
   mcpBindingLive?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
+  /** This machine's sshd host public keys (#18257); absent, the method is unsupported. */
+  readSshHostKeys?: () => Promise<SshHostKeysAnswer>;
   eventsHighWaterBytes?: number;
   /** How long the EVENTS lane may stay over high water before the Shell is resynced. */
   overHighWaterGraceMs?: number;
@@ -524,6 +527,7 @@ export class SessionHost {
     state.createdOnLink.clear();
     state.refusedOnLink.clear();
     const s = state;
+    const readSshHostKeys = this.options.readSshHostKeys;
     s.detach.push(
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
         this.openEndpoint(s, body.endpointId, body.projectId, body.openId)
@@ -547,6 +551,13 @@ export class SessionHost {
       link.registerCallHandler(LinkMethod.LIST_PROJECTS, EmptyPayloadSchema, () =>
         (this.options.listProjects?.() ?? []).slice(0, MAX_LISTED_PROJECTS)
       ),
+      ...(readSshHostKeys
+        ? [
+            link.registerCallHandler(LinkMethod.SSH_HOST_KEYS, EmptyPayloadSchema, () =>
+              readSshHostKeys()
+            ),
+          ]
+        : []),
       link.registerCallHandler(
         LinkMethod.NOTE_ACTIVE_PROJECT,
         DescribeProjectPayloadSchema,

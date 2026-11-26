@@ -40,6 +40,12 @@ export const LinkMethod = {
    */
   ENABLE_MCP_SERVER: "host.enable-mcp-server",
   /**
+   * Shell → Host (#18257): the SSH host public keys of the sshd listeners this
+   * Host's user can see on its machine, read here rather than over the SSH
+   * path a caller means to pin. A Host from before it answers `UNSUPPORTED`.
+   */
+  SSH_HOST_KEYS: "host.ssh-host-keys",
+  /**
    * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
    * other the Host kept for it, and not opened again since, was closed in a
    * frame still queued when the link dropped.
@@ -247,3 +253,107 @@ export const EndpointMcpBindingPayloadSchema = z.object({
     )
     .max(4096),
 });
+
+export const MAX_SSH_LISTENERS = 32;
+export const MAX_SSH_HOST_KEYS_PER_LISTENER = 32;
+export const MAX_SSH_LISTEN_ADDRESSES = 64;
+
+/** Why one configured host key's public file gave no key. */
+export const SshHostKeyGapSchema = z.enum([
+  "missing",
+  "permission-denied",
+  /** Not a regular file, a symlink, or the private key itself under another name. */
+  "not-a-public-file",
+  /** Read, but not an OpenSSH public key line. */
+  "invalid",
+  /** A relative `HostKey` is the daemon's to resolve, not this Host's. */
+  "relative-path",
+  "unreadable",
+]);
+export type SshHostKeyGap = z.infer<typeof SshHostKeyGapSchema>;
+
+export const SshHostKeyFileSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("read"),
+    /** The `HostKey` as configured: the private key, never opened. */
+    hostKeyPath: hostPath,
+    publicKeyPath: hostPath,
+    type: z.string().min(1).max(64),
+    /** `type base64`, as the public file holds it now, not as sshd loaded it. */
+    publicKey: z
+      .string()
+      .min(1)
+      .max(16 * 1024 + 80),
+    fingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
+  }),
+  z.object({
+    outcome: SshHostKeyGapSchema,
+    hostKeyPath: hostPath,
+    publicKeyPath: hostPath,
+  }),
+]);
+export type SshHostKeyFile = z.infer<typeof SshHostKeyFileSchema>;
+
+/** Why a listener's keys are missing or incomplete, beyond its own key files. */
+export const SshListenerGapSchema = z.enum([
+  /** Its command line couldn't be read, or its retitled command line couldn't be parsed. */
+  "command-line-unreadable",
+  /** Another container's or mount namespace's daemon: its paths aren't this Host's. */
+  "other-namespace",
+  /** No daemon binary this Host would run: unknown, or writable by someone else. */
+  "untrusted-binary",
+  /** A relative `-f` or `-h`, resolved against a directory this Host can't see. */
+  "relative-path",
+  /** `sshd -G` couldn't read its configuration. */
+  "config-unreadable",
+  /** An sshd from before `-G` (OpenSSH 9.3): only the command line's own keys are known. */
+  "config-dump-unavailable",
+  "config-dump-failed",
+  "timed-out",
+  /** The process went away, or its pid was reused, while it was being read. */
+  "exited",
+  /** More keys than an answer carries. */
+  "truncated",
+]);
+export type SshListenerGap = z.infer<typeof SshListenerGapSchema>;
+
+export const SshListenerReadingSchema = z.object({
+  /**
+   * The same listener across restarts on this Host: its config file and the
+   * addresses it binds. Null when that can't be known, or another listener
+   * shares it; such a reading is never a baseline.
+   */
+  listenerId: z.string().min(1).max(128).nullable(),
+  /** Diagnostic only: a restart changes it. */
+  pid: z.number().int().positive(),
+  /** Every configured key was read. */
+  complete: z.boolean(),
+  gaps: z.array(SshListenerGapSchema).max(SshListenerGapSchema.options.length),
+  /** `-f` as given, or null for the daemon's built-in default. */
+  configFile: hostPath.nullable(),
+  listenAddresses: z.array(z.string().min(1).max(512)).max(MAX_SSH_LISTEN_ADDRESSES),
+  keys: z.array(SshHostKeyFileSchema).max(MAX_SSH_HOST_KEYS_PER_LISTENER),
+});
+export type SshListenerReading = z.infer<typeof SshListenerReadingSchema>;
+
+/**
+ * The Host's answer to {@link LinkMethod.SSH_HOST_KEYS}. "Couldn't read" is
+ * an ordinary answer here: a Host that runs without root sees only what its
+ * user may read.
+ */
+export const SshHostKeysAnswerSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("reading"),
+    /** Every listener is complete, and none was left out. */
+    complete: z.boolean(),
+    /** More listeners than an answer carries were seen. */
+    truncated: z.boolean(),
+    listeners: z.array(SshListenerReadingSchema).min(1).max(MAX_SSH_LISTENERS),
+  }),
+  /** The process table was readable and showed no sshd listener this Host's user can see. */
+  z.object({ status: z.literal("no-sshd-visible") }),
+  /** The process table itself couldn't be read. */
+  z.object({ status: z.literal("discovery-failed") }),
+  z.object({ status: z.literal("unsupported-platform"), platform: z.string().min(1).max(64) }),
+]);
+export type SshHostKeysAnswer = z.infer<typeof SshHostKeysAnswerSchema>;

@@ -12,6 +12,7 @@ import { getMcpServerServiceRef, getPtyClient } from "../../window/serviceRefs.j
 import { registerRemoteService } from "../runtime.js";
 import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
 import { ProjectAgentActivityCache } from "./ProjectAgentActivityCache.js";
+import { createSshHostKeysReader } from "./sshHostKeys.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { SessionHost, type SessionHostOptions, type SessionHostServer } from "./SessionHost.js";
 
@@ -69,6 +70,7 @@ export function initRemoteHostsHost(
         ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
         frontendAttached: isProjectFrontendAttached(id),
       })),
+    readSshHostKeys: createSshHostKeysReader(),
     assistantLive: assistantLiveFor,
     agentActive: (endpoint) =>
       endpoint.projectId !== null && agents.isProjectActive(endpoint.projectId),
