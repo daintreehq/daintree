@@ -52,14 +52,15 @@ function edgeListener(
   accepted: { count: number }
 ): KeepAwakeListener {
   const expected = new Set<string>();
-  const received = new Set<string>();
+  /** When each nonce reached it, by Agent 37's clock. */
+  const received = new Map<string, number>();
   const close = api.listen(instanceId, PORT, (forwarded, method) => {
     const pathname = forwarded.split("?")[0] ?? "";
     const nonce = pathname.startsWith(KEEP_AWAKE_PATH)
       ? pathname.slice(KEEP_AWAKE_PATH.length)
       : "";
     if (method === "GET" && expected.delete(nonce)) {
-      received.add(nonce);
+      received.set(nonce, api.now);
       accepted.count += 1;
       return new Response(null, { status: 204 });
     }
@@ -72,7 +73,9 @@ function edgeListener(
     },
     take: (nonce) => {
       expected.delete(nonce);
-      return received.delete(nonce);
+      const at = received.get(nonce) ?? null;
+      received.delete(nonce);
+      return at;
     },
     close,
   };
@@ -1077,12 +1080,13 @@ describe("what an Agent 37 host's keep-awake observed (#17976)", () => {
     const start = env.accepted();
     // Busy all along and linked, its requests reaching it every minute, uncounted: Agent 37 sleeps
     // it anyway, and the host's process stands still from then.
-    while (env.machine.status === "running") {
+    for (let passes = 0; passes < 200 && env.machine.status === "running"; passes++) {
       env.api.advance(30);
       if (env.machine.status !== "running") break;
       await env.keeper.tick();
       await env.links.tick();
     }
+    expect(env.machine.status).toBe("sleeping");
     expect(env.accepted() - start).toBeGreaterThanOrEqual(28);
     const sleptAt = env.machine.slept_at! * 1000;
     const lastRequestAt = env.status().keepAwake!.lastRequestAt!;

@@ -473,7 +473,7 @@ describe("installMachineKeeperHost keep-awake (#17918)", () => {
     const listener: KeepAwakeListener = {
       port: 40_100,
       expect: () => {},
-      take: () => true,
+      take: () => Date.now(),
       close: () => {
         closed += 1;
       },

@@ -35,7 +35,8 @@ function setup() {
   let mono = 0;
   let busy = true;
   const expected = new Set<string>();
-  const received = new Set<string>();
+  /** When each nonce reached it, by the wall clock. */
+  const received = new Map<string, number>();
   const listener: KeepAwakeListener & { closed: number } = {
     port: PORT,
     closed: 0,
@@ -44,7 +45,9 @@ function setup() {
     },
     take: (nonce) => {
       expected.delete(nonce);
-      return received.delete(nonce);
+      const at = received.get(nonce) ?? null;
+      received.delete(nonce);
+      return at;
     },
     close: () => {
       listener.closed += 1;
@@ -61,7 +64,7 @@ function setup() {
     const said = await answer(url.searchParams.get("a37_token"));
     if (said.reaches && url.pathname.startsWith(KEEP_AWAKE_PATH)) {
       const nonce = url.pathname.slice(KEEP_AWAKE_PATH.length);
-      if (expected.delete(nonce)) received.add(nonce);
+      if (expected.delete(nonce)) received.set(nonce, wall);
     }
     said.after?.();
     if (said.lost) throw new DOMException("The operation timed out.", "TimeoutError");
@@ -625,7 +628,11 @@ describe("what the keeper observed (#17976)", () => {
     env.answer(() => ({ status: 204, reaches: true, after: () => env.stepWall(2 * 60_000) }));
     await env.passes(1, 60_000);
     expect(env.keeper.status()).toMatchObject({ expiresAt: null });
-    expect(env.keeper.status().lastRequest).toEqual({ resourceId: RESOURCE, at: env.now() });
+    // When it arrived, before its answer came back two minutes later.
+    expect(env.keeper.status().lastRequest).toEqual({
+      resourceId: RESOURCE,
+      at: env.now() - 2 * 60_000,
+    });
   });
 
   it("sees no gap across a stretch the host spent idle", async () => {
@@ -638,6 +645,32 @@ describe("what the keeper observed (#17976)", () => {
     env.advance(60 * 60_000);
     env.setBusy(true);
     await env.passes(3, 10_000);
+    expect(env.keeper.status().gap).toBeUndefined();
+  });
+});
+
+describe("what the keeper observed, in order (#17976)", () => {
+  it("stamps a request when it arrived, though its answer came back much later", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    const arrivedAt = env.now() + 60_000;
+    env.answer(() => ({ status: 204, reaches: true, after: () => env.advance(8_000) }));
+    await env.passes(1, 60_000);
+    expect(env.keeper.status().lastRequest?.at).toBe(arrivedAt);
+    expect(env.now()).toBe(arrivedAt + 8_000);
+  });
+
+  it("sees no gap across idle time an arm saw, though the URL is for the same machine", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(1, 10_000);
+    env.setBusy(false);
+    env.advance(5 * 60_000);
+    await env.arm(URL_B, env.now() + 8 * DAY);
+    env.setBusy(true);
+    await env.passes(2, 10_000);
     expect(env.keeper.status().gap).toBeUndefined();
   });
 });

@@ -9,8 +9,11 @@ export interface KeepAwakeListener {
   readonly port: number;
   /** A nonce a coming request should carry; a few may be outstanding at once. */
   expect(nonce: string): void;
-  /** Whether a request carrying `nonce` reached this listener, forgetting it either way. */
-  take(nonce: string): boolean;
+  /**
+   * When a request carrying `nonce` reached this listener, by its wall clock,
+   * or null if none did; forgetting it either way.
+   */
+  take(nonce: string): number | null;
   close(): void;
 }
 
@@ -202,7 +205,10 @@ export class KeepAwakeKeeper {
       reachedAt: null,
     };
     let outcome: Outcome | null = null;
-    if (this.deps.idle.observation().busy) {
+    const busy = this.deps.idle.observation().busy;
+    // Seen idle here: the next busy pass is no gap after the one before.
+    if (!busy) this.lastBusyPass = null;
+    if (busy) {
       const check = new AbortController();
       this.verifying = check;
       try {
@@ -400,11 +406,21 @@ export class KeepAwakeKeeper {
     this.lastSentAt = startedAt;
   }
 
-  /** Whether the request reached this listener; one that did is what the host last saw reach it. */
+  /**
+   * Whether the request reached this listener; one that did is what the host
+   * last saw reach it, at the moment it arrived, not when its answer came back.
+   */
   private arrived(listener: KeepAwakeListener, nonce: string, held: HeldUrl): boolean {
-    const arrived = listener.take(nonce);
-    if (arrived) this.lastRequest = { resourceId: held.resourceId, at: this.now() };
-    return arrived;
+    const at = listener.take(nonce);
+    if (at === null) return false;
+    if (
+      !this.lastRequest ||
+      this.lastRequest.resourceId !== held.resourceId ||
+      at > this.lastRequest.at
+    ) {
+      this.lastRequest = { resourceId: held.resourceId, at };
+    }
+    return true;
   }
 
   /** A busy pass: one too long after the last, or with the clocks apart, is a gap of unknown cause. */

@@ -26,11 +26,16 @@ describe("openKeepAwakeListener (#17918)", () => {
 
     const first = nonce();
     listener.expect(first);
+    const before = Date.now();
     expect(await get(listener, `${KEEP_AWAKE_PATH}${first}?a=1`)).toBe(204);
-    expect(listener.take(first)).toBe(true);
+    const after = Date.now();
+    // When it arrived, not when it was taken.
+    const at = listener.take(first);
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(after);
     // Used once: the same nonce again finds nothing.
     expect(await get(listener, `${KEEP_AWAKE_PATH}${first}`)).toBe(404);
-    expect(listener.take(first)).toBe(false);
+    expect(listener.take(first)).toBeNull();
   });
 
   it("answers several outstanding nonces, each once, whichever arrives first", async () => {
@@ -43,9 +48,9 @@ describe("openKeepAwakeListener (#17918)", () => {
     // A replay before the keeper looked finds nothing more.
     expect(await get(listener, `${KEEP_AWAKE_PATH}${b}`)).toBe(404);
     expect(await get(listener, `${KEEP_AWAKE_PATH}${a}`)).toBe(204);
-    expect(listener.take(a)).toBe(true);
-    expect(listener.take(b)).toBe(true);
-    expect(listener.take(b)).toBe(false);
+    expect(listener.take(a)).not.toBeNull();
+    expect(listener.take(b)).not.toBeNull();
+    expect(listener.take(b)).toBeNull();
   });
 
   it("answers 404 to anything else, and records nothing", async () => {
@@ -56,11 +61,11 @@ describe("openKeepAwakeListener (#17918)", () => {
     expect(await get(listener, "/")).toBe(404);
     expect(await get(listener, `${KEEP_AWAKE_PATH}${nonce()}`)).toBe(404);
     expect(await get(listener, `${KEEP_AWAKE_PATH}${expected}`, "POST")).toBe(404);
-    expect(listener.take(expected)).toBe(false);
+    expect(listener.take(expected)).toBeNull();
     // A nonce of the wrong shape is never answered, even when told to expect it.
     listener.expect("not-a-nonce");
     expect(await get(listener, `${KEEP_AWAKE_PATH}not-a-nonce`)).toBe(404);
-    expect(listener.take("not-a-nonce")).toBe(false);
+    expect(listener.take("not-a-nonce")).toBeNull();
   });
 
   it("stops answering once closed", async () => {

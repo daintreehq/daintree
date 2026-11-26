@@ -35,7 +35,7 @@ const CALL_TIMEOUT_MS = 30_000;
 const ARM_TIMEOUT_MS = 60_000;
 
 const TOO_OLD =
-  "The Daintree on this machine is too old to send requests through a link while it sees work with no device connected. Update Daintree there to let it.";
+  "The Daintree on this machine is too old to send requests through a link while it sees work with no device connected. Update Daintree on the machine to turn this on.";
 
 type KeepAwakeProvider = CloudProvider & Required<Pick<CloudProvider, "keepAwakeUrl">>;
 
