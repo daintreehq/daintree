@@ -80,12 +80,16 @@ function rsaKey(reader: WireReader): boolean {
   const n = reader.positiveMpint();
   if (!e || !n) return false;
   const modulus = n[0] === 0 ? n.subarray(1) : n;
+  const exponent = e[0] === 0 ? e.subarray(1) : e;
   const bits = modulus.length * 8 - Math.clz32(modulus[0]!) + 24;
   if (bits < 1024 || bits > 16384) return false;
+  // A modulus is a product of odd primes; an exponent is odd and above 1.
+  if ((modulus.at(-1)! & 1) === 0 || (exponent.at(-1)! & 1) === 0) return false;
+  if (exponent.length === 1 && exponent[0]! < 3) return false;
   return acceptedKey({
     kty: "RSA",
     n: base64url(modulus),
-    e: base64url(e[0] === 0 ? e.subarray(1) : e),
+    e: base64url(exponent),
   });
 }
 

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createLogger } from "../../utils/logger.js";
 import {
@@ -44,7 +45,8 @@ const LISTENER_TITLE = /^sshd: (\S.*?) \[listener\] \d+ of [\d-]+ startups$/;
 const GLOB = /[*?[]/;
 
 export type ConfigDumpResult =
-  | { ok: true; stdout: string }
+  /** `cwd` is the directory the dump ran in, where it resolved any relative `HostKey`. */
+  | { ok: true; stdout: string; cwd: string }
   | { ok: false; reason: "unsupported" | "denied" | "failed" | "timed-out" };
 
 interface FileIdentity {
@@ -62,8 +64,11 @@ export interface SshHostKeyReaderDeps {
   readlink(file: string): Promise<string>;
   /** The only way a key file is opened: the reader asks only for `.pub` siblings. */
   open(file: string, flags: number): Promise<fs.FileHandle>;
-  /** Identity of a configured private key, to keep it from being opened under another name. */
-  stat(file: string): Promise<FileIdentity>;
+  /**
+   * Identity of a configured private key, to keep it from being opened under
+   * another name, or of a config file before it is read.
+   */
+  stat(file: string): Promise<FileIdentity & { size: number; isFile(): boolean }>;
   /** A `.pub`'s own entry, symlink unfollowed, checked before it is opened. */
   lstat(file: string): Promise<FileIdentity & { isFile(): boolean }>;
   /** Whether this user can read a file, or list a directory, `sshd -G` would include. */
@@ -94,6 +99,8 @@ interface Candidate {
   startTime: string;
   /** Null when the command line couldn't be read or recovered. */
   argv: string[] | null;
+  /** Retitled as a listener, which no connection's process is. */
+  titled: boolean;
 }
 
 function errnoOf(error: unknown): string | null {
@@ -109,11 +116,42 @@ function parseStat(stat: string): { ppid: number; startTime: string } | null {
   return Number.isInteger(ppid) && startTime ? { ppid, startTime } : null;
 }
 
-/** `HostKey` named by one `-o` line, as sshd reads it: keyword, then `=` or whitespace. */
-function overrideHostKey(line: string): string | null {
-  const match = /^\s*hostkey\s*(?:=\s*|\s+)(.+?)\s*$/i.exec(line);
-  return match ? match[1]!.replace(/^"(.*)"$/, "$1") : null;
+/**
+ * A config line's arguments as sshd splits them: on spaces and tabs, a
+ * double-quoted argument whole, and a `#` starting an argument ending the line.
+ */
+function configTokens(rest: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < rest.length) {
+    while (rest[i] === " " || rest[i] === "\t") i++;
+    if (i >= rest.length || rest[i] === "#") break;
+    if (rest[i] === '"') {
+      const end = rest.indexOf('"', i + 1);
+      if (end < 0) return [];
+      tokens.push(rest.slice(i + 1, end));
+      i = end + 1;
+    } else {
+      const start = i;
+      while (i < rest.length && rest[i] !== " " && rest[i] !== "\t") i++;
+      tokens.push(rest.slice(start, i));
+    }
+  }
+  return tokens;
 }
+
+/** The arguments of a config line for `keyword`, as `keyword value` or `keyword=value`. */
+function configArguments(line: string, keyword: string): string[] | null {
+  const match = new RegExp(`^\\s*${keyword}(?:\\s*=\\s*|[ \\t]+)(.*)$`, "i").exec(line);
+  return match ? configTokens(match[1]!) : null;
+}
+
+/** `HostKey` named by one `-o` line. */
+function overrideHostKey(line: string): string | null {
+  return configArguments(line, "hostkey")?.[0] ?? null;
+}
+
+const isNone = (file: string) => file.toLowerCase() === "none";
 
 /** sshd's options, by its getopt string, from argv after the program name. */
 export function parseSshdArgs(args: readonly string[]): SshdOptions | null {
@@ -179,23 +217,43 @@ async function readOrNull(deps: SshHostKeyReaderDeps, file: string): Promise<str
   }
 }
 
+/** `mountinfo` escapes space, tab, newline and backslash as octal. */
+const unescapeMount = (field: string) =>
+  field.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+
 /**
- * What a process sees as `/`: the device and the path within it of its root
- * mount, from `mountinfo`, which anyone may read. Another container's or a
- * chroot's root differs; a sandboxed unit's private mount namespace doesn't.
+ * The mount `file` lies on, as a process sees it: the device, the path within
+ * it, and where it is mounted, from `mountinfo`, which anyone may read. Another
+ * container's or a chroot's root differs, and so does a directory bound over
+ * in a daemon's own namespace; a sandboxed unit's private copy of the same
+ * mounts doesn't.
  */
-function rootMount(mountinfo: string | null): string | null {
-  for (const line of mountinfo?.split("\n") ?? []) {
+export function coveringMount(mountinfo: string, file: string): string | null {
+  let best: { point: string; id: string } | null = null;
+  for (const line of mountinfo.split("\n")) {
     const fields = line.split(" ");
-    if (fields[4] === "/") return `${fields[2]} ${fields[3]}`;
+    if (fields.length < 5) continue;
+    const point = unescapeMount(fields[4]!);
+    const covers = point === "/" || file === point || file.startsWith(`${point}/`);
+    // Later lines are mounted over earlier ones at the same point.
+    if (covers && (!best || point.length >= best.point.length)) {
+      best = { point, id: `${fields[2]} ${fields[3]} ${point}` };
+    }
   }
-  return null;
+  return best?.id ?? null;
 }
 
-async function rootView(
-  deps: SshHostKeyReaderDeps,
-  pid: number
-): Promise<"same" | "different" | "unknown"> {
+type View = { kind: "different" | "unknown" } | { kind: "same"; own: string; theirs: string };
+
+/** Whether every one of `files` is the same file to the daemon as to this Host. */
+function sameFiles(view: Extract<View, { kind: "same" }>, files: readonly string[]): boolean {
+  return files.every((file) => {
+    const own = coveringMount(view.own, file);
+    return own !== null && own === coveringMount(view.theirs, file);
+  });
+}
+
+async function viewOf(deps: SshHostKeyReaderDeps, pid: number): Promise<View> {
   const proc = (rest: string) => path.posix.join(deps.procRoot, rest);
   const [ownStatus, theirStatus, ownMounts, theirMounts] = await Promise.all([
     readOrNull(deps, proc("self/status")),
@@ -212,11 +270,12 @@ async function rootView(
       .split(/\s+/).length ?? null;
   const ownDepth = depth(ownStatus);
   const theirDepth = depth(theirStatus);
-  if (ownDepth !== null && theirDepth !== null && theirDepth > ownDepth) return "different";
-  const own = rootMount(ownMounts);
-  const theirs = rootMount(theirMounts);
-  if (own === null || theirs === null) return "unknown";
-  return own === theirs ? "same" : "different";
+  if (ownDepth !== null && theirDepth !== null && theirDepth > ownDepth) {
+    return { kind: "different" };
+  }
+  if (ownMounts === null || theirMounts === null) return { kind: "unknown" };
+  const view = { kind: "same" as const, own: ownMounts, theirs: theirMounts };
+  return sameFiles(view, ["/"]) ? view : { kind: "different" };
 }
 
 async function candidateOf(deps: SshHostKeyReaderDeps, pid: number): Promise<Candidate | null> {
@@ -233,12 +292,12 @@ async function candidateOf(deps: SshHostKeyReaderDeps, pid: number): Promise<Can
     : [];
   if (argv.length === 1 && argv[0]!.startsWith("sshd: ")) {
     const title = LISTENER_TITLE.exec(argv[0]!);
-    if (title) return { pid, ...parsed, argv: title[1]!.split(" ") };
+    if (title) return { pid, ...parsed, argv: title[1]!.split(" "), titled: true };
     // A connection's title starts with its user (`sshd: alice [priv]`, `[accepted]`); a
     // listener's with its program path, which a long title can lose its end past.
-    return argv[0]!.startsWith("sshd: /") ? { pid, ...parsed, argv: null } : null;
+    return argv[0]!.startsWith("sshd: /") ? { pid, ...parsed, argv: null, titled: true } : null;
   }
-  return { pid, ...parsed, argv: argv.length > 0 ? argv : null };
+  return { pid, ...parsed, argv: argv.length > 0 ? argv : null, titled: false };
 }
 
 async function mapLimited<T, R>(
@@ -253,26 +312,46 @@ async function mapLimited<T, R>(
   return results;
 }
 
-/** Whether every `Include` of `configFile` is one this user can read, so `-G` saw it all. */
+/** The config file, when it is a regular file small enough to read and not a configured key. */
+async function readConfig(
+  deps: SshHostKeyReaderDeps,
+  configFile: string,
+  privateInodes: ReadonlySet<string>
+): Promise<string | null> {
+  const info = await deps.stat(configFile).catch(() => null);
+  if (!info || !info.isFile() || info.size > MAX_CONFIG_FILE_BYTES) return null;
+  if (privateInodes.has(`${info.dev}:${info.ino}`)) return null;
+  return readOrNull(deps, configFile);
+}
+
+/**
+ * Whether every `Include` of `configFile` is one this user can read, so `-G`
+ * saw it all: OpenSSH skips a glob it can't list as if nothing matched. Only
+ * the main file's own includes are checked.
+ */
 async function includesReadable(
   deps: SshHostKeyReaderDeps,
   configFile: string,
-  privateKeys: ReadonlySet<string>
+  privateInodes: ReadonlySet<string>
 ): Promise<boolean> {
-  if (privateKeys.has(configFile)) return false;
-  const text = await readOrNull(deps, configFile);
-  if (text === null || text.length > MAX_CONFIG_FILE_BYTES) return false;
+  const text = await readConfig(deps, configFile, privateInodes);
+  if (text === null) return false;
+  const sshdDir = path.posix.dirname(deps.defaultConfigFile);
   for (const line of text.split("\n")) {
-    const match = /^\s*include\s+(.+?)\s*$/i.exec(line);
-    if (!match) continue;
-    for (const raw of match[1]!.split(/\s+/)) {
-      const sshdDir = path.posix.dirname(deps.defaultConfigFile);
-      const pattern = path.posix.resolve(sshdDir, raw.replace(/^"(.*)"$/, "$1"));
+    for (const raw of configArguments(line, "include") ?? []) {
+      const pattern = path.posix.resolve(sshdDir, raw);
       const dir = path.posix.dirname(pattern);
       // A glob above the last component can't be checked one directory at a time.
       if (GLOB.test(dir)) return false;
-      const listed = GLOB.test(path.posix.basename(pattern));
-      if (!(await deps.canRead(listed ? dir : pattern, listed))) return false;
+      if (!(await deps.canRead(dir, true))) return false;
+      // A literal that names nothing is skipped by sshd too; one that exists must be readable.
+      if (!GLOB.test(path.posix.basename(pattern))) {
+        const exists = await deps.lstat(pattern).then(
+          () => true,
+          (error: unknown) => errnoOf(error) !== "ENOENT"
+        );
+        if (exists && !(await deps.canRead(pattern, false))) return false;
+      }
     }
   }
   return true;
@@ -354,138 +433,177 @@ interface Budget {
   bytes: number;
 }
 
-async function readListener(
+/** A listener once its `HostKey`s are known, before any `.pub` is read. */
+interface Resolved {
+  candidate: Candidate;
+  gaps: Set<SshListenerGap>;
+  configFile: string | null;
+  listenAddresses: string[];
+  /** Null when what identifies the listener couldn't be learned. */
+  listenerId: string | null;
+  hostKeys: string[];
+  /** Read no keys: the daemon's paths aren't known to be this Host's. */
+  withhold: boolean;
+  view: View;
+}
+
+async function resolveListener(
   deps: SshHostKeyReaderDeps,
   candidate: Candidate,
   options: SshdOptions | null,
-  deadline: number,
-  budget: Budget
-): Promise<SshListenerReading> {
-  const gaps = new Set<SshListenerGap>();
-  const configFile =
-    options?.configFile && options.configFile.length <= MAX_SSH_PATH_LENGTH
-      ? options.configFile
-      : null;
-  const reading = (
-    keys: SshHostKeyFile[],
-    listenAddresses: string[] = [],
-    identified = false
-  ): SshListenerReading => ({
-    listenerId: identified ? listenerIdOf(configFile, listenAddresses) : null,
-    pid: candidate.pid,
-    complete: gaps.size === 0 && keys.length > 0 && keys.every((key) => key.outcome === "read"),
-    gaps: [...gaps],
-    configFile,
-    listenAddresses,
-    keys,
-  });
+  deadline: number
+): Promise<Resolved> {
+  const resolved: Resolved = {
+    candidate,
+    gaps: new Set(),
+    configFile:
+      options?.configFile && options.configFile.length <= MAX_SSH_PATH_LENGTH
+        ? options.configFile
+        : null,
+    listenAddresses: [],
+    listenerId: null,
+    hostKeys: [],
+    withhold: true,
+    view: { kind: "unknown" },
+  };
+  const { gaps, configFile } = resolved;
   if (!options || (options.configFile !== null && configFile === null)) {
     gaps.add("command-line-unreadable");
-    return reading([]);
+    return resolved;
   }
-  const view = await rootView(deps, candidate.pid);
-  if (view !== "same") {
-    gaps.add(view === "different" ? "other-namespace" : "namespace-unknown");
-    return reading([]);
+  resolved.view = await viewOf(deps, candidate.pid);
+  if (resolved.view.kind !== "same") {
+    gaps.add(resolved.view.kind === "different" ? "other-namespace" : "namespace-unknown");
+    return resolved;
   }
   const named = [...options.hostKeys, ...options.overrideHostKeys];
   if (
-    (configFile !== null && configFile !== "none" && contextDependent(configFile)) ||
+    (configFile !== null && !isNone(configFile) && contextDependent(configFile)) ||
     named.some(contextDependent)
   ) {
     gaps.add("relative-path");
-    return reading([]);
+    return resolved;
   }
+  resolved.withhold = false;
+  resolved.hostKeys = named;
 
   // The kernel's link to the running binary, else the absolute program name it was started as,
   // which is also where an upgrade that replaced the running binary put the new one.
   const exe = await deps
     .readlink(path.posix.join(deps.procRoot, String(candidate.pid), "exe"))
     .catch(() => null);
-  const named0 = exe && !exe.endsWith(" (deleted)") ? exe : candidate.argv![0]!;
-  const binary = path.posix.isAbsolute(named0) ? await deps.trustBinary(named0) : null;
-
-  let hostKeys = named;
-  let listenAddresses: string[] = [];
-  let identified = false;
+  const program = exe && !exe.endsWith(" (deleted)") ? exe : candidate.argv![0]!;
+  const binary = path.posix.isAbsolute(program) ? await deps.trustBinary(program) : null;
   const remaining = deadline - deps.now();
   if (binary === null) {
     gaps.add("untrusted-binary");
-  } else if (remaining <= 0) {
-    gaps.add("timed-out");
-  } else {
-    const dump = await deps.runConfigDump(
-      binary,
-      ["-G", ...options.replay],
-      Math.min(CONFIG_DUMP_TIMEOUT_MS, remaining)
-    );
-    if (dump.ok) {
-      const parsed = parseConfigDump(dump.stdout);
-      hostKeys = parsed.hostKeys;
-      const fitting = parsed.listenAddresses.filter(
-        (address) => address.length <= MAX_SSH_LISTEN_ADDRESS_LENGTH
-      );
-      if (
-        fitting.length > MAX_SSH_LISTEN_ADDRESSES ||
-        fitting.length < parsed.listenAddresses.length
-      ) {
-        gaps.add("truncated");
-      }
-      listenAddresses = fitting.slice(0, MAX_SSH_LISTEN_ADDRESSES);
-      identified = true;
-      if (
-        configFile !== "none" &&
-        !(await includesReadable(deps, configFile ?? deps.defaultConfigFile, new Set(hostKeys)))
-      ) {
-        gaps.add("config-unreadable");
-      }
-    } else {
-      gaps.add(
-        dump.reason === "unsupported"
-          ? "config-dump-unavailable"
-          : dump.reason === "denied"
-            ? "config-unreadable"
-            : dump.reason === "timed-out"
-              ? "timed-out"
-              : "config-dump-failed"
-      );
-    }
+    return resolved;
   }
-
-  const unique = [...new Set(hostKeys)];
-  const fitting = unique.filter((key) => key.length + ".pub".length <= MAX_SSH_PATH_LENGTH);
-  if (fitting.length < unique.length || fitting.length > MAX_SSH_HOST_KEYS_PER_LISTENER) {
+  if (remaining <= 0) {
+    gaps.add("timed-out");
+    return resolved;
+  }
+  const dump = await deps.runConfigDump(
+    binary,
+    ["-G", ...options.replay],
+    Math.min(CONFIG_DUMP_TIMEOUT_MS, remaining)
+  );
+  if (!dump.ok) {
+    gaps.add(
+      dump.reason === "unsupported"
+        ? "config-dump-unavailable"
+        : dump.reason === "denied"
+          ? "config-unreadable"
+          : dump.reason === "timed-out"
+            ? "timed-out"
+            : "config-dump-failed"
+    );
+    return resolved;
+  }
+  const parsed = parseConfigDump(dump.stdout);
+  // sshd made a relative `HostKey` absolute against the dump's directory; the daemon's is unknown.
+  const relativeTo = `${dump.cwd.replace(/\/+$/, "")}/`;
+  resolved.hostKeys = parsed.hostKeys.map((key) =>
+    key.startsWith(relativeTo) ? key.slice(relativeTo.length) : key
+  );
+  const fitting = parsed.listenAddresses.filter(
+    (address) => address.length <= MAX_SSH_LISTEN_ADDRESS_LENGTH
+  );
+  if (fitting.length > MAX_SSH_LISTEN_ADDRESSES || fitting.length < parsed.listenAddresses.length) {
     gaps.add("truncated");
   }
-  const configured = new Set(unique);
-  const privateInodes = new Set<string>();
-  for (const key of unique) {
-    if (contextDependent(key)) continue;
-    const info = await deps.stat(key).catch(() => null);
-    if (info) privateInodes.add(`${info.dev}:${info.ino}`);
-  }
-  const keys: SshHostKeyFile[] = [];
-  for (const hostKey of fitting.slice(0, MAX_SSH_HOST_KEYS_PER_LISTENER)) {
-    const key = await readPublicSibling(deps, hostKey, configured, privateInodes);
-    const size =
-      key.hostKeyPath.length +
-      key.publicKeyPath.length +
-      (key.outcome === "read" ? key.publicKey.length : 0);
-    if (size > budget.bytes) {
-      gaps.add("truncated");
-      break;
+  resolved.listenAddresses = fitting.slice(0, MAX_SSH_LISTEN_ADDRESSES);
+  resolved.listenerId = listenerIdOf(configFile, parsed.listenAddresses);
+  return resolved;
+}
+
+async function finishListener(
+  deps: SshHostKeyReaderDeps,
+  resolved: Resolved,
+  configuredAll: ReadonlySet<string>,
+  privateInodes: ReadonlySet<string>,
+  budget: Budget
+): Promise<SshListenerReading> {
+  const { candidate, gaps, configFile } = resolved;
+  let keys: SshHostKeyFile[] = [];
+  let listenerId = resolved.listenerId;
+  const unique = [...new Set(resolved.hostKeys)];
+  const configPath = configFile ?? deps.defaultConfigFile;
+  if (!resolved.withhold && resolved.view.kind === "same") {
+    const files = unique
+      .filter((key) => !contextDependent(key))
+      .flatMap((key) => [key, `${key}.pub`]);
+    if (!isNone(configPath)) files.push(configPath);
+    // A directory bound over in the daemon's own namespace holds other files than this Host sees.
+    if (!sameFiles(resolved.view, files)) {
+      gaps.add("other-namespace");
+      resolved.withhold = true;
     }
-    budget.bytes -= size;
-    keys.push(key);
+  }
+  if (
+    !resolved.withhold &&
+    listenerId !== null &&
+    !isNone(configPath) &&
+    !(await includesReadable(deps, configPath, privateInodes))
+  ) {
+    gaps.add("config-unreadable");
+  }
+  if (!resolved.withhold) {
+    const fitting = unique.filter((key) => key.length + ".pub".length <= MAX_SSH_PATH_LENGTH);
+    if (fitting.length < unique.length || fitting.length > MAX_SSH_HOST_KEYS_PER_LISTENER) {
+      gaps.add("truncated");
+    }
+    for (const hostKey of fitting.slice(0, MAX_SSH_HOST_KEYS_PER_LISTENER)) {
+      const key = await readPublicSibling(deps, hostKey, configuredAll, privateInodes);
+      const size =
+        key.hostKeyPath.length +
+        key.publicKeyPath.length +
+        (key.outcome === "read" ? key.publicKey.length : 0);
+      if (size > budget.bytes) {
+        gaps.add("truncated");
+        break;
+      }
+      budget.bytes -= size;
+      keys.push(key);
+    }
   }
 
   // A pid reused mid-read would join two processes' evidence.
   const after = await readOrNull(deps, path.posix.join(deps.procRoot, `${candidate.pid}/stat`));
   if (after === null || parseStat(after)?.startTime !== candidate.startTime) {
     gaps.add("exited");
-    return reading([]);
+    keys = [];
   }
-  return reading(keys, listenAddresses, identified);
+  if (gaps.has("exited") || resolved.withhold) listenerId = null;
+  return {
+    listenerId,
+    pid: candidate.pid,
+    complete: gaps.size === 0 && keys.length > 0 && keys.every((key) => key.outcome === "read"),
+    gaps: [...gaps],
+    configFile,
+    listenAddresses: resolved.listenAddresses,
+    keys,
+  };
 }
 
 /**
@@ -514,8 +632,9 @@ export async function readSshHostKeys(deps: SshHostKeyReaderDeps): Promise<SshHo
 
   const listeners: Array<{ candidate: Candidate; options: SshdOptions | null }> = [];
   for (const candidate of candidates) {
-    // Before OpenSSH 8.2 a connection's process keeps the listener's argv for a moment.
-    if (sshdPids.has(candidate.ppid)) continue;
+    // Before OpenSSH 8.2 a connection's process keeps the listener's argv for a moment. A
+    // listener's title is no connection's, though: that daemon was reparented to an sshd PID 1.
+    if (!candidate.titled && sshdPids.has(candidate.ppid)) continue;
     const options = candidate.argv ? parseSshdArgs(candidate.argv.slice(1)) : null;
     if (options?.notAListener) continue;
     if (candidate.argv && path.posix.basename(candidate.argv[0]!) !== "sshd") continue;
@@ -526,9 +645,21 @@ export async function readSshHostKeys(deps: SshHostKeyReaderDeps): Promise<SshHo
   listeners.sort((a, b) => a.candidate.pid - b.candidate.pid);
   const truncated = listeners.length > MAX_SSH_LISTENERS;
   const budget: Budget = { bytes: MAX_SSH_ANSWER_KEY_BYTES };
-  const readings: SshListenerReading[] = [];
+  const resolved: Resolved[] = [];
   for (const { candidate, options } of listeners.slice(0, MAX_SSH_LISTENERS)) {
-    readings.push(await readListener(deps, candidate, options, deadline, budget));
+    resolved.push(await resolveListener(deps, candidate, options, deadline));
+  }
+  // Every listener's private keys, so no listener's `.pub` can be another's private key.
+  const configuredAll = new Set(resolved.flatMap((listener) => listener.hostKeys));
+  const privateInodes = new Set<string>();
+  for (const key of configuredAll) {
+    if (contextDependent(key)) continue;
+    const info = await deps.stat(key).catch(() => null);
+    if (info) privateInodes.add(`${info.dev}:${info.ino}`);
+  }
+  const readings: SshListenerReading[] = [];
+  for (const listener of resolved) {
+    readings.push(await finishListener(deps, listener, configuredAll, privateInodes, budget));
   }
 
   // Two listeners with one identity can't be told apart, so neither is a baseline; and
@@ -570,18 +701,34 @@ async function trustBinary(binary: string): Promise<string | null> {
   }
 }
 
-function runConfigDump(
+async function runConfigDump(
   binary: string,
   args: string[],
   timeoutMs: number
+): Promise<ConfigDumpResult> {
+  // sshd resolves a relative `HostKey` against its working directory: an empty one of its own
+  // shows which keys were relative, since the daemon's directory can't be read.
+  const made = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-sshd-g-"));
+  try {
+    const cwd = await fs.realpath(made);
+    return await dumpIn(binary, args, timeoutMs, cwd);
+  } finally {
+    await fs.rm(made, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function dumpIn(
+  binary: string,
+  args: string[],
+  timeoutMs: number,
+  cwd: string
 ): Promise<ConfigDumpResult> {
   return new Promise((resolve) => {
     execFile(
       binary,
       args,
       {
-        // sshd resolves a relative `HostKey` against its working directory, `/` under init.
-        cwd: "/",
+        cwd,
         timeout: timeoutMs,
         killSignal: "SIGKILL",
         maxBuffer: MAX_CONFIG_DUMP_BYTES,
@@ -589,7 +736,7 @@ function runConfigDump(
         windowsHide: true,
       },
       (error, stdout, stderr) => {
-        if (!error) return resolve({ ok: true, stdout });
+        if (!error) return resolve({ ok: true, stdout, cwd });
         if (errnoOf(error) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
           return resolve({ ok: false, reason: "failed" });
         }

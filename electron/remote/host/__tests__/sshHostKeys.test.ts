@@ -94,6 +94,8 @@ function processEntry(
   if (mountinfo !== null) fs.writeFileSync(path.join(dir, "mountinfo"), mountinfo);
 }
 
+const DUMP_CWD = "/tmp/daintree-sshd-g-fixture";
+
 /** This Host's root mount, and a container's overlay root. */
 const HOST_ROOT = "22 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n";
 const CONTAINER_ROOT = "601 512 0:52 / / rw,relatime master:9 - overlay overlay rw\n";
@@ -121,18 +123,21 @@ function fakeConfigDump(args: string[]): ConfigDumpResult {
     else if (args[i] === "-p") port = args[++i]!;
     else if (args[i] === "-o") {
       const match = /^HostKey[= ](.+)$/i.exec(args[++i]!);
-      if (match) keys.push(match[1]!);
+      if (match) keys.push(match[1]!.replace(/^"(.*)"$/, "$1"));
     }
   }
   let text: string;
   try {
-    text = configFile === "none" ? "" : fs.readFileSync(configFile, "utf8");
+    text = configFile.toLowerCase() === "none" ? "" : fs.readFileSync(configFile, "utf8");
   } catch {
     return { ok: false, reason: "denied" };
   }
   for (const line of text.split("\n")) {
     const [keyword, value] = line.trim().split(/\s+/);
-    if (keyword?.toLowerCase() === "hostkey" && value) keys.push(value);
+    // A relative HostKey comes out absolute against the dump's working directory.
+    if (keyword?.toLowerCase() === "hostkey" && value) {
+      keys.push(path.posix.isAbsolute(value) ? value : `${DUMP_CWD}/${value}`);
+    }
     if (keyword?.toLowerCase() === "port" && value) port = value;
   }
   return {
@@ -142,6 +147,7 @@ function fakeConfigDump(args: string[]): ConfigDumpResult {
       `listenaddress 0.0.0.0:${port}`,
       ...keys.map((k) => `hostkey ${k}`),
     ].join("\n"),
+    cwd: DUMP_CWD,
   };
 }
 
@@ -284,12 +290,9 @@ describe("readSshHostKeys (#18257)", () => {
     );
     const outsideProc = touched.filter((entry) => !entry.file.startsWith(proc));
     // Each private key is stat-ed, to tell it from its .pub, and nothing more.
-    expect(
-      outsideProc
-        .filter((e) => e.how === "stat")
-        .map((e) => e.file)
-        .sort()
-    ).toEqual([...privateKeys].sort());
+    for (const key of privateKeys) {
+      expect(outsideProc.filter((e) => e.file === key).map((e) => e.how)).toEqual(["stat"]);
+    }
     const opened = outsideProc.filter((e) => e.how === "open").map((e) => e.file);
     expect(opened.sort()).toEqual([...privateKeys].map((file) => `${file}.pub`).sort());
     // Beyond its .pub siblings the reader reads only the configs it checks for includes.
@@ -362,16 +365,19 @@ describe("readSshHostKeys (#18257)", () => {
     expect(touched.filter((e) => e.how === "open").map((e) => e.file)).toEqual([`${rsa}.pub`]);
   });
 
-  it("says permission-denied for EACCES and EPERM alike, on the entry or the open", async () => {
+  it.each([
+    ["EACCES", "EPERM"],
+    ["EPERM", "EACCES"],
+  ])("says permission-denied for %s on the entry and %s on the open", async (onEntry, onOpen) => {
     standardDaemon();
     const denied = (code: string) => Object.assign(new Error(code), { code });
     const answer = await reading({
       lstat: async (file) => {
-        if (file.endsWith("rsa_key.pub")) throw denied("EACCES");
+        if (file.endsWith("rsa_key.pub")) throw denied(onEntry);
         return fsp.lstat(file);
       },
       open: async (file, flags) => {
-        if (file.endsWith("ed25519_key.pub")) throw denied("EPERM");
+        if (file.endsWith("ed25519_key.pub")) throw denied(onOpen);
         return fsp.open(file, flags);
       },
     });
@@ -379,6 +385,60 @@ describe("readSshHostKeys (#18257)", () => {
       "permission-denied",
       "permission-denied",
     ]);
+  });
+
+  it("refuses a .pub that is another listener's private key, unopened", async () => {
+    standardDaemon();
+    const tunnel = tunnelDaemon();
+    const ecdsa = path.join(tunnel, "keys/host_ecdsa");
+    fs.rmSync(`${ecdsa}.pub`);
+    fs.linkSync(path.join(etc, "ssh/ssh_host_rsa_key"), `${ecdsa}.pub`);
+    const answer = await reading();
+    expect(answer.listeners[1]!.keys.map((k) => k.outcome)).toEqual(["not-a-public-file"]);
+    expect(touched.some((e) => e.how === "open" && e.file === `${ecdsa}.pub`)).toBe(false);
+  });
+
+  it("leaves a daemon with its own mount over the key directory unread", async () => {
+    standardDaemon();
+    fs.rmSync(path.join(proc, "100"), { recursive: true });
+    const bound = `${HOST_ROOT}77 22 259:2 /srv/provider-ssh ${etc}/ssh ro,relatime - ext4 /dev/nvme0n1p2 ro\n`;
+    processEntry(100, { argv: [SSHD, "-D"], mountinfo: bound });
+    const answer = await reading();
+    expect(answer.listeners[0]).toMatchObject({
+      gaps: ["other-namespace"],
+      keys: [],
+      listenerId: null,
+    });
+    expect(touched.some((e) => e.how === "open")).toBe(false);
+  });
+
+  it("keeps a retitled listener whose parent is an sshd, as under a container's sshd PID 1", async () => {
+    standardDaemon();
+    processEntry(500, {
+      title: `sshd: ${SSHD} -D -p 2500 [listener] 0 of 10-100 startups`,
+      ppid: 100,
+    });
+    const answer = await reading();
+    expect(answer.listeners.map((l) => l.pid)).toEqual([100, 500]);
+  });
+
+  it("reports a relative HostKey from the config as relative, not as the dump resolved it", async () => {
+    config(path.join(etc, "ssh/sshd_config"), ["HostKey ssh_host_relative_key"]);
+    processEntry(100, { argv: [SSHD, "-D"] });
+    const answer = await reading();
+    expect(answer.listeners[0]!.keys).toEqual([
+      expect.objectContaining({ outcome: "relative-path", hostKeyPath: "ssh_host_relative_key" }),
+    ]);
+    expect(answer.listeners[0]!.complete).toBe(false);
+  });
+
+  it("reads a quoted -o HostKey with a space in its path", async () => {
+    const key = path.join(etc, "ssh dir/quoted_key");
+    keyPair(key, "ed25519");
+    processEntry(100, { argv: [SSHD, "-D", "-f", "NONE", "-o", `HostKey "${key}"`] });
+    const answer = await reading();
+    expect(answer.listeners[0]).toMatchObject({ gaps: [], complete: true });
+    expect(dumps[0]!.args).toEqual(["-G", "-f", "NONE", "-o", `HostKey "${key}"`]);
   });
 
   it("says a .pub holding something else is invalid", async () => {
@@ -476,6 +536,12 @@ describe("readSshHostKeys (#18257)", () => {
     fs.appendFileSync(conf, "Include sshd_config.d/*.conf\n");
     const included = path.join(etc, "ssh/sshd_config.d");
     fs.mkdirSync(included);
+    // A comment, a quoted path, a literal that names nothing and `Include=` are all fine.
+    fs.mkdirSync(path.join(etc, "ssh/more conf"));
+    fs.appendFileSync(
+      conf,
+      `Include "${etc}/ssh/more conf/*.conf" # extra\nInclude=${etc}/ssh/absent.conf\n`
+    );
     expect((await reading()).listeners[0]!.gaps).toEqual([]);
     unreadable.add(included);
     const answer = await reading();
@@ -490,11 +556,28 @@ describe("readSshHostKeys (#18257)", () => {
       const dump = fakeConfigDump(args);
       if (!dump.ok) return dump;
       const many = Array.from({ length: 65 }, (_, i) => `listenaddress 10.0.0.${i}:22`);
-      return { ok: true, stdout: `${dump.stdout}\n${many.join("\n")}` };
+      return { ...dump, stdout: `${dump.stdout}\n${many.join("\n")}` };
     };
     const answer = await reading();
     expect(answer.listeners[0]).toMatchObject({ gaps: ["truncated"], complete: false });
     expect(answer.listeners[0]!.listenAddresses).toHaveLength(64);
+  });
+
+  it("identifies a listener by all its addresses, not the ones an answer carries", async () => {
+    standardDaemon();
+    processEntry(110, { argv: [SSHD, "-D", "-p", "2110"] });
+    const first64 = Array.from({ length: 64 }, (_, i) => `listenaddress 10.0.0.${i}:22`);
+    dumpOverride = (args) => {
+      const extra = args.includes("2110") ? first64 : [...first64, "listenaddress 10.0.1.0:22"];
+      return { ok: true, stdout: extra.join("\n"), cwd: DUMP_CWD };
+    };
+    const answer = await reading();
+    expect(answer.listeners.map((l) => l.listenAddresses.length)).toEqual([64, 64]);
+    const [truncated, whole] = answer.listeners;
+    expect(truncated!.gaps).toEqual(["truncated"]);
+    expect(truncated!.listenerId).not.toBeNull();
+    expect(whole!.listenerId).not.toBeNull();
+    expect(truncated!.listenerId).not.toBe(whole!.listenerId);
   });
 
   it("gives no listener an id when some were left out, since one could share it", async () => {
@@ -719,6 +802,26 @@ describe("the host.ssh-host-keys link method", () => {
     };
     const answer = { status: "reading", complete: false, truncated: false, listeners: [listener] };
     expect(SshHostKeysAnswerSchema.safeParse(answer).success).toBe(false);
+    const read = {
+      outcome: "read",
+      hostKeyPath: "/k",
+      publicKeyPath: "/k.pub",
+      type: "ssh-ed25519",
+      publicKey: FIXTURE_KEYS.ed25519.line.split(" ").slice(0, 2).join(" "),
+      fingerprint: FIXTURE_KEYS.ed25519.fingerprint,
+    };
+    const whole = { ...listener, keys: [read] };
+    expect(
+      SshHostKeysAnswerSchema.safeParse({ ...answer, complete: true, listeners: [whole] }).success
+    ).toBe(true);
+    expect(
+      SshHostKeysAnswerSchema.safeParse({
+        ...answer,
+        complete: true,
+        truncated: true,
+        listeners: [whole],
+      }).success
+    ).toBe(false);
     const empty = { ...listener, keys: [] };
     expect(SshHostKeysAnswerSchema.safeParse({ ...answer, listeners: [empty] }).success).toBe(
       false

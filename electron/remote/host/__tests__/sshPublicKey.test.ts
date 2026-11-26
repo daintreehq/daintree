@@ -57,6 +57,16 @@ describe("parsePublicKeyFile", () => {
     const rsa = (n: Buffer) =>
       parsePublicKeyFile(`ssh-rsa ${wire(Buffer.from("ssh-rsa"), Buffer.from([1, 0, 1]), n)}`);
     expect(rsa(Buffer.from([17]))).toBeNull();
+    // The fixture's own modulus, made even, and its key with an exponent of 1.
+    const fixture = Buffer.from(FIXTURE_KEYS.rsa.line.split(" ")[1]!, "base64");
+    const modulus = Buffer.from(fixture.subarray(4 + 7 + 4 + 3 + 4));
+    expect(rsa(modulus)).not.toBeNull();
+    modulus[modulus.length - 1]! &= 0xfe;
+    expect(rsa(modulus)).toBeNull();
+    const exponentOne = parsePublicKeyFile(
+      `ssh-rsa ${wire(Buffer.from("ssh-rsa"), Buffer.from([1]), fixture.subarray(4 + 7 + 4 + 3 + 4))}`
+    );
+    expect(exponentOne).toBeNull();
     const [, realRsa] = FIXTURE_KEYS.rsa.line.split(" ");
     expect(parsePublicKeyFile(`ssh-rsa ${realRsa}`)).not.toBeNull();
     const sk = (application: string) =>
