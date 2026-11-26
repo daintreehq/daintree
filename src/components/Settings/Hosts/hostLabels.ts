@@ -16,6 +16,7 @@ import type {
   StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
+import type { CloudSshTrust } from "@shared/types/cloudHosts";
 
 import { sshRefusalAdvice } from "@shared/utils/sshRefusal";
 
@@ -458,4 +459,31 @@ export function removeHostOutcome(
     label: `Projects and Daintree on ${hostName} keep running`,
     sentence: `Projects and Daintree on ${hostName} keep running.`,
   };
+}
+
+/**
+ * Where this computer's trust in a host's SSH server comes from, for the
+ * host-key section: only what this computer itself checks, never a guess at
+ * the person's own SSH configuration.
+ */
+export function sshKeyTrustText(subject: {
+  connectionKind: "ssh" | "wsl" | "cloud";
+  providerName: string | null;
+  sshTrust: CloudSshTrust | null;
+  pinnedFingerprint: string | null;
+}): string {
+  if (subject.connectionKind === "wsl") {
+    return "This computer reaches the distribution through WSL, not SSH, so no host key is checked";
+  }
+  if (subject.connectionKind === "ssh") {
+    return "Your own SSH configuration decides which host key this computer accepts. Compare these with it";
+  }
+  const provider = subject.providerName ?? "The provider";
+  if (subject.sshTrust === "provider-tunnel") {
+    return `${provider}'s tunnel vouches for the machine, so no host key is pinned. A change shown here is the only sign its key moved`;
+  }
+  if (subject.pinnedFingerprint !== null) {
+    return `This computer pins ${subject.pinnedFingerprint} for the machine. A new key is trusted only when you confirm it`;
+  }
+  return "No host key is pinned for this machine yet";
 }

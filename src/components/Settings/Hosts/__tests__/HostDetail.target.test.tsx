@@ -12,6 +12,7 @@ const client = vi.hoisted(() => ({
   disconnect: vi.fn(async () => undefined),
   forget: vi.fn(async () => undefined),
   listClipboardGrants: vi.fn(async () => []),
+  readSshHostKeys: vi.fn(async () => ({ outcome: { status: "not-connected" }, baselines: [] })),
   listPluginViewConsents: vi.fn(async () => []),
   resetClipboardGrants: vi.fn(async () => undefined),
 }));

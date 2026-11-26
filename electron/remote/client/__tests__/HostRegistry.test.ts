@@ -798,3 +798,48 @@ describe("HostRegistry", () => {
     });
   });
 });
+
+describe("HostRegistry SSH host-key baselines", () => {
+  const baseline = {
+    listenerId: "main",
+    configFile: null,
+    listenAddresses: ["0.0.0.0:22"],
+    keys: [
+      { type: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}`, publicKey: "ssh-ed25519 AAAA" },
+    ],
+    readAt: 10,
+    change: null,
+  };
+
+  it("keeps them across a reopen and an unrelated write", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+    registry.recordSshHostKeyBaselines(host.id, host.connection, [baseline]);
+    registry.recordUse(host.id);
+    registry.update({ hostId: host.id, name: "Box two" });
+    expect(new HostRegistry(store).sshHostKeyBaselines(host.id)).toEqual([baseline]);
+  });
+
+  it("drops them when the host is removed or pointed at another machine", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const a = registry.add({ name: "a", connection: { kind: "ssh", target: "a" } });
+    const b = registry.add({ name: "b", connection: { kind: "ssh", target: "b" } });
+    registry.recordSshHostKeyBaselines(a.id, a.connection, [baseline]);
+    registry.recordSshHostKeyBaselines(b.id, b.connection, [baseline]);
+    registry.forget(a.id);
+    registry.update({ hostId: b.id, connection: { kind: "ssh", target: "c" } });
+    expect(registry.sshHostKeyBaselines(a.id)).toEqual([]);
+    expect(registry.sshHostKeyBaselines(b.id)).toEqual([]);
+    expect((store.value as RemoteHostsValue).sshHostKeys).toBeUndefined();
+  });
+
+  it("keeps nothing read over a connection the host no longer has", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+    registry.recordSshHostKeyBaselines(host.id, { kind: "ssh", target: "old" }, [baseline]);
+    registry.recordSshHostKeyBaselines("gone", { kind: "ssh", target: "box" }, [baseline]);
+    expect(registry.sshHostKeyBaselines(host.id)).toEqual([]);
+  });
+});
