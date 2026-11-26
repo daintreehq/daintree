@@ -93,7 +93,7 @@ const ledger = {
 describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)", () => {
   let runs: Map<string, OpenRun>;
   let relayCall: ReturnType<typeof vi.fn>;
-  let innerCalls: Array<{ helpSessionId: string; tool: string }>;
+  let innerCalls: Array<{ helpSessionId: string; tool: string; args: Record<string, unknown> }>;
   let invoke: ReturnType<typeof vi.fn<AgentMcpToolInvoker>>;
   let endpoints: AgentMcpEndpointRegistry;
   let tools: GlobalAssistantPluginTools;
@@ -153,8 +153,8 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
       openSession: async (spec: RelayMcpSessionSpec) => {
         const session: RelayMcpSession = {
           isOpen: () => true,
-          callTool: async (tool): Promise<CallToolResult> => {
-            innerCalls.push({ helpSessionId: spec.helpSessionId, tool });
+          callTool: async (tool, args): Promise<CallToolResult> => {
+            innerCalls.push({ helpSessionId: spec.helpSessionId, tool, args });
             return { content: [{ type: "text", text: `Unknown tool: ${tool}` }], isError: true };
           },
           close: () => {},
@@ -297,8 +297,8 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
       });
     }
     expect(innerCalls).toEqual([
-      { helpSessionId: "a", tool: "plugin.tools" },
-      { helpSessionId: "a", tool: "plugin.callTool" },
+      { helpSessionId: "a", tool: "plugin.tools", args: LIST.args },
+      { helpSessionId: "a", tool: "plugin.callTool", args: CALL.args },
     ]);
     expect(invoke).not.toHaveBeenCalled();
     expect(pluginMcpGrantRegistry.listForHelpSession("a")).toEqual([]);
@@ -339,11 +339,9 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
     expect(decorated).not.toBe(session);
     // Every other tool still reaches the project's own session, as sent.
     await decorated.callTool("terminal.list", { owned: true }, { timeoutMs: 1000, callId: "c-1" });
-    expect(inner).toHaveBeenCalledWith(
-      "terminal.list",
-      { owned: true },
-      { timeoutMs: 1000, callId: "c-1" }
-    );
+    expect(inner.mock.calls).toEqual([
+      ["terminal.list", { owned: true }, { timeoutMs: 1000, callId: "c-1" }],
+    ]);
     expect(pluginTools).not.toHaveBeenCalled();
   });
 });

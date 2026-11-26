@@ -13,6 +13,7 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
 import {
   makeProjectPluginInstanceKey,
   type LoadedPluginInfo,
@@ -538,6 +539,17 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
       expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThanOrEqual(
         DEFAULT_PLUGIN_TOOLS_PAGE_BYTES
       );
+      // The whole host.call answer around it still arrives whole.
+      const reply = {
+        outcome: "ok",
+        detail: null,
+        retryAfterMs: null,
+        callId: "00000000-0000-4000-8000-000000000000",
+        result: { isError: false, structured: page, text: null },
+      };
+      expect(Buffer.byteLength(JSON.stringify(reply), "utf8")).toBeLessThanOrEqual(
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
       names.push(...page.tools.map((row) => row.name));
       cursor = page.nextCursor;
       pages += 1;
@@ -589,6 +601,24 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("studio-01");
     expect(refuseWrite).toHaveBeenCalledWith(PROJECT_A);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("doesn't start the plugin for a call refused because another machine drives the project", async () => {
+    allowLedger();
+    tools.dispose();
+    tools = makeTools({ refuseWrite: () => "studio-01 has control of this project." });
+
+    const result = await tools.call(
+      SESSION,
+      PROJECT_A,
+      { pluginInstanceId: LEDGER, tool: "lookup", arguments: { id: "r-1" } },
+      signal()
+    );
+
+    expect(result.isError).toBe(true);
+    expect(activatePlugin).not.toHaveBeenCalled();
+    expect(grantIds().size).toBe(0);
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -677,6 +707,10 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
 
     const listed = structured(await pending);
     expect(listed.tools.map((row) => row.pluginInstanceId)).toEqual([CRM]);
+    // Said, so the Assistant lists again rather than taking the gap as final.
+    expect(listed.unavailable).toEqual([
+      { pluginInstanceId: LEDGER, reason: expect.stringContaining("List again") },
+    ]);
   });
 
   it("mints at the scope the answer gives now, not the one a slow resolution read", async () => {

@@ -21,7 +21,12 @@ import {
   type PluginToolSession,
 } from "./pluginSessionServer.js";
 import { assistantAgentMcpScopeFor } from "./projectEnablement.js";
-import type { AgentMcpToolScope, DeclaredAgentMcpPlugin } from "./types.js";
+import { SKILL_TOOL_NAMES } from "./skillTools.js";
+import {
+  DATABASE_ENDPOINT_ID,
+  type AgentMcpToolScope,
+  type DeclaredAgentMcpPlugin,
+} from "./types.js";
 
 /**
  * Structured `plugin.tools` replies are kept to this, inside the 50 KiB a
@@ -33,6 +38,12 @@ export const DEFAULT_PLUGIN_TOOLS_PAGE_BYTES = 32 * 1024;
 
 /** How much of why a plugin's tools couldn't be listed is passed on. */
 const MAX_UNAVAILABLE_REASON_CHARS = 300;
+/** A plugin's display name as a row carries it: manifests don't bound it. */
+const MAX_PLUGIN_NAME_CHARS = 120;
+/** What the first page spends on `off` and `unavailable` at most; the rest is counted. */
+const MAX_NOTES_BYTES = 8 * 1024;
+const LISTED_STALE =
+  "Its tools changed while they were being listed. List again with plugin.tools.";
 
 export interface GlobalAssistantPluginToolsDeps {
   /** The project's folder on this machine; null when it has no such project. */
@@ -108,6 +119,46 @@ function sameScope(a: AgentMcpToolScope, b: AgentMcpToolScope): boolean {
   );
 }
 
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function pluginName(plugin: DeclaredAgentMcpPlugin): string {
+  return clip(plugin.pluginDisplayName.trim() || plugin.pluginManifestId, MAX_PLUGIN_NAME_CHARS);
+}
+
+/** As many entries as fit `maxBytes`, and how many didn't. */
+function fitted<T>(entries: readonly T[], maxBytes: number): { kept: T[]; omitted: number } {
+  const kept: T[] = [];
+  let bytes = 2;
+  for (const entry of entries) {
+    const size = Buffer.byteLength(JSON.stringify(entry), "utf8") + 1;
+    if (bytes + size > maxBytes) break;
+    kept.push(entry);
+    bytes += size;
+  }
+  return { kept, omitted: entries.length - kept.length };
+}
+
+/** `work`, or `null` as soon as `signal` aborts, whichever is first. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 function keyOf(helpSessionId: string, projectId: string, pluginInstanceId: string): string {
   return `${helpSessionId}\u0000${projectId}\u0000${pluginInstanceId}`;
 }
@@ -116,7 +167,7 @@ function rowOf(launch: LaunchPlugin, tool: Tool): GlobalAssistantPluginToolRow {
   const group = (tool._meta as Record<string, unknown> | undefined)?.[TOOL_GROUP_META_KEY];
   return {
     pluginInstanceId: launch.plugin.pluginInstanceId,
-    plugin: launch.plugin.pluginDisplayName.trim() || launch.plugin.pluginManifestId,
+    plugin: pluginName(launch.plugin),
     name: tool.name,
     ...(tool.description !== undefined ? { description: tool.description } : {}),
     inputSchema: tool.inputSchema,
@@ -176,10 +227,8 @@ export class GlobalAssistantPluginTools {
     if (!Number.isSafeInteger(offset) || offset < 0) {
       return failure("cursor should be the nextCursor of an earlier plugin.tools answer.");
     }
-    const resolved = await this.resolve(helpSessionId, projectId);
+    const resolved = await this.resolve(helpSessionId, projectId, signal);
     if (typeof resolved === "string") return failure(resolved);
-    // Before any grant is minted or plugin started for a call already gone.
-    if (signal.aborted) return failure("The call was cancelled.");
     const only = args.pluginInstanceId;
     const launches = resolved.plugins.filter(
       (launch) => only === undefined || launch.plugin.pluginInstanceId === only
@@ -197,42 +246,56 @@ export class GlobalAssistantPluginTools {
     );
     if (signal.aborted) return failure("The call was cancelled.");
     if (this.disposed || !this.deps.isSessionLive(helpSessionId)) return failure(SESSION_ENDED);
-    // A plugin whose tools were taken away while another was still listing
-    // leaves no row behind.
-    const rows = listed.flatMap(({ launch, held, tools }) =>
-      held !== undefined && this.isServable(held.grant)
-        ? (tools ?? []).map((tool) => rowOf(launch, tool))
-        : []
+    // A plugin whose grant changed while another was still listing leaves no
+    // row behind, and says to list again: what it reaches now may differ.
+    const current = listed.map((entry) =>
+      entry.held !== undefined && !this.isServable(entry.held.grant)
+        ? { launch: entry.launch, error: LISTED_STALE }
+        : entry
     );
-    const unavailable = listed.flatMap(({ launch, error }) =>
-      error === undefined
-        ? []
-        : [
-            {
-              pluginInstanceId: launch.plugin.pluginInstanceId,
-              reason:
-                error.length > MAX_UNAVAILABLE_REASON_CHARS
-                  ? `${error.slice(0, MAX_UNAVAILABLE_REASON_CHARS)}…`
-                  : error,
-            },
-          ]
+    const rows = current.flatMap(({ launch, tools }) =>
+      (tools ?? []).map((tool) => rowOf(launch, tool))
     );
-    const off = resolved.declared
-      .filter(
-        ({ plugin, scope }) =>
-          scope === null && (only === undefined || plugin.pluginInstanceId === only)
-      )
-      .map(({ plugin }) => ({
-        pluginInstanceId: plugin.pluginInstanceId,
-        plugin: plugin.pluginDisplayName.trim() || plugin.pluginManifestId,
-      }));
+    // Said once, on the first page, within a bound of their own.
+    const first = offset === 0;
+    const unavailable = fitted(
+      first
+        ? current.flatMap(({ launch, error }) =>
+            error === undefined
+              ? []
+              : [
+                  {
+                    pluginInstanceId: launch.plugin.pluginInstanceId,
+                    reason: clip(error, MAX_UNAVAILABLE_REASON_CHARS),
+                  },
+                ]
+          )
+        : [],
+      MAX_NOTES_BYTES
+    );
+    const off = fitted(
+      first
+        ? resolved.declared
+            .filter(
+              ({ plugin, scope }) =>
+                scope === null && (only === undefined || plugin.pluginInstanceId === only)
+            )
+            .map(({ plugin }) => ({
+              pluginInstanceId: plugin.pluginInstanceId,
+              plugin: pluginName(plugin),
+            }))
+        : [],
+      MAX_NOTES_BYTES
+    );
     const budget = this.deps.pageBytes ?? DEFAULT_PLUGIN_TOOLS_PAGE_BYTES;
     const page: GlobalAssistantPluginToolRow[] = [];
-    let bytes = Buffer.byteLength(JSON.stringify({ unavailable, off }), "utf8") + 128;
+    let bytes =
+      Buffer.byteLength(JSON.stringify({ unavailable: unavailable.kept, off: off.kept }), "utf8") +
+      256;
     let next = offset;
     while (next < rows.length) {
       const size = Buffer.byteLength(JSON.stringify(rows[next]), "utf8") + 1;
-      // A page always carries at least one row, so a huge schema can't stall it.
+      // A page always carries at least one row, so a large schema can't stall it.
       if (page.length > 0 && bytes + size > budget) break;
       page.push(rows[next]);
       bytes += size;
@@ -241,8 +304,10 @@ export class GlobalAssistantPluginTools {
     return answer({
       tools: page,
       nextCursor: next < rows.length ? String(next) : null,
-      unavailable,
-      off,
+      unavailable: unavailable.kept,
+      off: off.kept,
+      ...(unavailable.omitted > 0 ? { unavailableOmitted: unavailable.omitted } : {}),
+      ...(off.omitted > 0 ? { offOmitted: off.omitted } : {}),
       stillLoading: resolved.pending,
     });
   }
@@ -267,7 +332,7 @@ export class GlobalAssistantPluginTools {
     }
     const toolArgs = args.arguments ?? {};
     if (!isPlainObject(toolArgs)) return failure("arguments should be an object.");
-    const resolved = await this.resolve(helpSessionId, projectId);
+    const resolved = await this.resolve(helpSessionId, projectId, signal);
     if (typeof resolved === "string") return failure(resolved);
     const launch = resolved.plugins.find(
       (candidate) => candidate.plugin.pluginInstanceId === pluginInstanceId
@@ -289,7 +354,12 @@ export class GlobalAssistantPluginTools {
         "No plugin with that pluginInstanceId offers tools in this project. Nothing was run. List them with plugin.tools."
       );
     }
-    if (signal.aborted) return failure("The call was cancelled. Nothing was run.");
+    // Refused before the plugin is started for it, and again as it dispatches,
+    // since another machine can take the project meanwhile.
+    if (!this.isHostRead(pluginInstanceId, tool)) {
+      const refused = this.deps.refuseWrite?.(projectId) ?? null;
+      if (refused !== null) return failure(refused);
+    }
     const held = this.heldFor(helpSessionId, projectId, launch);
     if (typeof held === "string") return failure(held);
     try {
@@ -315,15 +385,37 @@ export class GlobalAssistantPluginTools {
     for (const helpSessionId of sessions) this.grants.revokeHelpSession(helpSessionId);
   }
 
+  /**
+   * The project's plugins as an Assistant launch would find them, given up
+   * as soon as the call is cancelled or out of time: nothing is minted or
+   * started for a call already gone.
+   */
   private async resolve(
     helpSessionId: string,
-    projectId: string
+    projectId: string,
+    signal: AbortSignal
   ): Promise<LaunchPluginsReport | string> {
     if (this.disposed || !this.deps.isSessionLive(helpSessionId)) return SESSION_ENDED;
     if (!isProjectWorkspaceId(projectId)) return "That isn't one of this machine's projects.";
-    const root = await this.deps.projectRoot(projectId);
-    if (root === null) return "That isn't one of this machine's projects.";
-    return this.deps.resolvePlugins(projectId, root);
+    const resolved = await untilAborted(
+      (async () => {
+        const root = await this.deps.projectRoot(projectId);
+        return root === null ? null : this.deps.resolvePlugins(projectId, root);
+      })(),
+      signal
+    );
+    if (signal.aborted) return "The call was cancelled or ran out of time. Nothing was run.";
+    return resolved ?? "That isn't one of this machine's projects.";
+  }
+
+  /** A host-owned read: a skill's documentation, or a database tool the host vouches for. */
+  private isHostRead(pluginInstanceId: string, toolName: string): boolean {
+    if (SKILL_TOOL_NAMES.has(toolName)) return true;
+    return (
+      this.endpoints
+        .get(pluginInstanceId, DATABASE_ENDPOINT_ID)
+        ?.tools.find((candidate) => candidate.name === toolName)?.readOnly === true
+    );
   }
 
   /**
