@@ -465,6 +465,10 @@ jobs:
     # brew audit loads the cask the way a Mac does: both arches, the live feed.
     runs-on: macos-15
     timeout-minutes: 30
+    # The tap push goes through the deploy key, so the job token needs no
+    # more than the source checkout.
+    permissions:
+      contents: read
     # One tap writer across every tag, so two releases never race on its branch.
     # queue: max keeps every waiting job; the default keeps only the newest
     # arrival, so re-running an old tag could cancel a newer release's update.
@@ -690,7 +694,7 @@ jobs:
         run: |
           set -euo pipefail
           left=0
-          if [[ -e "$APP" ]]; then
+          if [[ -e "$APP" || -L "$APP" ]]; then
             echo "::error::$APP is still installed"
             left=1
           fi

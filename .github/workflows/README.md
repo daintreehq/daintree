@@ -77,7 +77,7 @@ Other secrets the release, nightly and plugin catalog workflows read:
 | `SENTRY_DSN` | Release builds | Error reporting DSN baked into the build |
 | `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET`, `STORE_PRODUCT_ID` | Windows release | Microsoft Store submission; skipped with a notice unless all five exist (see [`docs/distribution/microsoft-store.md`](../../docs/distribution/microsoft-store.md)) |
 | `PLUGIN_CATALOG_BOT_TOKEN` | `propose-plugin-catalog-updates.yml` | Fine-grained token with Contents and Pull requests read and write on `daintreehq/daintree`, which opens the catalog pull requests; a pull request opened with the workflow's own token would start no checks. Without it each run only lists what it would propose, with a notice (see [`plugins/README.md`](../../plugins/README.md#new-releases-of-a-listed-plugin)) |
-| `HOMEBREW_TAP_DEPLOY_KEY` | macOS release | Private half of a write-enabled deploy key on `daintreehq/homebrew-tap`, which `publish-homebrew-tap` checks the tap out with and pushes the cask through on stable tags; the tap job skips with a notice when it is missing, and `verify-homebrew-install` with it (see [`docs/release.md`](../../docs/release.md#homebrew-tap)) |
+| `HOMEBREW_TAP_DEPLOY_KEY` | macOS release | Private half of a write-enabled deploy key on `daintreehq/homebrew-tap`, which `publish-homebrew-tap` checks the tap out with and pushes the cask through on stable tags; when it is missing the tap update skips with a notice (the job itself passes) and `verify-homebrew-install` skips with it (see [`docs/release.md`](../../docs/release.md#homebrew-tap)) |
 
 ### 4. Publish URL
 
