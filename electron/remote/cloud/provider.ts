@@ -101,6 +101,15 @@ export type CloseOrderOutcome =
   { kind: "closed" } | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
 
 /**
+ * The machine a lease made. `leaseHourlyDollars` is the rate its lease runs
+ * at in dollars per running hour, as the provider reports it: a bidder can
+ * swap its offer as it is leased, so it can differ from the rate chosen.
+ * Null when the provider can't price it; left out when the lease always runs
+ * at the rate chosen.
+ */
+export type LeasedOffer = ProviderResource & { leaseHourlyDollars?: number | null };
+
+/**
  * A create that goes through offers (`createMode: "offers"`): an order is
  * placed, bidders answer it with offers, and the one the person chose is
  * leased. Each call asks the provider once; waiting for offers, and for the
@@ -141,7 +150,7 @@ export interface OfferCreate {
     orderId: string,
     offerId: string,
     expected?: { hourlyDollars: number }
-  ): Promise<ProviderResource>;
+  ): Promise<LeasedOffer>;
   /**
    * Closes an order nobody chose from: `closed` once it is, and when it
    * already was. Never ends a lease: when one of its offers was leased it

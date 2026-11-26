@@ -118,8 +118,10 @@ export interface FakeAkashLease {
   oseq: number;
   bseq: number;
   state: FakeAkashLeaseState;
-  /** uact per block, as decimal text. */
+  /** Per block, as decimal text, in `denom`. */
   price: string;
+  /** The bid's denom; uact when left out. */
+  denom?: string;
   createdHeight: number;
   /** Where the provider forwards the service's port 22 now; null while it reports nothing. */
   forwarded: { host: string | null; externalPort: number } | null;
@@ -502,7 +504,7 @@ export class FakeAkashConsole {
         bseq: lease.bseq,
       },
       state: lease.state,
-      price: { denom: "uact", amount: `${lease.price}` },
+      price: { denom: lease.denom ?? "uact", amount: `${lease.price}` },
       created_at: String(lease.createdHeight),
       closed_on: lease.state === "closed" ? String(this.height) : "0",
       ...(lease.reclamation ? { reclamation: lease.reclamation } : {}),
@@ -833,6 +835,7 @@ export class FakeAkashConsole {
       bseq: bid.bseq,
       state: "active",
       price: bid.price,
+      denom: bid.denom,
       createdHeight: this.height,
       forwarded: null,
     };

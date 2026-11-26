@@ -1,3 +1,4 @@
+import { load as loadYaml } from "js-yaml";
 import { AkashApiError } from "./AkashConsoleClient.js";
 import {
   AKASH_CONSOLE_AUDITOR,
@@ -65,30 +66,61 @@ export function parseAkashResourceId(resourceId: string): AkashDeploymentId {
   return { owner, dseq: dseq.replace(/^0+/, "") };
 }
 
-/** One offer on an order: the bid's order, its bidder, and which of that bidder's bids. */
+/**
+ * One offer on an order: the bid's order, its bidder, which of that bidder's
+ * bids, and the price it quoted per block. A bidder can quote again under the
+ * same bid, so the price is part of what was chosen.
+ */
 export interface AkashOfferId {
   gseq: number;
   oseq: number;
   provider: string;
   bseq: number;
+  denom: string;
+  /** Decimal text, as `akashDecimal` writes it. */
+  amount: string;
 }
 
-const OFFER_ID = /^(\d{1,9})\/(\d{1,9})\/(akash1[0-9a-z]{1,120})\/(\d{1,9})$/;
+const OFFER_ID =
+  /^(\d{1,9})\/(\d{1,9})\/(akash1[0-9a-z]{1,120})\/(\d{1,9})\/([^/]{1,256})\/(\d{1,40}(?:\.\d{1,40})?)$/;
+
+/** A decimal amount as text, written one way: no leading zeros, no trailing fraction zeros. */
+export function akashDecimal(amount: string): string {
+  const [whole = "", fraction = ""] = amount.split(".");
+  const integer = whole.replace(/^0+(?=\d)/, "");
+  const rest = fraction.replace(/0+$/, "");
+  return rest ? `${integer}.${rest}` : integer;
+}
 
 export function akashOfferId(offer: AkashOfferId): string {
-  return `${offer.gseq}/${offer.oseq}/${offer.provider}/${offer.bseq}`;
+  // An IBC denom holds a slash, so the denom is encoded to stay one field.
+  return `${offer.gseq}/${offer.oseq}/${offer.provider}/${offer.bseq}/${encodeURIComponent(offer.denom)}/${akashDecimal(offer.amount)}`;
 }
 
 export function parseAkashOfferId(offerId: string): AkashOfferId {
+  const refused = () =>
+    new AkashApiError(
+      "invalid-request",
+      "That isn't an Akash offer id. Refresh the offers and choose again.",
+      null,
+      null
+    );
   const match = OFFER_ID.exec(offerId);
-  if (!match) {
-    throw new AkashApiError("invalid-request", "That isn't an Akash offer id", null, null);
+  if (!match) throw refused();
+  let denom: string;
+  try {
+    denom = decodeURIComponent(match[5]!);
+  } catch {
+    throw refused();
   }
+  if (denom.length === 0) throw refused();
   return {
     gseq: Number(match[1]),
     oseq: Number(match[2]),
     provider: match[3]!,
     bseq: Number(match[4]),
+    denom,
+    amount: akashDecimal(match[6]!),
   };
 }
 
@@ -111,13 +143,11 @@ export function akashMarkToken(key: string, value: string): string {
 }
 
 /**
- * The name a deployment is created with: what the person called it, then the
- * create's labels and idempotency key in brackets, where a search of the
- * account's deployments finds them again after a lost answer or a restart.
+ * The create's labels and idempotency key in brackets: the mark Daintree
+ * writes at the end of the deployment's name and into its environment.
  * Console keeps no labels of its own.
  */
-export function akashMarkedName(
-  display: string,
+export function akashCreateMark(
   labels: Readonly<Record<string, string>>,
   createKey: string
 ): string {
@@ -131,7 +161,20 @@ export function akashMarkedName(
     ...keys.map((key) => akashMarkToken(key, labels[key]!)),
     akashMarkToken(AKASH_CREATE_KEY_LABEL, createKey),
   ];
-  return withSuffix(display, `[${tokens.join(" ")}]`);
+  return `[${tokens.join(" ")}]`;
+}
+
+/**
+ * The name a deployment is created with: what the person called it, then the
+ * create's mark, where a search of the account's deployments finds it again
+ * quickly after a lost answer or a restart.
+ */
+export function akashMarkedName(
+  display: string,
+  labels: Readonly<Record<string, string>>,
+  createKey: string
+): string {
+  return withSuffix(display, akashCreateMark(labels, createKey));
 }
 
 function withSuffix(display: string, suffix: string): string {
@@ -189,6 +232,54 @@ export function parseAkashName(name: string | null | undefined): AkashParsedName
   return { display: match[1] ?? "", labels, createKey, suffix: `[${match[2]}]` };
 }
 
+/** What a mark says: the create's labels and key. */
+export interface AkashMark {
+  labels: Record<string, string>;
+  createKey: string;
+}
+
+/** The environment entry that carries the mark where a rename can't reach it. */
+export const AKASH_CREATE_MARK_ENV = "DAINTREE_CREATE_MARK";
+
+function markOfText(text: string): AkashMark | null {
+  const parsed = parseAkashName(text);
+  if (parsed.createKey === null || parsed.display !== "") return null;
+  return { labels: parsed.labels, createKey: parsed.createKey };
+}
+
+/** The mark in an SDL's environment; null when it has none, undefined when it isn't an SDL Daintree reads. */
+function markOfDefinition(definition: unknown): AkashMark | null | undefined {
+  const services = (definition as { services?: unknown } | null)?.services;
+  if (typeof services !== "object" || services === null) return undefined;
+  const env = (services as Record<string, { env?: unknown } | undefined>)[AKASH_SERVICE]?.env;
+  if (!Array.isArray(env)) return null;
+  const prefix = `${AKASH_CREATE_MARK_ENV}=`;
+  const entries = env.filter(
+    (entry): entry is string => typeof entry === "string" && entry.startsWith(prefix)
+  );
+  return entries.length === 1 ? markOfText(entries[0]!.slice(prefix.length)) : null;
+}
+
+/**
+ * The mark a deployment was created with, from the SDL Console stored for it
+ * (a deployment's own route, `consoleSettings`), which a rename never
+ * touches: the JSON definition when Console kept one, else its YAML text.
+ * Null when the stored SDL carries none; undefined when Console stored no SDL
+ * Daintree can read.
+ */
+export function akashStoredMark(settings: unknown): AkashMark | null | undefined {
+  if (typeof settings !== "object" || settings === null) return undefined;
+  const { definition, sdl } = settings as { definition?: unknown; sdl?: unknown };
+  const fromDefinition = markOfDefinition(definition);
+  if (fromDefinition !== undefined) return fromDefinition;
+  if (typeof sdl !== "string" || sdl.trim() === "") return undefined;
+  try {
+    return markOfDefinition(loadYaml(sdl, { json: true }));
+  } catch {
+    return undefined;
+  }
+}
+
 /** A new display name with the old name's mark kept, so a renamed deployment is still found. */
 export function akashRenamed(current: string | null | undefined, display: string): string {
   const { suffix } = parseAkashName(current);
@@ -227,13 +318,16 @@ export interface AkashDefinitionInput {
   type: AkashInstanceType;
   region: string;
   publicKey: string;
+  /** The create's mark, from `akashCreateMark`. */
+  mark: string;
 }
 
 /**
  * The SDL, as the JSON object Console takes in place of the YAML text: the
  * host image on amd64, the account's public key in the environment the image
- * reads it from, sshd's port 22 exposed to the internet, and one machine of
- * the size, placed with an audited provider in the region.
+ * reads it from, the create's mark beside it, sshd's port 22 exposed to the
+ * internet, and one machine of the size, placed with an audited provider in
+ * the region.
  */
 export function akashDefinition(input: AkashDefinitionInput): Record<string, unknown> {
   const { type } = input;
@@ -242,7 +336,10 @@ export function akashDefinition(input: AkashDefinitionInput): Record<string, unk
     services: {
       [AKASH_SERVICE]: {
         image: input.image,
-        env: [`DAINTREE_AUTHORIZED_KEYS=${input.publicKey}`],
+        env: [
+          `DAINTREE_AUTHORIZED_KEYS=${input.publicKey}`,
+          `${AKASH_CREATE_MARK_ENV}=${input.mark}`,
+        ],
         expose: [{ port: 22, proto: "tcp", to: [{ global: true }] }],
       },
     },
