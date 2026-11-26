@@ -45,7 +45,11 @@ import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
-import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import {
+  locateClaudeUsageMessages,
+  resolveResetsAt,
+  scanClaudeUsageMessages,
+} from "./ClaudeUsageWarnings.js";
 import { hasClaudeComposer, scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
 import {
   clearUpdateInstalled,
@@ -385,6 +389,15 @@ export class TerminalProcess {
       /** When it was observed: when the pane showed what it says. */
       observedAt: number;
     }
+  >();
+  /**
+   * Usage rows a restored process drew before its first prompt, by limit and
+   * text, and when each was last on screen (#18166): history it resumed, never
+   * a reading, until it has been off screen for the cooldown.
+   */
+  private readonly claudeUsageReplayed = new Map<
+    string,
+    { visible: boolean; lastSeenAt: number }
   >();
   /**
    * The Codex stop banner on screen (#17906), held from its first sighting,
@@ -2335,14 +2348,38 @@ export class TerminalProcess {
     const isClaude =
       getLiveAgentId(this.terminalInfo) === "claude" &&
       (this.isAgentLive || this.samplingFinalFrame);
+    const replayed = this.claudeUsageReplayed;
     if (!isClaude) {
       if (seen.size > 0) seen.clear();
+      if (replayed.size > 0) replayed.clear();
       return;
     }
     const visible = new Set<ClaudeUsageWindow>();
     // Read off the PTY itself: it keeps its width after exit, where the
     // geometry read answers null, and the final frame is read after exit.
     const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
+    const replaying = this.isReplaying();
+    if (replaying || replayed.size > 0) {
+      // Every row, not just each limit's lowest: a resumed row a later one
+      // hides becomes the reading again when that one clears.
+      const shown = new Set(
+        locateClaudeUsageMessages(lines, cols).map(
+          (row) => `${row.window}|${row.statement}|${row.usedPercent}|${row.resetText}`
+        )
+      );
+      for (const [held, last] of replayed) {
+        // Off screen for the cooldown, it is let go: drawn again, it is a
+        // sighting of its own.
+        if (!last.visible && now - last.lastSeenAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS) {
+          replayed.delete(held);
+        } else if (!shown.has(held)) {
+          last.visible = false;
+        }
+      }
+      for (const held of shown) {
+        if (replaying || replayed.has(held)) replayed.set(held, { visible: true, lastSeenAt: now });
+      }
+    }
     for (const message of scanClaudeUsageMessages(lines, cols)) {
       visible.add(message.window);
       const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;
@@ -2357,9 +2394,8 @@ export class TerminalProcess {
         lastSeenAt: now,
         observedAt: fresh || last === undefined ? now : last.observedAt,
       });
-      // A resumed conversation redraws rows printed before the restart (#18166):
-      // held as seen, so the same row after the first prompt is no new reading.
-      if (!fresh || this.isReplaying()) continue;
+      // A resumed conversation redraws rows printed before the restart (#18166).
+      if (!fresh || replayed.has(`${message.window}|${key}`)) continue;
       events.emit("agent:claude-usage-observed", {
         terminalId: this.id,
         window: message.window,
