@@ -6,21 +6,25 @@ import type { AgentMcpToolScope } from "./types.js";
 
 const logger = createLogger("main:PluginAgentMcp");
 
+interface PluginMcpGrantBase {
+  /** Public correlation id. Safe to log and to hand the plugin. */
+  readonly credentialId: string;
+  readonly pluginInstanceId: string;
+  /** The rosters this credential reaches, fixed when it is minted. */
+  readonly scope: AgentMcpToolScope;
+  /** The server key the plugin is named by in the project; a session reports it as its name. */
+  readonly serverName: string;
+  readonly projectId: string;
+  readonly issuedAt: number;
+}
+
 /**
  * One credential for one plugin's MCP server, issued to one terminal launch in
  * one project. The bearer itself is never stored — only its digest — so nothing in
  * this registry can be replayed if it is ever logged or dumped.
  */
-export interface PluginMcpGrant {
-  /** Public correlation id. Safe to log and to hand the plugin. */
-  readonly credentialId: string;
+export interface PluginMcpLaunchGrant extends PluginMcpGrantBase {
   readonly bearerSha256: string;
-  readonly pluginInstanceId: string;
-  /** The rosters this credential reaches, fixed when it is minted. */
-  readonly scope: AgentMcpToolScope;
-  /** The server key the launch handed the agent; the session reports it as its name. */
-  readonly serverName: string;
-  readonly projectId: string;
   readonly terminalId: string;
   readonly launchAgentIdHint?: string;
   /**
@@ -28,7 +32,23 @@ export interface PluginMcpGrant {
    * launched, so the Assistant's own answer is checked on every request too.
    */
   readonly consumer?: "assistant";
-  readonly issuedAt: number;
+}
+
+/**
+ * One plugin's tools in one project for this machine's global Assistant
+ * (#18254), held by its help session rather than a pane. It has no bearer:
+ * nothing reaches it over the plugin route, only the in-process relay that
+ * minted it, and it ends with that session.
+ */
+export interface PluginMcpGlobalAssistantGrant extends PluginMcpGrantBase {
+  readonly consumer: "global-assistant";
+  readonly helpSessionId: string;
+}
+
+export type PluginMcpGrant = PluginMcpLaunchGrant | PluginMcpGlobalAssistantGrant;
+
+export function isPluginMcpLaunchGrant(grant: PluginMcpGrant): grant is PluginMcpLaunchGrant {
+  return grant.consumer !== "global-assistant";
 }
 
 export interface IssuePluginMcpGrantParams {
@@ -41,13 +61,23 @@ export interface IssuePluginMcpGrantParams {
   consumer?: "assistant";
 }
 
+export interface IssueGlobalAssistantPluginMcpGrantParams {
+  pluginInstanceId: string;
+  scope: AgentMcpToolScope;
+  serverName: string;
+  projectId: string;
+  helpSessionId: string;
+}
+
 export type PluginMcpGrantRevokeReason =
   | "terminal-exited"
   | "relaunched"
   | "plugin-unloaded"
   | "access-reduced"
   | "tools-regrouped"
-  | "server-stopped";
+  | "server-stopped"
+  | "session-ended"
+  | "rescoped";
 
 /** What is remembered of a revoked grant: public identifiers and the reason, never the digest. */
 export interface RevokedPluginMcpGrant {
@@ -74,17 +104,56 @@ function digest(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
+function checkBinding(projectId: string, pluginInstanceId: string): void {
+  if (!isProjectWorkspaceId(projectId)) {
+    throw new Error("plugin MCP grant: projectId must be a project workspace id");
+  }
+  // A project plugin's instance is bound to its own project's root; a grant
+  // pairing it with another project would let that project reach its data.
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginInstanceId);
+  if (boundProjectId !== null && boundProjectId !== projectId) {
+    throw new Error("plugin MCP grant: project plugin instance belongs to a different project");
+  }
+}
+
+function frozenScope(scope: AgentMcpToolScope): AgentMcpToolScope {
+  const { databases, databaseWrites, pluginEndpointId, pluginGroups } = scope;
+  if (!databases && !pluginEndpointId) {
+    throw new Error("plugin MCP grant: the scope reaches no tools");
+  }
+  if (databaseWrites === true && !databases) {
+    throw new Error("plugin MCP grant: database writes need the database tools");
+  }
+  if (pluginGroups !== undefined && (!pluginEndpointId || pluginGroups.length === 0)) {
+    throw new Error(
+      "plugin MCP grant: tool groups need the plugin's endpoint and at least one group"
+    );
+  }
+  return Object.freeze({
+    databases,
+    ...(databaseWrites === true ? { databaseWrites } : {}),
+    ...(pluginEndpointId ? { pluginEndpointId } : {}),
+    ...(pluginGroups !== undefined
+      ? {
+          pluginGroups: Object.freeze(
+            pluginGroups.map((group) => Object.freeze({ id: group.id, access: group.access }))
+          ),
+        }
+      : {}),
+  });
+}
+
 /**
  * Plugin endpoint credentials. Deliberately separate from every orchestration
  * bearer (api key, pane, help): a plugin grant authenticates the plugin route
  * only, and is never consulted by the orchestration auth gate.
  *
- * Grants live exactly as long as the terminal launch they were issued to, and
- * never persist. Revocation deletes the grant first and then tells listeners,
+ * Grants live exactly as long as the terminal launch or global Assistant
+ * session they were issued to, and never persist. Revocation deletes the grant first and then tells listeners,
  * so by the time the route closes sessions every new request already fails.
  */
 export class PluginMcpGrantRegistry {
-  private readonly byDigest = new Map<string, PluginMcpGrant>();
+  private readonly byDigest = new Map<string, PluginMcpLaunchGrant>();
   private readonly byCredentialId = new Map<string, PluginMcpGrant>();
   /** Recent revocations by bearer digest, oldest first. Diagnostics only: never authenticates. */
   private readonly revokedByDigest = new Map<string, RevokedPluginMcpGrant>();
@@ -104,50 +173,20 @@ export class PluginMcpGrantRegistry {
     params: IssuePluginMcpGrantParams,
     now: number = Date.now()
   ): {
-    grant: PluginMcpGrant;
+    grant: PluginMcpLaunchGrant;
     token: string;
   } {
-    if (!isProjectWorkspaceId(params.projectId)) {
-      throw new Error("plugin MCP grant: projectId must be a project workspace id");
-    }
-    // A project plugin's instance is bound to its own project's root; a grant
-    // pairing it with another project would let that project reach its data.
-    const boundProjectId = projectIdFromPluginInstanceKey(params.pluginInstanceId);
-    if (boundProjectId !== null && boundProjectId !== params.projectId) {
-      throw new Error("plugin MCP grant: project plugin instance belongs to a different project");
-    }
+    checkBinding(params.projectId, params.pluginInstanceId);
     if (!params.terminalId) {
       throw new Error("plugin MCP grant: terminal id is required");
     }
-    const { databases, databaseWrites, pluginEndpointId, pluginGroups } = params.scope;
-    if (!databases && !pluginEndpointId) {
-      throw new Error("plugin MCP grant: the scope reaches no tools");
-    }
-    if (databaseWrites === true && !databases) {
-      throw new Error("plugin MCP grant: database writes need the database tools");
-    }
-    if (pluginGroups !== undefined && (!pluginEndpointId || pluginGroups.length === 0)) {
-      throw new Error(
-        "plugin MCP grant: tool groups need the plugin's endpoint and at least one group"
-      );
-    }
+    const scope = frozenScope(params.scope);
     const token = randomBytes(32).toString("base64url");
-    const grant: PluginMcpGrant = Object.freeze({
+    const grant: PluginMcpLaunchGrant = Object.freeze({
       credentialId: randomUUID(),
       bearerSha256: digest(token),
       pluginInstanceId: params.pluginInstanceId,
-      scope: Object.freeze({
-        databases,
-        ...(databaseWrites === true ? { databaseWrites } : {}),
-        ...(pluginEndpointId ? { pluginEndpointId } : {}),
-        ...(pluginGroups !== undefined
-          ? {
-              pluginGroups: Object.freeze(
-                pluginGroups.map((group) => Object.freeze({ id: group.id, access: group.access }))
-              ),
-            }
-          : {}),
-      }),
+      scope,
       serverName: params.serverName,
       projectId: params.projectId,
       terminalId: params.terminalId,
@@ -169,8 +208,41 @@ export class PluginMcpGrantRegistry {
     return { grant, token };
   }
 
+  /**
+   * Mint a grant for this machine's global Assistant session in one project
+   * (#18254). It authenticates nothing: the caller that minted it holds it by
+   * credential id and checks {@link isLive} before each use.
+   */
+  issueForGlobalAssistant(
+    params: IssueGlobalAssistantPluginMcpGrantParams,
+    now: number = Date.now()
+  ): PluginMcpGlobalAssistantGrant {
+    checkBinding(params.projectId, params.pluginInstanceId);
+    if (!params.helpSessionId) {
+      throw new Error("plugin MCP grant: help session id is required");
+    }
+    const grant: PluginMcpGlobalAssistantGrant = Object.freeze({
+      credentialId: randomUUID(),
+      pluginInstanceId: params.pluginInstanceId,
+      scope: frozenScope(params.scope),
+      serverName: params.serverName,
+      projectId: params.projectId,
+      consumer: "global-assistant",
+      helpSessionId: params.helpSessionId,
+      issuedAt: now,
+    });
+    this.byCredentialId.set(grant.credentialId, grant);
+    logger.info("Issued plugin MCP credential", {
+      credentialId: grant.credentialId,
+      pluginInstanceId: grant.pluginInstanceId,
+      projectId: grant.projectId,
+      consumer: grant.consumer,
+    });
+    return grant;
+  }
+
   /** The live grant a bearer token names, or null. */
-  authenticate(token: string): PluginMcpGrant | null {
+  authenticate(token: string): PluginMcpLaunchGrant | null {
     if (!token) return null;
     return this.byDigest.get(digest(token)) ?? null;
   }
@@ -193,15 +265,34 @@ export class PluginMcpGrantRegistry {
     return this.byCredentialId.has(credentialId);
   }
 
-  listForTerminal(terminalId: string): PluginMcpGrant[] {
-    return this.filter((grant) => grant.terminalId === terminalId);
+  listForTerminal(terminalId: string): PluginMcpLaunchGrant[] {
+    return this.filter(
+      (grant): grant is PluginMcpLaunchGrant =>
+        isPluginMcpLaunchGrant(grant) && grant.terminalId === terminalId
+    );
   }
 
   revokeTerminal(
     terminalId: string,
     reason: "terminal-exited" | "relaunched" = "terminal-exited"
   ): PluginMcpGrant[] {
-    return this.revokeWhere((grant) => grant.terminalId === terminalId, reason);
+    return this.revokeWhere(
+      (grant) => isPluginMcpLaunchGrant(grant) && grant.terminalId === terminalId,
+      reason
+    );
+  }
+
+  /** Revoke one grant, as its holder replaces it. */
+  revokeCredential(credentialId: string, reason: PluginMcpGrantRevokeReason): PluginMcpGrant[] {
+    return this.revokeWhere((grant) => grant.credentialId === credentialId, reason);
+  }
+
+  /** Revoke what a global Assistant session held (#18254): it ended. */
+  revokeHelpSession(helpSessionId: string): PluginMcpGrant[] {
+    return this.revokeWhere(
+      (grant) => grant.consumer === "global-assistant" && grant.helpSessionId === helpSessionId,
+      "session-ended"
+    );
   }
 
   /**
@@ -376,7 +467,7 @@ export class PluginMcpGrantRegistry {
   }
 
   private rememberRevocation(
-    grant: PluginMcpGrant,
+    grant: PluginMcpLaunchGrant,
     reason: PluginMcpGrantRevokeReason,
     revokedAt: number
   ): void {
@@ -400,8 +491,10 @@ export class PluginMcpGrantRegistry {
     for (const check of [...this.heldWaiters]) check();
   }
 
-  private filter(predicate: (grant: PluginMcpGrant) => boolean): PluginMcpGrant[] {
-    return [...this.byCredentialId.values()].filter(predicate);
+  private filter<T extends PluginMcpGrant = PluginMcpGrant>(
+    predicate: ((grant: PluginMcpGrant) => grant is T) | ((grant: PluginMcpGrant) => boolean)
+  ): T[] {
+    return [...this.byCredentialId.values()].filter(predicate) as T[];
   }
 
   private revokeWhere(
@@ -412,19 +505,21 @@ export class PluginMcpGrantRegistry {
     if (revoked.length === 0) return revoked;
     const revokedAt = Date.now();
     for (const grant of revoked) {
-      this.byDigest.delete(grant.bearerSha256);
+      if (isPluginMcpLaunchGrant(grant)) this.byDigest.delete(grant.bearerSha256);
       this.byCredentialId.delete(grant.credentialId);
       const hold = this.held.get(grant.pluginInstanceId);
       if (hold?.credentialIds.delete(grant.credentialId) && hold.credentialIds.size === 0) {
         this.held.delete(grant.pluginInstanceId);
       }
-      this.rememberRevocation(grant, reason, revokedAt);
+      // Only a bearer can come back to be told why it stopped working.
+      if (isPluginMcpLaunchGrant(grant)) this.rememberRevocation(grant, reason, revokedAt);
     }
+    const launches = revoked.filter(isPluginMcpLaunchGrant);
     logger.info("Revoked plugin MCP credentials", {
       reason,
       credentialIds: revoked.map((grant) => grant.credentialId),
       pluginInstanceIds: [...new Set(revoked.map((grant) => grant.pluginInstanceId))],
-      terminalIds: [...new Set(revoked.map((grant) => grant.terminalId))],
+      terminalIds: [...new Set(launches.map((grant) => grant.terminalId))],
     });
     this.wakeHeldWaiters();
     for (const listener of this.listeners) {

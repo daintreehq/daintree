@@ -15,6 +15,7 @@ import {
   pluginMcpGrantRegistry,
   type PluginMcpGrant,
   type PluginMcpGrantRegistry,
+  type PluginMcpLaunchGrant,
 } from "./grantRegistry.js";
 import { isPluginMcpGrantAllowed } from "./projectEnablement.js";
 import { createPluginSessionServer, type PluginToolCallObserver } from "./pluginSessionServer.js";
@@ -564,7 +565,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private async handleNewSession(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    grant: PluginMcpGrant,
+    grant: PluginMcpLaunchGrant,
     port: number,
     epoch: number,
     newSessionId: string

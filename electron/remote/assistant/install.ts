@@ -54,7 +54,12 @@ import {
   noteAssistantToolAnswer,
   workerLaunchesIn,
 } from "../../services/scheduledRuns/assistantWorkerLaunches.js";
-import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
+import {
+  createLocalMcpRelay,
+  LOCAL_RELAY_LINK_SESSION_ID,
+  LOCAL_RELAY_SENDER_ID,
+} from "./localMcpRelay.js";
+import { withLocalPluginTools } from "./localPluginTools.js";
 import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
@@ -303,6 +308,47 @@ function watchAgentsHere(
  */
 export function installHostControl(deps: HostControlInstallDeps): () => void {
   const machineName = (): string => (localMachineName ??= machineDisplayName());
+  // The global Assistant's reach into a project's plugin agent tools (#18254),
+  // loaded by its first list or call.
+  let pluginTools:
+    | Promise<
+        import("../../services/pluginAgentMcp/globalAssistantTools.js").GlobalAssistantPluginTools
+      >
+    | undefined;
+  const globalPluginTools = () =>
+    (pluginTools ??= Promise.all([
+      import("../../services/pluginAgentMcp/globalAssistantTools.js"),
+      mcpServer(),
+    ]).then(
+      ([{ createGlobalAssistantPluginTools }, { mcpServerService }]) =>
+        createGlobalAssistantPluginTools({
+          activatePlugin: (pluginInstanceId) =>
+            mcpServerService.activateAgentMcpPlugin(pluginInstanceId),
+          isSessionLive: (helpSessionId) => {
+            const run = localRunOf(helpSessionId);
+            return run !== null && isGlobalAssistantId(run.projectId);
+          },
+          // A plugin's tool may change the project, so it runs only while
+          // another machine doesn't drive it, as any other relayed change.
+          refuseWrite: async (projectId) => {
+            const [{ relayWriteStanding }, { DriveHolderUnavailableError, RelayDrivenElsewhereError }] =
+              await Promise.all([
+                import("../../services/mcp-server/relayWriteRule.js"),
+                import("../../services/mcp-server/rendererBridge.js"),
+              ]);
+            const standing = relayWriteStanding(projectId, LOCAL_RELAY_LINK_SESSION_ID, true);
+            if (standing.kind === "vacant" || standing.kind === "own-view") return null;
+            return standing.kind === "unavailable"
+              ? new DriveHolderUnavailableError(projectId).message
+              : new RelayDrivenElsewhereError(projectId, standing.holderName, { local: true })
+                  .message;
+          },
+        }),
+      (error: unknown) => {
+        pluginTools = undefined;
+        throw error;
+      }
+    ));
   // This machine's other projects, reached under its own id (#14024): admitted
   // as a host admits another machine's calls, and answered back into the
   // runtime as a host's notices and questions are.
@@ -318,11 +364,12 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
         import("../../services/HelpSessionService.js"),
       ]);
       await helpSessionService.ensureAssistantControl();
-      return mcpServerService.openRelaySession({
+      const session = await mcpServerService.openRelaySession({
         tier: spec.tier,
         workspaceId: spec.projectId,
         caller: relayCallerOf(spec),
       });
+      return session === null ? null : withLocalPluginTools(session, spec, globalPluginTools);
     },
     // Nor anything the person handed it (#14161), even before its first call.
     releaseHandOvers: (helpSessionId) => {
@@ -521,6 +568,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       if (reason === "relaunched") return;
       local.endHelpSession(sessionId);
       runtime.endHelpSession(sessionId);
+      void pluginTools?.then((tools) => tools.endSession(sessionId)).catch(() => {});
     });
   });
   // Coordination left a global session (#18143): what it still had in flight stops.
@@ -535,6 +583,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     unregisterRuntime();
     runtime.dispose();
     local.dispose();
+    void pluginTools?.then((tools) => tools.dispose()).catch(() => {});
   };
 }
 

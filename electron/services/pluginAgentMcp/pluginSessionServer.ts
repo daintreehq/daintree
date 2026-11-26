@@ -1,14 +1,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
-  type CallToolRequest,
   type CallToolResult,
-  type ServerNotification,
-  type ServerRequest,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -242,16 +238,8 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     pluginInstanceId,
     scope,
     serverName,
-    caller,
     sessionSignal,
-    activatePlugin,
     endpointRegistry = agentMcpEndpointRegistry,
-    skills = pluginSkillRegistrySource,
-    callTimeoutMs = AGENT_MCP_CALL_TIMEOUT_MS,
-    maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
-    rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
-    isCallerServable = () => true,
-    observeToolCall,
   } = options;
 
   const server = new Server(
@@ -279,6 +267,53 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   });
   sessionSignal.addEventListener("abort", offRosterChange, { once: true });
   if (sessionSignal.aborted) offRosterChange();
+
+  const tools = createPluginToolSession(options);
+  server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => ({
+    tools: await tools.listTools(extra.signal),
+  }));
+  server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
+    tools.callTool(request.params.name, request.params.arguments ?? {}, extra.signal)
+  );
+  return server;
+}
+
+/** One grant's plugin tools, listed and called with no transport in between. */
+export interface PluginToolSession {
+  /**
+   * The tools the grant reaches, as `tools/list` advertises them. Throws an
+   * `McpError` while the grant is held by a reload.
+   */
+  listTools(signal: AbortSignal): Promise<Tool[]>;
+  /**
+   * One call, as `tools/call` answers it: a tool error is a result, an unknown
+   * tool or arguments that aren't an object throw an `McpError`.
+   */
+  callTool(toolName: string, rawArgs: unknown, signal: AbortSignal): Promise<CallToolResult>;
+}
+
+/**
+ * Everything a plugin's MCP session serves, without the session: the route's
+ * server answers through it, and so does the global Assistant's `host.call`
+ * (#18254), so both get the same rosters, checks, budgets and caps.
+ */
+export function createPluginToolSession(
+  options: Omit<PluginSessionServerOptions, "serverName">
+): PluginToolSession {
+  const {
+    pluginInstanceId,
+    scope,
+    caller,
+    sessionSignal,
+    activatePlugin,
+    endpointRegistry = agentMcpEndpointRegistry,
+    skills = pluginSkillRegistrySource,
+    callTimeoutMs = AGENT_MCP_CALL_TIMEOUT_MS,
+    maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
+    rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
+    isCallerServable = () => true,
+    observeToolCall,
+  } = options;
 
   const ensureActivated = async (): Promise<void> => {
     // A credential held by a reload must not start the next generation.
@@ -371,11 +406,11 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     }
   };
 
-  server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
+  const listTools = async (requestSignal: AbortSignal): Promise<Tool[]> => {
     // Not an empty list: that reads to the client as "this server has no
     // tools". The roster being judged is not this credential's to see yet.
     assertServable();
-    const signal = AbortSignal.any([extra.signal, sessionSignal]);
+    const signal = AbortSignal.any([requestSignal, sessionSignal]);
     const [databases, own] = await Promise.all([
       databaseRegistration(signal),
       pluginRegistration(signal),
@@ -407,8 +442,8 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         ? { _meta: { [TOOL_GROUP_META_KEY]: { id: tool.group.id, access: tool.group.access } } }
         : {}),
     }));
-    return { tools };
-  });
+    return tools;
+  };
 
   const callSkillTool = (toolName: string, rawArgs: Record<string, unknown>): CallToolResult => {
     const descriptor = servedSkillTools().find((tool) => tool.name === toolName);
@@ -443,11 +478,10 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   };
 
   const callTool = async (
-    request: CallToolRequest,
-    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+    toolName: string,
+    rawArgs: unknown,
+    requestSignal: AbortSignal
   ): Promise<CallToolResult> => {
-    const toolName = request.params.name;
-    const rawArgs: unknown = request.params.arguments ?? {};
     if (!isPlainObject(rawArgs)) {
       throw new McpError(ErrorCode.InvalidParams, "Tool arguments must be a JSON object.");
     }
@@ -482,12 +516,12 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     // activation must not stretch the deadline the agent was promised.
     const onClientCancel = (): void => abort("cancelled");
     const onSessionClosed = (): void => abort("session-closed");
-    extra.signal.addEventListener("abort", onClientCancel, { once: true });
+    requestSignal.addEventListener("abort", onClientCancel, { once: true });
     sessionSignal.addEventListener("abort", onSessionClosed, { once: true });
     const timer = setTimeout(() => abort("timeout"), callTimeoutMs);
     timer.unref?.();
     if (sessionSignal.aborted) abort("session-closed");
-    if (extra.signal.aborted) abort("cancelled");
+    if (requestSignal.aborted) abort("cancelled");
 
     const aborted = new Promise<never>((_, reject) => {
       controller.signal.addEventListener("abort", () => reject(controller.signal.reason as Error), {
@@ -595,27 +629,28 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       inFlight -= 1;
       clearTimeout(timer);
       offRegistry?.();
-      extra.signal.removeEventListener("abort", onClientCancel);
+      requestSignal.removeEventListener("abort", onClientCancel);
       sessionSignal.removeEventListener("abort", onSessionClosed);
     }
   };
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const settle = observe(request.params.name, request.params.arguments);
-    if (settle === undefined) return callTool(request, extra);
-    let outcome: PluginToolCallOutcome = "error";
-    try {
-      const result = await callTool(request, extra);
-      if (result.isError !== true) outcome = "ok";
-      return result;
-    } finally {
+  return {
+    listTools,
+    callTool: async (toolName, rawArgs, signal) => {
+      const settle = observe(toolName, rawArgs);
+      if (settle === undefined) return callTool(toolName, rawArgs, signal);
+      let outcome: PluginToolCallOutcome = "error";
       try {
-        settle(outcome);
-      } catch (err) {
-        console.error("[PluginAgentMcp] tool call observer threw:", err);
+        const result = await callTool(toolName, rawArgs, signal);
+        if (result.isError !== true) outcome = "ok";
+        return result;
+      } finally {
+        try {
+          settle(outcome);
+        } catch (err) {
+          console.error("[PluginAgentMcp] tool call observer threw:", err);
+        }
       }
-    }
-  });
-
-  return server;
+    },
+  };
 }

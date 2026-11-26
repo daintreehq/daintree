@@ -2298,11 +2298,19 @@ export const AGENT_MCP_SERVER_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /**
  * Who a tool call came from, as far as the host can say. Provenance, not
- * identity: the grant was issued for a launch in this terminal and project, but
- * any process that read the credential can present it. `launchAgentIdHint` is
- * what the terminal was launched as — never proof of what is calling.
+ * identity: a launch's grant was issued for a launch in this terminal and
+ * project, but any process that read the credential can present it, and the
+ * global Assistant's has no terminal at all. Narrow on `consumer` before
+ * reading `terminalId`.
  */
-export interface PluginMcpCaller {
+export type PluginMcpCaller = PluginMcpLaunchCaller | PluginMcpGlobalAssistantCaller;
+
+/**
+ * A call from an agent launched in one of the project's terminals, or from the
+ * project's own Daintree Assistant. `launchAgentIdHint` is what the terminal
+ * was launched as — never proof of what is calling.
+ */
+export interface PluginMcpLaunchCaller {
   /** Stable correlation id for the credential. Never the credential itself. */
   readonly credentialId: string;
   readonly projectId: string;
@@ -2316,6 +2324,21 @@ export interface PluginMcpCaller {
    * a person asked: other agents' replies are submitted into the Assistant's pane.
    */
   readonly consumer?: "assistant";
+}
+
+/**
+ * A call from the person's global Daintree Assistant on this machine, reaching
+ * the project through `host.call` under the same answer the project's own
+ * Assistant has. It runs in no terminal of the project. As with the project
+ * Assistant, it is never proof that a person asked.
+ */
+export interface PluginMcpGlobalAssistantCaller {
+  /** Stable correlation id for the grant, which ends with the Assistant's session. */
+  readonly credentialId: string;
+  readonly projectId: string;
+  readonly consumer: "global-assistant";
+  readonly terminalId?: never;
+  readonly launchAgentIdHint?: never;
 }
 
 /** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
