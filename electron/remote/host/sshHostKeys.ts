@@ -273,7 +273,8 @@ async function sameFiles(
   files: readonly string[]
 ): Promise<boolean> {
   for (const file of files) {
-    const spelled = path.posix.normalize(file);
+    // `..` is left alone: the kernel applies it after following a symlink, not before.
+    const spelled = file.replace(/\/+/g, "/").replace(/\/\.(?=\/|$)/g, "");
     const resolved = await deps
       .realpath(path.posix.dirname(spelled))
       .then((dir) => path.posix.join(dir, path.posix.basename(spelled)))
@@ -485,6 +486,8 @@ interface Resolved {
   /** Null when what identifies the listener couldn't be learned. */
   listenerId: string | null;
   hostKeys: string[];
+  /** Keys withheld from reading that still guard every other listener's `.pub`. */
+  guardKeys: string[];
   /** Read no keys: the daemon's paths aren't known to be this Host's. */
   withhold: boolean;
   view: View;
@@ -506,6 +509,7 @@ async function resolveListener(
     listenAddresses: [],
     listenerId: null,
     hostKeys: [],
+    guardKeys: [],
     withhold: true,
     view: { kind: "unknown" },
   };
@@ -538,6 +542,12 @@ async function resolveListener(
     }
     return inodes;
   };
+  const namedFiles = named.flatMap((key) => [key, `${key}.pub`]);
+  if (!(await sameFiles(deps, view, namedFiles))) {
+    gaps.add("other-namespace");
+    resolved.guardKeys = named;
+    return resolved;
+  }
   // `sshd -G` opens the config: it must be the daemon's file and none of its keys.
   if (!isNone(configPath)) {
     if (!(await sameFiles(deps, view, [configPath]))) {
@@ -600,6 +610,7 @@ async function resolveListener(
     gaps.add(gap);
     resolved.withhold = true;
     resolved.hostKeys = [];
+    resolved.guardKeys = hostKeys;
     return resolved;
   };
   // A directory bound over in the daemon's own namespace holds other files than this Host sees.
@@ -716,9 +727,10 @@ export async function readSshHostKeys(deps: SshHostKeyReaderDeps): Promise<SshHo
   for (const { candidate, options } of listeners.slice(0, MAX_SSH_LISTENERS)) {
     resolved.push(await resolveListener(deps, candidate, options, deadline));
   }
-  // Every listener's private keys, so no listener's `.pub` can be another's private key. A
-  // withheld listener's keys aren't this Host's files, and are left out.
-  const configuredAll = new Set(resolved.flatMap((listener) => listener.hostKeys));
+  // Every listener's private keys, withheld ones too, so no listener's `.pub` can be another's.
+  const configuredAll = new Set(
+    resolved.flatMap((listener) => [...listener.hostKeys, ...listener.guardKeys])
+  );
   const privateInodes = new Set<string>();
   for (const key of configuredAll) {
     if (contextDependent(key)) continue;

@@ -422,6 +422,37 @@ describe("readSshHostKeys (#18257)", () => {
     expect(touched.some((e) => e.how === "open")).toBe(false);
   });
 
+  it("checks a command line's own keys' mounts before reading them on a fallback", async () => {
+    const key = path.join(etc, "ssh/explicit_key");
+    keyPair(key, "ed25519");
+    processEntry(100, {
+      argv: ["/home/eve/sshd", "-D", "-h", key],
+      mountinfo: `${HOST_ROOT}77 22 259:2 /srv/provider-ssh ${etc}/ssh ro,relatime - ext4 /dev/nvme0n1p2 ro\n`,
+    });
+    const answer = await reading();
+    expect(answer.listeners[0]).toMatchObject({ gaps: ["other-namespace"], keys: [] });
+    expect(touched.some((e) => e.how === "open")).toBe(false);
+  });
+
+  it("keeps a withheld listener's keys guarding every other listener's .pub", async () => {
+    // One daemon's private key is, by name, the other's .pub, on a mount both see alike.
+    const key = path.join(root, "shared/host_key");
+    fs.mkdirSync(path.dirname(key), { recursive: true });
+    fs.writeFileSync(key, NOT_A_PRIVATE_KEY);
+    fs.writeFileSync(`${key}.pub`, NOT_A_PRIVATE_KEY, { mode: 0o600 });
+    processEntry(100, { argv: [SSHD, "-D", "-f", "none", "-h", key] });
+    const bound = path.join(root, "bound");
+    keyPair(path.join(bound, "k"), "rsa");
+    processEntry(200, {
+      argv: [SSHD, "-D", "-f", "none", "-h", `${key}.pub`, "-h", path.join(bound, "k")],
+      mountinfo: `${HOST_ROOT}80 22 259:2 /srv/bound ${bound} ro,relatime - ext4 /dev/nvme0n1p2 ro\n`,
+    });
+    const answer = await reading();
+    expect(answer.listeners[1]).toMatchObject({ gaps: ["other-namespace"], keys: [] });
+    expect(answer.listeners[0]!.keys.map((k) => k.outcome)).toEqual(["not-a-public-file"]);
+    expect(touched.some((e) => e.how === "open")).toBe(false);
+  });
+
   it("runs no sshd -G on a config bound over in the daemon's namespace", async () => {
     standardDaemon();
     const tunnel = path.join(root, "opt/tunnel");
