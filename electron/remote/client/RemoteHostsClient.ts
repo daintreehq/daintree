@@ -911,7 +911,14 @@ export class RemoteHostsClient {
     // A host removed, being removed, or pointed at another machine meanwhile
     // keeps nothing of this answer, and nobody is shown the old machine's keys.
     const now = registry.get(hostId);
-    if (!now || this.retiring.has(hostId) || !sameHostConnection(now.connection, connection)) {
+    if (
+      !now ||
+      this.retiring.has(hostId) ||
+      !sameHostConnection(now.connection, connection) ||
+      // A link that dropped as the reply landed says nothing the next one confirms.
+      this.options.manager.get(hostId) !== link ||
+      this.options.manager.connectionState(hostId).status !== "connected"
+    ) {
       return {
         outcome: { status: "not-connected" },
         baselines: registry.sshHostKeyBaselines(hostId),

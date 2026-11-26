@@ -216,19 +216,28 @@ describe("HostSshKeysSection", () => {
 
   it("drops what it read of a host once the host is pointed elsewhere", async () => {
     const old = key("A");
-    const view = await show({
-      outcome: {
-        status: "reading",
-        complete: true,
-        truncated: false,
-        listeners: [listener([old])],
-      },
-      baselines: [baseline([old])],
+    const view = await show({ outcome: { status: "timed-out" }, baselines: [] });
+    // A refresh for the old target is still out when the host is pointed elsewhere.
+    let land: (value: HostSshHostKeys) => void = () => {};
+    client.readSshHostKeys.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     });
-    expect(screen.getByText(old.fingerprint)).toBeTruthy();
     client.readSshHostKeys.mockReturnValue(new Promise(() => {}));
     await act(async () => {
       view.rerender(section({ connectionKey: "ssh:elsewhere" }));
+    });
+    expect(screen.queryByTestId("ssh-keys-status")).toBeNull();
+    await act(async () => {
+      land({
+        outcome: {
+          status: "reading",
+          complete: true,
+          truncated: false,
+          listeners: [listener([old])],
+        },
+        baselines: [baseline([old])],
+      });
     });
     expect(screen.queryByText(old.fingerprint)).toBeNull();
     expect(screen.getByText("Reading SSH keys…")).toBeTruthy();

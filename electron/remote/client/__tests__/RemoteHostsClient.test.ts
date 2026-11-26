@@ -289,6 +289,16 @@ describe("RemoteHostsClient", () => {
     expect(await two).toEqual(await one);
     expect(read).toHaveBeenCalledTimes(6);
 
+    // A reply landing as its link drops keeps nothing.
+    const kept = registry.sshHostKeyBaselines("studio-01");
+    read.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const dropped = client.readSshHostKeys({ hostId: "studio-01" });
+    await manager.disconnect("studio-01");
+    land(answer("D"));
+    expect((await dropped).outcome).toEqual({ status: "not-connected" });
+    expect(registry.sshHostKeyBaselines("studio-01")).toEqual(kept);
+    Object.assign(manager.connect("studio-01"), { readSshHostKeys: read });
+
     // A reply that lands after the host was pointed elsewhere keeps and shows nothing of it.
     read.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
     const late = client.readSshHostKeys({ hostId: "studio-01" });

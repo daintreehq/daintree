@@ -493,7 +493,7 @@ export function sshKeyTrustText(subject: {
         : `The first key is trusted when ${provider}'s API reports the one the machine presents, or when you confirm it`;
     case "confirm-on-first-connect":
       return pin !== null
-        ? `This computer pins ${pin}, which you confirmed. A different key waits for you to trust it`
+        ? `This computer pins ${pin}. A different key waits for you to trust it`
         : "No host key is pinned yet: you confirm the machine's key the first time it connects";
     case null:
       return "How this computer trusts the machine's key isn't known while its provider is unavailable";

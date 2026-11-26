@@ -846,6 +846,21 @@ describe("HostRegistry SSH host-key baselines", () => {
     expect((store.value as RemoteHostsValue).sshHostKeys).toBeUndefined();
   });
 
+  it("never hands back a kept key whose blob doesn't bear out its fingerprint", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+    const forged = {
+      ...baseline,
+      keys: [{ ...baseline.keys[0]!, fingerprint: FIXTURE_KEYS.rsa.fingerprint }],
+    };
+    registry.recordSshHostKeyBaselines(host.id, host.connection, [
+      forged,
+      { ...baseline, listenerId: "ok" },
+    ]);
+    expect(registry.sshHostKeyBaselines(host.id).map((b) => b.listenerId)).toEqual(["ok"]);
+  });
+
   it("keeps nothing read over a connection the host no longer has", () => {
     const store = memoryStore();
     const registry = new HostRegistry(store);

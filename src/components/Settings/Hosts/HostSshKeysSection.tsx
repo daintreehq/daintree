@@ -347,7 +347,7 @@ export function HostSshKeysSection({
           key={baseline.listenerId}
           baseline={baseline}
           pinnedFingerprint={pinnedFingerprint}
-          missing={outcome?.status === "reading"}
+          missing={outcome?.status === "reading" && !outcome.truncated}
         />
       ))}
     </SettingsSection>

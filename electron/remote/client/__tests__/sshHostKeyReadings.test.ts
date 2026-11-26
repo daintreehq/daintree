@@ -253,5 +253,7 @@ describe("readBaselines", () => {
     expect(readBaselines(JSON.parse(JSON.stringify(changed)))).toEqual(changed);
     const forged = [{ ...changed[0]!, keys: [{ ...key("C"), fingerprint: key("A").fingerprint }] }];
     expect(readBaselines(forged)).toEqual([]);
+    const retyped = [{ ...changed[0]!, keys: [{ ...key("C"), type: "ssh-ed25519" }] }];
+    expect(readBaselines(retyped)).toEqual([]);
   });
 });
