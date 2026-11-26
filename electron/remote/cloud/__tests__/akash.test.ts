@@ -973,6 +973,7 @@ describe("AkashProvider declarations", () => {
       provider.offerCreate.listOffers(account, "1"),
       provider.offerCreate.leaseOffer(account, "1", "2"),
       provider.offerCreate.closeOrder(account, "1"),
+      provider.offerCreate.readOrder(account, "1"),
     ];
     for (const call of staged) {
       expect(provider.describeError(await rejection(call)).code).toBe("unsupported");

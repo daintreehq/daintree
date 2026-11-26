@@ -368,6 +368,7 @@ export class AkashProvider implements CloudProvider {
     listOffers: notYet,
     leaseOffer: notYet,
     closeOrder: notYet,
+    readOrder: notYet,
   };
 
   rename(): Promise<void> {

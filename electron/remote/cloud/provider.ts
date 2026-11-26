@@ -101,6 +101,13 @@ export type CloseOrderOutcome =
   { kind: "closed" } | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
 
 /**
+ * What a read of one order found, changing nothing: still open with nothing
+ * leased, closed, or leased, with that machine and its rate as a close reports
+ * them.
+ */
+export type ReadOrderOutcome = CloseOrderOutcome | { kind: "open" };
+
+/**
  * A create that goes through offers (`createMode: "offers"`): an order is
  * placed, bidders answer it with offers, and the one the person chose is
  * leased. Each call asks the provider once; waiting for offers, and for the
@@ -149,6 +156,13 @@ export interface OfferCreate {
    * which only `delete` ends, so a lease whose answer was lost is still bound.
    */
   closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
+  /**
+   * Reads what became of an order, sending nothing that changes it: how a
+   * lease whose answer was lost, or that a restart cut off, is settled before
+   * anything else is sent for its order. An order the provider no longer has
+   * reads as `closed`.
+   */
+  readOrder(credentials: ProviderCredentials, orderId: string): Promise<ReadOrderOutcome>;
 }
 
 /**
@@ -395,6 +409,7 @@ const OFFER_METHODS = [
   "listOffers",
   "leaseOffer",
   "closeOrder",
+  "readOrder",
 ] as const satisfies readonly (keyof OfferCreate)[];
 
 /** Why a provider can't create the way its info declares; null when it can. */
