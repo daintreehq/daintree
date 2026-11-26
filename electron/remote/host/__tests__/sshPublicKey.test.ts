@@ -41,6 +41,45 @@ describe("parsePublicKeyFile", () => {
     expect(parsePublicKeyFile(`ssh-ed25519 ${wire(name, Buffer.alloc(32, 1))}`)).not.toBeNull();
   });
 
+  it("refuses a blob naming another type, its body otherwise valid", () => {
+    const body = Buffer.alloc(32, 1);
+    expect(parsePublicKeyFile(`ssh-ed25519 ${wire(Buffer.from("ssh-ed25518"), body)}`)).toBeNull();
+  });
+
+  // Each of these ssh-keygen -lf refuses.
+  it("refuses an EC point off its curve, a toy RSA modulus, and a NUL in an application", () => {
+    const point = Buffer.concat([Buffer.from([4]), Buffer.alloc(64)]);
+    expect(
+      parsePublicKeyFile(
+        `ecdsa-sha2-nistp256 ${wire(Buffer.from("ecdsa-sha2-nistp256"), Buffer.from("nistp256"), point)}`
+      )
+    ).toBeNull();
+    const rsa = (n: Buffer) =>
+      parsePublicKeyFile(`ssh-rsa ${wire(Buffer.from("ssh-rsa"), Buffer.from([1, 0, 1]), n)}`);
+    expect(rsa(Buffer.from([17]))).toBeNull();
+    const [, realRsa] = FIXTURE_KEYS.rsa.line.split(" ");
+    expect(parsePublicKeyFile(`ssh-rsa ${realRsa}`)).not.toBeNull();
+    const sk = (application: string) =>
+      parsePublicKeyFile(
+        `sk-ssh-ed25519@openssh.com ${wire(
+          Buffer.from("sk-ssh-ed25519@openssh.com"),
+          Buffer.alloc(32, 1),
+          Buffer.from(application, "latin1")
+        )}`
+      );
+    expect(sk("ssh:\0x")).toBeNull();
+    expect(sk("ssh:")).not.toBeNull();
+  });
+
+  it("refuses an inherited name as a type, and a separator OpenSSH doesn't split on", () => {
+    expect(parsePublicKeyFile(`constructor ${wire(Buffer.from("constructor"))}`)).toBeNull();
+    const [type, blob] = FIXTURE_KEYS.ed25519.line.split(" ");
+    expect(parsePublicKeyFile(`${type}\u00a0${blob}`)).toBeNull();
+    expect(parsePublicKeyFile(`${type}\t${blob}`)?.fingerprint).toBe(
+      FIXTURE_KEYS.ed25519.fingerprint
+    );
+  });
+
   it("refuses an unknown type, bad base64, and a private key", () => {
     expect(parsePublicKeyFile(`ssh-foo ${wire(Buffer.from("ssh-foo"))}`)).toBeNull();
     expect(parsePublicKeyFile("ssh-ed25519 not*base64")).toBeNull();

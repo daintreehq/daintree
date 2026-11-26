@@ -1778,11 +1778,12 @@ describe("SessionHost SSH host keys (#18257)", () => {
     await expect(first.runCall(LinkMethod.SSH_HOST_KEYS, null)).resolves.toBe(answer);
 
     first.drop();
+    expect(() => first.runCall(LinkMethod.SSH_HOST_KEYS, null)).toThrow("no handler");
     const resumed = fakeLink();
     server.attach("s1", resumed, true);
     await expect(resumed.runCall(LinkMethod.SSH_HOST_KEYS, {})).resolves.toBe(answer);
     expect(read).toHaveBeenCalledTimes(2);
-    expect(() => first.runCall(LinkMethod.SSH_HOST_KEYS, null)).toThrow("no handler");
+    expect(() => resumed.runCall(LinkMethod.SSH_HOST_KEYS, { extra: 1 })).toThrow();
   });
 
   it("registers nothing without a reader, so the Shell is told UNSUPPORTED", () => {

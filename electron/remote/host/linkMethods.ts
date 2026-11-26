@@ -257,6 +257,11 @@ export const EndpointMcpBindingPayloadSchema = z.object({
 export const MAX_SSH_LISTENERS = 32;
 export const MAX_SSH_HOST_KEYS_PER_LISTENER = 32;
 export const MAX_SSH_LISTEN_ADDRESSES = 64;
+export const MAX_SSH_LISTEN_ADDRESS_LENGTH = 512;
+export const MAX_SSH_PATH_LENGTH = 4096;
+/** Key text and paths across a whole answer, well inside one link frame. */
+export const MAX_SSH_ANSWER_KEY_BYTES = 1024 * 1024;
+const sshPath = z.string().min(1).max(MAX_SSH_PATH_LENGTH);
 
 /** Why one configured host key's public file gave no key. */
 export const SshHostKeyGapSchema = z.enum([
@@ -276,8 +281,8 @@ export const SshHostKeyFileSchema = z.discriminatedUnion("outcome", [
   z.object({
     outcome: z.literal("read"),
     /** The `HostKey` as configured: the private key, never opened. */
-    hostKeyPath: hostPath,
-    publicKeyPath: hostPath,
+    hostKeyPath: sshPath,
+    publicKeyPath: sshPath,
     type: z.string().min(1).max(64),
     /** `type base64`, as the public file holds it now, not as sshd loaded it. */
     publicKey: z
@@ -288,8 +293,8 @@ export const SshHostKeyFileSchema = z.discriminatedUnion("outcome", [
   }),
   z.object({
     outcome: SshHostKeyGapSchema,
-    hostKeyPath: hostPath,
-    publicKeyPath: hostPath,
+    hostKeyPath: sshPath,
+    publicKeyPath: sshPath,
   }),
 ]);
 export type SshHostKeyFile = z.infer<typeof SshHostKeyFileSchema>;
@@ -298,8 +303,10 @@ export type SshHostKeyFile = z.infer<typeof SshHostKeyFileSchema>;
 export const SshListenerGapSchema = z.enum([
   /** Its command line couldn't be read, or its retitled command line couldn't be parsed. */
   "command-line-unreadable",
-  /** Another container's or mount namespace's daemon: its paths aren't this Host's. */
+  /** Another container's or chroot's daemon: its paths aren't this Host's. */
   "other-namespace",
+  /** What the daemon sees as `/` couldn't be read, so its paths may not be this Host's. */
+  "namespace-unknown",
   /** No daemon binary this Host would run: unknown, or writable by someone else. */
   "untrusted-binary",
   /** A relative `-f` or `-h`, resolved against a directory this Host can't see. */
@@ -312,28 +319,40 @@ export const SshListenerGapSchema = z.enum([
   "timed-out",
   /** The process went away, or its pid was reused, while it was being read. */
   "exited",
-  /** More keys than an answer carries. */
+  /** More keys, addresses or path than an answer carries. */
   "truncated",
 ]);
 export type SshListenerGap = z.infer<typeof SshListenerGapSchema>;
 
-export const SshListenerReadingSchema = z.object({
-  /**
-   * The same listener across restarts on this Host: its config file and the
-   * addresses it binds. Null when that can't be known, or another listener
-   * shares it; such a reading is never a baseline.
-   */
-  listenerId: z.string().min(1).max(128).nullable(),
-  /** Diagnostic only: a restart changes it. */
-  pid: z.number().int().positive(),
-  /** Every configured key was read. */
-  complete: z.boolean(),
-  gaps: z.array(SshListenerGapSchema).max(SshListenerGapSchema.options.length),
-  /** `-f` as given, or null for the daemon's built-in default. */
-  configFile: hostPath.nullable(),
-  listenAddresses: z.array(z.string().min(1).max(512)).max(MAX_SSH_LISTEN_ADDRESSES),
-  keys: z.array(SshHostKeyFileSchema).max(MAX_SSH_HOST_KEYS_PER_LISTENER),
-});
+export const SshListenerReadingSchema = z
+  .object({
+    /**
+     * The same listener across restarts on this Host: its config file and the
+     * addresses it binds. Null when that can't be known, or another listener
+     * shares it; such a reading is never a baseline.
+     */
+    listenerId: z.string().min(1).max(128).nullable(),
+    /** Diagnostic only: a restart changes it. */
+    pid: z.number().int().positive(),
+    /** Every configured key was read, and nothing else is missing. */
+    complete: z.boolean(),
+    gaps: z.array(SshListenerGapSchema).max(SshListenerGapSchema.options.length),
+    /** `-f` as given, or null for the daemon's built-in default. */
+    configFile: sshPath.nullable(),
+    listenAddresses: z
+      .array(z.string().min(1).max(MAX_SSH_LISTEN_ADDRESS_LENGTH))
+      .max(MAX_SSH_LISTEN_ADDRESSES),
+    keys: z.array(SshHostKeyFileSchema).max(MAX_SSH_HOST_KEYS_PER_LISTENER),
+  })
+  // A reading may only call itself complete on the evidence it carries.
+  .refine(
+    (reading) =>
+      !reading.complete ||
+      (reading.gaps.length === 0 &&
+        reading.keys.length > 0 &&
+        reading.keys.every((key) => key.outcome === "read")),
+    { message: "A complete listener reading has every key and no gaps" }
+  );
 export type SshListenerReading = z.infer<typeof SshListenerReadingSchema>;
 
 /**
@@ -342,18 +361,27 @@ export type SshListenerReading = z.infer<typeof SshListenerReadingSchema>;
  * user may read.
  */
 export const SshHostKeysAnswerSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("reading"),
-    /** Every listener is complete, and none was left out. */
-    complete: z.boolean(),
-    /** More listeners than an answer carries were seen. */
-    truncated: z.boolean(),
-    listeners: z.array(SshListenerReadingSchema).min(1).max(MAX_SSH_LISTENERS),
-  }),
+  z
+    .object({
+      status: z.literal("reading"),
+      /** Every listener is complete, and none was left out. */
+      complete: z.boolean(),
+      /** More listeners than an answer carries were seen. */
+      truncated: z.boolean(),
+      listeners: z.array(SshListenerReadingSchema).min(1).max(MAX_SSH_LISTENERS),
+    })
+    .refine(
+      (answer) =>
+        !answer.complete ||
+        (!answer.truncated && answer.listeners.every((listener) => listener.complete)),
+      { message: "A complete reading has every listener complete" }
+    ),
   /** The process table was readable and showed no sshd listener this Host's user can see. */
   z.object({ status: z.literal("no-sshd-visible") }),
   /** The process table itself couldn't be read. */
   z.object({ status: z.literal("discovery-failed") }),
+  /** The read didn't finish in time; a later call may. */
+  z.object({ status: z.literal("timed-out") }),
   z.object({ status: z.literal("unsupported-platform"), platform: z.string().min(1).max(64) }),
 ]);
 export type SshHostKeysAnswer = z.infer<typeof SshHostKeysAnswerSchema>;
