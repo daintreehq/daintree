@@ -24,6 +24,7 @@ import {
   type LocalMcpRelay,
 } from "../localMcpRelay.js";
 import type { RelayMcpSession, RelayMcpSessionSpec } from "../mcpRelayExecutor.js";
+import { RelayPluginActionUnsupportedError } from "../linkMethods.js";
 import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 
 const RUN_A: OpenRun = {
@@ -667,17 +668,81 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         expect(opened.flatMap((session) => session.calls)).toHaveLength(1);
       });
 
-      it("refuses it on another machine, from a session that isn't coordinating, and once unnamed", async () => {
+      it("marks a call into this machine's project as the plugin action it was admitted as", async () => {
+        const sent = vi.spyOn(local, "relayCall");
+        await runtime.call("g", RESUME, { tier: "core" });
+        await runtime.call("g", { ...LIST, hostId: "local" }, { tier: "core" });
+
+        expect(opened.flatMap((session) => session.calls.map((call) => call.tool))).toEqual([
+          REACH,
+          LIST.tool,
+        ]);
+        expect(sent.mock.calls.map(([payload]) => payload.pluginAction)).toEqual([true, undefined]);
+      });
+
+      // #18255: only the host knows its plugins, so it decides, told what the call was sent as.
+      it("sends it to another machine marked as a plugin action, whatever this machine's registry says", async () => {
+        uninstall();
+        const remote = { ...RESUME, hostId: "studio", projectId: "host-p" };
+        const settled = await runtime.call("g", remote, { tier: "core" });
+        await runtime.call("a", remote, { tier: "core" });
+        await runtime.call(
+          "g",
+          { ...LIST, hostId: "studio", projectId: "host-p" },
+          { tier: "core" }
+        );
+
+        expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
+        expect(
+          relayCall.mock.calls.map(([, payload]) => [
+            payload.tool,
+            payload.global,
+            payload.pluginAction,
+          ])
+        ).toEqual([
+          [REACH, true, true],
+          // A project assistant's call was never held to the global Assistant's tools.
+          [REACH, undefined, undefined],
+          [LIST.tool, true, undefined],
+        ]);
+      });
+
+      it("tells a host too old to take it apart from a call that may have run", async () => {
+        relayCall.mockRejectedValueOnce(new RelayPluginActionUnsupportedError());
+        const settled = await runtime.call(
+          "g",
+          { ...RESUME, hostId: "studio", projectId: "host-p" },
+          { tier: "core" }
+        );
+
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "unsupported", callId: null },
+        });
+        expect(JSON.stringify(settled)).toContain("refused this send before running it");
+      });
+
+      it("never sends a built-in or host tool to another machine as a plugin action", async () => {
+        const remote = { hostId: "studio", projectId: "host-p", args: {} };
         const refused = [
+          // A built-in id in a plugin action's shape (#18153).
           await runtime.call(
             "g",
-            { ...RESUME, hostId: "studio", projectId: "host-p" },
-            {
-              tier: "core",
-            }
+            { ...remote, tool: "worktree.resource.resume" },
+            { tier: "core" }
           ),
-          await runtime.call("standby", RESUME, { tier: "core" }),
+          await runtime.call("g", { ...remote, tool: "host.call" }, { tier: "core" }),
+          await runtime.call("g", { ...remote, tool: "NotAnId" }, { tier: "core" }),
         ];
+
+        for (const settled of refused) {
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        }
+        expect(relayCall).not.toHaveBeenCalled();
+      });
+
+      it("refuses it from a session that isn't coordinating, and once unnamed here", async () => {
+        const refused = [await runtime.call("standby", RESUME, { tier: "core" })];
         uninstall();
         refused.push(await runtime.call("g", RESUME, { tier: "core" }));
 

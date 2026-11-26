@@ -187,6 +187,7 @@ export function installHostMcpRelay(
       tier: target.tier,
       shellName: client?.clientName || "Remote Shell",
       ...(global ? { global: true as const } : {}),
+      stillAccepted: () => !disposed && deps.acceptsRemoteControl(),
       deliverNotices: (fired) => notices.enqueue(senderId, fired),
       // Asked over whichever session is live for this link when the call needs it.
       requestApproval: (ask) =>

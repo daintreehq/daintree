@@ -234,8 +234,8 @@ describe("runHostControlTool (#13493)", () => {
       ],
       [
         "host.call",
-        { hostId: "studio", projectId: "p", tool: "x".repeat(129) },
-        "'tool' should be at most 128 characters on another machine.",
+        { hostId: "studio", projectId: "p", tool: "x".repeat(257) },
+        "'tool' should be at most 256 characters long.",
       ],
       // A throwaway call missing a field is told that field, not the throwaway tools.
       [

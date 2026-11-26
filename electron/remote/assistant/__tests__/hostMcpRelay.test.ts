@@ -212,6 +212,7 @@ describe("installHostMcpRelay", () => {
       projectId: "project-1",
       tier: "core",
       shellName: "greg-mbp",
+      stillAccepted: expect.any(Function),
       deliverNotices: expect.any(Function),
       requestApproval: expect.any(Function),
     });

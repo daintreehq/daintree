@@ -152,8 +152,22 @@ import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.j
 import type { McpDelegationOffer } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
 import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
+import { isBuiltInActionId } from "../../../shared/utils/builtInActionIds.js";
 
 const logger = createLogger("main:HostCallRuntime");
+
+/** A plugin action id's shape, as `PluginService` registers one. */
+const HOST_PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * Whether a tool id could be one of another host's plugin actions (#18255):
+ * a plugin's `{pluginId}.{actionId}`, which a built-in id never is. Only a
+ * hint: the host's own registry decides, since only it knows what its plugins
+ * offer, and a call sent this way runs nowhere as anything else.
+ */
+function mayNameHostPluginAction(tool: string): boolean {
+  return HOST_PLUGIN_ACTION_ID_RE.test(tool) && !isBuiltInActionId(tool);
+}
 
 /** A summary as `host.list` holds it until every read settles. */
 interface Sampled {
@@ -2067,13 +2081,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
       // The global assistant acts only on what it launched or was handed
-      // (#14161), on any host: anything not allowed is refused. On this
-      // machine it also reaches the plugin actions that opted into
-      // `assistantReach` (#18153), as live as the project's own gate reads them.
+      // (#14161), on any host: anything not allowed is refused. It also
+      // reaches the plugin actions that opted into `assistantReach`: on this
+      // machine as live as the project's own gate reads them (#18153), and on
+      // another one as that host's registry says, which only it can (#18255).
+      const pluginAction =
+        isGlobalAssistantId(caller.projectId) &&
+        !globalAssistantMayRelay(args.tool) &&
+        (local ? isPluginAssistantReachAction(args.tool) : mayNameHostPluginAction(args.tool));
       if (
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
-        !(local && isPluginAssistantReachAction(args.tool))
+        !pluginAction
       ) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
@@ -2117,6 +2136,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         runMs,
         // From the runtime's own lane, so no argument the model passes can set or clear it.
         ...(isGlobalAssistantId(caller.projectId) ? { global: true as const } : {}),
+        // Admitted only as a plugin action, so the host runs it only as one.
+        ...(pluginAction ? { pluginAction: true as const } : {}),
         ...(caller.conversationOwnershipId !== undefined
           ? { conversationId: caller.conversationOwnershipId }
           : {}),
@@ -2352,6 +2373,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         noted.notRun();
         return {
           ...this.outcomeWith("rate_limited", CALL_RATE_LIMITED_DETAIL, 1_000),
+          ...unsent,
+        };
+      case "PLUGIN_ACTION_UNSUPPORTED":
+        noted.notRun();
+        return {
+          ...this.outcomeWith("unsupported", pluginActionUnsupportedDetail(host!)),
           ...unsent,
         };
       // Only a link answers it, so only for a host this Shell knows.
@@ -3237,6 +3264,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 }
 
 /** A host that can't run relayed calls, named with the version it said it runs. */
+function pluginActionUnsupportedDetail(host: ObservedHost): string {
+  return `${host.name} runs a Daintree that can't run its plugin actions for another machine's global Assistant, so it refused this send before running it. It needs a newer Daintree.`;
+}
+
 function unsupportedCallDetail(host: ObservedHost): string {
   const version = host.connection.status === "connected" ? host.connection.handshake.version : null;
   return version !== null

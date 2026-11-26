@@ -439,7 +439,7 @@ describe("createSessionServerDeps", () => {
   // #18153: only this machine's own global Assistant's call tells the view who
   // asked, and a plugin's opted-in query never reads as one another machine's
   // driving view could answer.
-  it("marks the local global Assistant's dispatches, and never counts a plugin action a read", async () => {
+  it("marks a global Assistant's dispatches, and never counts a plugin action a read", async () => {
     const REACH = "acme.stages.inspect";
     const uninstall = setPluginAssistantReachSource({
       has: (id) => id === REACH,
@@ -449,10 +449,14 @@ describe("createSessionServerDeps", () => {
       const bound = (relay: Record<string, unknown>) => {
         const deps = fakeSource();
         const queries = [
-          { id: REACH, kind: "query", danger: "confirm" },
+          { id: REACH, kind: "query", danger: "confirm", pluginId: "acme.stages" },
           { id: "terminal.list", kind: "query", danger: "safe" },
         ];
         (deps as { getCachedManifest?: unknown }).getCachedManifest = vi.fn(() => queries);
+        // A bound session reads its own project's manifest, which names the plugin's query too.
+        (deps as { getCachedManifestForWorkspace?: unknown }).getCachedManifestForWorkspace = vi.fn(
+          () => queries
+        );
         const dispatchActionForWorkspace = vi.fn(async () => ({
           result: { ok: true, result: null },
         }));
@@ -488,13 +492,65 @@ describe("createSessionServerDeps", () => {
       expect(read?.callerOrigin).toBe("global-assistant");
       expect(read?.relay?.readOnly).toBe(true);
 
+      // #18255: another machine's global Assistant's plugin action is marked
+      // as one, for this machine's own view alone, and never asked at its Shell.
+      const accepts = vi.fn(() => true);
+      const askShell = vi.fn();
+      const remote = bound({
+        ...caller,
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        global: true,
+        stillAccepted: accepts,
+        requestApproval: askShell,
+        // Read by the relayed call's own id, never the help session's.
+        callDeadline: (callId: string) =>
+          callId.startsWith("call-") ? Date.now() + 60_000 : undefined,
+      });
+      await remote.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
+      await remote.sessionDeps.dispatchAction("terminal.list", {}, false, undefined, "call-4");
+      const [remotePlugin, remoteRead] = remote.options() as Array<
+        | {
+            callerOrigin?: string;
+            relay?: {
+              readOnly?: boolean;
+              pluginAction?: true;
+              stillAccepted?: () => boolean;
+              callLive?: () => boolean;
+              requestApproval?: unknown;
+            };
+          }
+        | undefined
+      >;
+      expect(remotePlugin?.callerOrigin).toBe("global-assistant");
+      expect(remotePlugin?.relay).toMatchObject({ readOnly: false, pluginAction: true });
+      expect(remotePlugin?.relay?.stillAccepted).toBe(accepts);
+      // Asked of the call this dispatch runs, while its caller still waits on it.
+      expect(remotePlugin?.relay?.callLive?.()).toBe(true);
+      expect(remotePlugin?.relay).not.toHaveProperty("requestApproval");
+      expect(remoteRead).not.toHaveProperty("callerOrigin");
+      expect(remoteRead?.relay).not.toHaveProperty("pluginAction");
+      expect(remoteRead?.relay).toHaveProperty("requestApproval");
+
+      for (const relay of [{ ...caller, local: true }, { ...caller }]) {
+        const other = bound(relay);
+        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-5");
+        expect(other.options()[0]).not.toHaveProperty("callerOrigin");
+      }
+
+      // Dropped by its plugin after admission (#18255): nothing runs, whatever
+      // the action now counts as, for any relayed caller.
+      uninstall();
       for (const relay of [
         { ...caller, global: true },
-        { ...caller, local: true },
+        { ...caller, linkSessionId: "link-1", global: true },
+        { ...caller },
       ]) {
-        const other = bound(relay);
-        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
-        expect(other.options()[0]).not.toHaveProperty("callerOrigin");
+        const dropped = bound(relay);
+        await expect(
+          dropped.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-6")
+        ).rejects.toThrow("no longer offered to the assistant");
+        expect(dropped.options()).toEqual([]);
       }
     } finally {
       uninstall();

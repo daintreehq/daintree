@@ -20,6 +20,7 @@ import type { McpRelayCaller, RelayNextFallback } from "../../services/mcp-serve
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import type { RelayApprovalAsk } from "./relayApprovals.js";
 import { createLogger } from "../../utils/logger.js";
+import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
 
 const logger = createLogger("main:mcpRelayExecutor");
 
@@ -48,6 +49,12 @@ export interface RelayMcpSessionSpec {
    * own lane; absent for any other assistant and from an older Shell.
    */
   global?: true;
+  /**
+   * This host's consent to other machines' assistants (#18255), read again
+   * when a person's answer to one of the Shell's plugin actions is about to
+   * run it. Absent from the in-process relay, whose caller is this machine's.
+   */
+  stillAccepted?: () => boolean;
   /** Carries the notices the session's calls arm back to the Shell (#13500). */
   deliverNotices(notices: readonly RelayedNotice[]): void;
   /**
@@ -74,6 +81,7 @@ export function relayCallerOf(spec: RelayMcpSessionSpec): McpRelayCaller {
     shellName: spec.shellName,
     ...(spec.local === true ? { local: true as const } : {}),
     ...(spec.global === true ? { global: true as const } : {}),
+    ...(spec.stillAccepted ? { stillAccepted: spec.stillAccepted } : {}),
     deliverNotices: spec.deliverNotices,
     requestApproval: spec.requestApproval,
     ...(spec.local === true && spec.nextFallback ? { nextFallback: spec.nextFallback } : {}),
@@ -706,6 +714,21 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     // comes out of its run rather than on top of it (#15699).
     const deadline = now() + payload.runMs;
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
+    // Sent only as a plugin action the Shell couldn't check (#18255): this
+    // host's own registry says whether it is one, so it never runs as anything else.
+    if (
+      payload.pluginAction === true &&
+      (spec.global !== true || !isPluginAssistantReachAction(payload.tool))
+    ) {
+      return {
+        status: "done",
+        result: errorResult(
+          new Error(
+            `${payload.tool} isn't a plugin action this host offers the global Assistant. Nothing was run.`
+          )
+        ),
+      };
+    }
     const hasProject = await deps.hasProject(payload.projectId);
     // A cancel taken meanwhile is the answer: nothing ran either way, and its resend reads that.
     if (signal?.aborted) return CANCELLED_BEFORE;

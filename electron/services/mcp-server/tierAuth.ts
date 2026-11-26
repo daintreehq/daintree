@@ -273,8 +273,9 @@ export function isWithheldFromRelayDiscovery(
 
 /**
  * Whether a session reaches the plugin actions that opted into `assistantReach`
- * (#16751): the project Assistant, by its renderer-owned origin, and this
- * machine's global Assistant reaching the project through `host.call` (#18153).
+ * (#16751): the project Assistant, by its renderer-owned origin, and a global
+ * Assistant reaching the project through `host.call`, this machine's (#18153)
+ * or another's (#18255).
  */
 export function sessionReachesPluginActions(
   session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relayPluginReach">
@@ -334,8 +335,9 @@ export interface SessionSurfacePolicy {
    */
   relayGlobal?: boolean;
   /**
-   * Whether that relayed assistant is THIS machine's global Assistant, calling
-   * in process rather than over a link (#18153). Only it, of every external
+   * Whether that relayed assistant is a global Assistant: this machine's,
+   * calling in process (#18153), or another machine's while this host lets
+   * other machines' assistants work here (#18255). Only it, of every external
    * origin, reaches the plugin actions that opted into `assistantReach`; see
    * {@link sessionReachesPluginActions}. Read as `=== true`.
    */
@@ -481,10 +483,10 @@ export function isTierPermitted(
 
 /**
  * Plugin actions that opted in with `assistantReach` (#16751) join the project
- * Assistant's surface at both in-app tiers, and this machine's global
- * Assistant's when it reaches the project through `host.call` (#18153), and
- * nobody else's: an agent pane or an api-key client is `external` by origin,
- * and so is another machine's assistant relaying through `host.call`.
+ * Assistant's surface at both in-app tiers, and a global Assistant's when it
+ * reaches the project through `host.call` (#18153, #18255), and nobody
+ * else's: an agent pane or an api-key client is `external` by origin, and so
+ * is any other assistant relaying through `host.call`.
  */
 function reachesPluginActions(tier: McpTier, pluginReach: boolean): boolean {
   return pluginReach && (tier === "core" || tier === "full");
@@ -681,8 +683,8 @@ export interface TargetPolicySessionSnapshot {
    */
   relayGlobal?: boolean;
   /**
-   * Whether that relayed assistant is this machine's own global Assistant
-   * (#18153) — see {@link SessionSurfacePolicy.relayPluginReach}. Read as `=== true`.
+   * Whether that relayed assistant is a global Assistant (#18153, #18255) —
+   * see {@link SessionSurfacePolicy.relayPluginReach}. Read as `=== true`.
    */
   relayPluginReach?: boolean;
   /**

@@ -963,14 +963,23 @@ export function createSessionServerDeps(
       }
       const holdUntil =
         callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
-      // A plugin's opted-in action (#18153) runs only in this machine's own
-      // view, where its dialog is asked, so even a query never counts as a
-      // read another machine's driving view could answer.
+      // A plugin's opted-in action (#18153, #18255) runs only in this
+      // machine's own view, where its dialog is asked, so even a query never
+      // counts as a read another machine's driving view could answer, and the
+      // Shell is never asked in its place.
       const relayPluginAction = relay !== undefined && isPluginAssistantReachAction(actionId);
+      // No relayed caller reaches a plugin's action but through its opt-in, so
+      // one dropped since the call was admitted (#18255) runs nothing, rather
+      // than whatever its replacement now counts as.
+      if (relay !== undefined && !relayPluginAction && relayEntry?.pluginId !== undefined) {
+        return Promise.reject(
+          new Error(`${actionId} is no longer offered to the assistant, so nothing was run`)
+        );
+      }
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
             ...(holdUntil !== undefined ? { holdUntil } : {}),
-            ...(relay.local === true && relay.global === true
+            ...(relay.global === true && (relay.local === true || relayPluginAction)
               ? { callerOrigin: "global-assistant" as const }
               : {}),
             relay: {
@@ -980,10 +989,17 @@ export function createSessionServerDeps(
                 relayEntry !== undefined &&
                 buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
+              ...(relayPluginAction ? { pluginAction: true as const } : {}),
+              ...(relayPluginAction && relay.stillAccepted
+                ? { stillAccepted: relay.stillAccepted }
+                : {}),
+              ...(relayPluginAction && relay.callDeadline && relayCallId !== undefined
+                ? { callLive: () => relay.callDeadline?.(relayCallId) !== undefined }
+                : {}),
               ...(relayCallId !== undefined
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
                 : {}),
-              ...(askShell !== undefined && relayCallId !== undefined
+              ...(askShell !== undefined && relayCallId !== undefined && !relayPluginAction
                 ? {
                     requestApproval: (ask) =>
                       askShell({

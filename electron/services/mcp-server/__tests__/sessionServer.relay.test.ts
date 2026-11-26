@@ -1101,7 +1101,7 @@ describe("a relayed session for the calling Shell's global Assistant", () => {
 
 // #18153: this machine's global Assistant reaches a project's plugin actions
 // that opted into `assistantReach`, through `host.call`; no other relay does.
-describe("plugin actions for this machine's global Assistant", () => {
+describe("plugin actions for a global Assistant (#18153, #18255)", () => {
   const REACH = "acme.stages.resume";
   const PLUGIN_MANIFEST = [
     ...MANIFEST,
@@ -1158,11 +1158,21 @@ describe("plugin actions for this machine's global Assistant", () => {
     return { probe, dispatchAction, dispatchedReach };
   }
 
-  it.each(["core", "full"] as const)(
-    "lists, finds and dispatches it unconfirmed, so the project's view asks, at %s",
-    async (tier) => {
+  it.each(
+    (["core", "full"] as const).flatMap((tier) =>
+      (
+        [
+          ["this machine's global Assistant", { global: true as const, local: true as const }],
+          // Reaching here at all means this host lets other machines' assistants work here.
+          ["another machine's global Assistant", { global: true as const }],
+        ] as const
+      ).map(([label, caller]) => [label, tier, caller] as const)
+    )
+  )(
+    "lists, finds and dispatches it unconfirmed for %s, so the project's view asks, at %s",
+    async (_label, tier, caller) => {
       install();
-      const session = await open(tier, { global: true, local: true });
+      const session = await open(tier, caller);
       const { listed, searched, called } = await session.probe("call-1");
       expect(listed).toContain(REACH);
       expect(searched).toContain(REACH);
@@ -1181,7 +1191,6 @@ describe("plugin actions for this machine's global Assistant", () => {
     (["core", "full"] as const).flatMap((tier) =>
       (
         [
-          ["another machine's global Assistant", { global: true as const }],
           ["one of this machine's project assistants", { local: true as const }],
           ["another machine's project assistant", {}],
         ] as const

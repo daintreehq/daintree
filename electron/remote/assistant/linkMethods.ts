@@ -227,6 +227,9 @@ export const MAX_RELAY_ARGS_BYTES = 256 * 1024;
 /** Serialized bytes a relayed call's answer may take; a host's own results stay well under. */
 export const MAX_RELAY_RESULT_BYTES = 192 * 1024;
 
+/** The longest tool id a relayed call carries, on this machine or over a link. */
+export const MAX_RELAY_TOOL_ID_CHARS = 256;
+
 export const McpCallPayloadSchema = z
   .object({
     /** The Shell assistant's own help session: with the sender, who owns what the call makes. */
@@ -236,12 +239,20 @@ export const McpCallPayloadSchema = z
     callId: id,
     /** Set on every send after the first: a resend never starts a call the host has no record of. */
     resend: z.boolean(),
-    tool: z.string().min(1).max(128),
+    /** Up to 256: a project plugin's action id carries its 64-character project id (#18255). */
+    tool: z.string().min(1).max(MAX_RELAY_TOOL_ID_CHARS),
     args: z
       .record(z.string(), z.unknown())
       .refine((args) => Buffer.byteLength(JSON.stringify(args), "utf8") <= MAX_RELAY_ARGS_BYTES),
     /** How long the host may let the tool run; the Shell waits a little longer. */
     runMs: z.number().int().min(1_000).max(MAX_RELAY_RUN_MS),
+    /**
+     * The Shell's global Assistant sent this only as one of the host's plugin
+     * actions that opted into `assistantReach` (#18255): the host runs it only
+     * if its own registry says so. A host from before it refuses the field, so
+     * such a call never runs on one as anything else.
+     */
+    pluginAction: z.literal(true).optional(),
   })
   .strict();
 export type McpCallPayload = z.infer<typeof McpCallPayloadSchema>;
@@ -276,6 +287,18 @@ export class RelayCancelUnconfirmedError extends Error {
   readonly code = "CANCEL_UNCONFIRMED";
   constructor(readonly answer?: McpCallAnswer) {
     super("The host didn't confirm the cancel of a relayed call");
+  }
+}
+
+/**
+ * A host from before plugin actions for another machine's global Assistant
+ * (#18255) refused such a call's payload: nothing ran, and a resend can't
+ * change that.
+ */
+export class RelayPluginActionUnsupportedError extends Error {
+  readonly code = "PLUGIN_ACTION_UNSUPPORTED";
+  constructor() {
+    super("The host doesn't take plugin actions from another machine's global Assistant");
   }
 }
 
