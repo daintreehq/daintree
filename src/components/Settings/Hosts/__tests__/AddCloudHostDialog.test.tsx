@@ -1338,6 +1338,18 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
 
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "starting" })]);
     expect(onReady).not.toHaveBeenCalled();
+    // Running, but leased on terms nobody chose: the failure stays in view, and setup waits.
+    const swapped = "The provider replaced its offer as it was leased.";
+    show([
+      hostStatus({
+        pendingCreate: null,
+        resourceId: "dseq-1",
+        machine: "running",
+        lastError: { code: "failed", message: swapped, at: 1 },
+      }),
+    ]);
+    expect(screen.getByText(swapped)).toBeTruthy();
+    expect(onReady).not.toHaveBeenCalled();
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith({ hostId: "h-123", name: "build-host" });

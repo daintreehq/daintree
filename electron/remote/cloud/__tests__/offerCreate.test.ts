@@ -109,6 +109,7 @@ type Plan =
   | "requote"
   | "hang"
   | "hang-commit"
+  | "swap"
   | "fail";
 
 interface FakeOrder {
@@ -241,6 +242,16 @@ class FakeOffers {
       this.machines.set(leased.resourceId, machine(leased.resourceId, order.labels));
       if (plan === "lost") throw lost();
       if (plan === "hang-commit") return this.hang<ProviderResource>(credentials.signal);
+      if (plan === "swap") {
+        // The bidder swapped its offer as it was leased: it runs, at a rate nobody chose.
+        order.leasedAt = 1.8;
+        return {
+          ...leased,
+          machine: "error" as const,
+          error: "The provider replaced its offer as it was leased.",
+          leaseHourlyDollars: 1.8,
+        };
+      }
       return leased;
     }
   );
@@ -1354,6 +1365,36 @@ describe("a leased machine's price (#18233)", () => {
       hourlyDollars: 0.8,
     });
     expect(env.api.leaseOffer).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a lease swapped as it was leased at its own rate, with what went wrong, through later looks", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.6)];
+    const firsts = firstBoundWrites(env);
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("swap");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.6).catch(() => {});
+    await env.settled();
+    const resourceId = `lease-${choice.order.id}`;
+    const failed = {
+      resourceId,
+      hourlyDollars: 1.8,
+      lastError: { code: "failed", message: "The provider replaced its offer as it was leased." },
+    };
+    expect(statusOf(env, hostId)).toMatchObject(failed);
+    // Written with the machine, so no restart finds one without the other.
+    expect(firsts.get(resourceId)).toMatchObject({
+      leaseRate: { resourceId, hourlyDollars: 1.8 },
+      lastError: failed.lastError,
+    });
+    // Looked at again it runs, and setup still isn't told it is ready.
+    await env.lifecycle.refresh(hostId);
+    expect(statusOf(env, hostId)).toMatchObject({ ...failed, machine: "running" });
+    env.crash();
+    await env.accounts.catalog(env.account.id);
+    expect(statusOf(env, hostId)).toMatchObject(failed);
   });
 
   it.each([0.25, 0])(

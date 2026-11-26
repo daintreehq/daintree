@@ -91,6 +91,7 @@ import {
   type IdleSleepingCloudProvider,
   sshKeyTiming,
   type CloudProvider,
+  type LeasedOffer,
   type OfferCreate,
   type ProviderCreateRequest,
   type ProviderCredentials,
@@ -1609,7 +1610,8 @@ export class CloudHostLifecycle {
   private bindCreated(
     bindingId: string,
     resource: ProviderResource,
-    leaseHourly: number | null = null
+    leaseHourly: number | null = null,
+    failure: CloudHostError | null = null
   ): "bound" | "held" | "settled" {
     const current = this.deps.store.binding(bindingId);
     const leaseRate =
@@ -1632,7 +1634,8 @@ export class CloudHostLifecycle {
       resourceId: resource.resourceId,
       creation: null,
       observation: observationOf(resource, this.now()),
-      lastError: null,
+      // Written with the machine, so a restart between the two can't drop what went wrong.
+      lastError: failure,
       ...(leaseRate ? { leaseRate } : {}),
     }));
     return "bound";
@@ -2098,19 +2101,21 @@ export class CloudHostLifecycle {
    * bound to it while the host is still here and holds no other machine.
    * Otherwise it stays in the provider account, as every machine of a host
    * removed from this device does. True when it is the host's machine now.
-   * `hourlyDollars` is the rate the lease runs at, null when nobody said.
+   * `hourlyDollars` is the rate the lease runs at, null when nobody said;
+   * `failure`, what went wrong with the lease, kept on the host it binds to.
    */
   private adoptLease(
     order: StoredCreateOrder,
     provider: CloudProvider,
     resource: ProviderResource,
-    hourlyDollars: number | null
+    hourlyDollars: number | null,
+    failure: CloudHostError | null = null
   ): boolean {
     const binding = this.deps.store.binding(order.bindingId);
     // The host as it is now: one rewritten for another account meanwhile is never given it.
     const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
     const bound =
-      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars) : "settled";
+      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars, failure) : "settled";
     if (bound === "bound") {
       const key = this.placedKeys.get(order.id);
       if (key) this.heldKeys.set(order.bindingId, key);
@@ -2443,7 +2448,7 @@ export class CloudHostLifecycle {
     );
     if (marked?.state !== "leasing" || marked.offerId !== offerId) throw invalid(ORDER_GONE);
     this.stage(bindingId, `Leasing the offer you chose from ${nameOf(provider)}`);
-    let resource: ProviderResource;
+    let resource: LeasedOffer;
     try {
       resource = await offers.leaseOffer({ ...credentials, signal }, orderId, offerId, {
         hourlyDollars: chosen.hourlyDollars,
@@ -2509,15 +2514,37 @@ export class CloudHostLifecycle {
       }
       throw this.deps.accounts.asAppError(provider, error);
     }
-    // Leased: the order is done, whatever becomes of the machine. The provider accepted it at
-    // the rate the person saw, since a lease is refused at any other.
-    const bound = this.adoptLease(marked, provider, resource, chosen.hourlyDollars);
+    // Leased: the order is done, whatever becomes of the machine. It runs at the rate the
+    // provider says its lease does (a bidder can swap its offer as it is leased), else at the
+    // rate the person saw, since a lease is refused at any other.
+    const rate =
+      resource.leaseHourlyDollars === undefined
+        ? chosen.hourlyDollars
+        : reportedRate(resource.leaseHourlyDollars);
+    // A machine the provider says failed as it was leased stops here, and says why, until the
+    // person deals with it: a later look that finds it running doesn't take that back.
+    const failure =
+      resource.machine === "error"
+        ? {
+            code: "failed" as const,
+            message: resource.error ?? "The machine failed as it was leased.",
+            at: this.now(),
+          }
+        : null;
+    const bound = this.adoptLease(marked, provider, resource, rate, failure);
     this.retireOrder(orderRecordId);
     if (!bound) {
       const message = this.deps.store.binding(bindingId)?.lastError?.message ?? ORDER_GONE;
       throw invalid(message);
     }
     accepted();
+    if (failure) {
+      throw new AppError({
+        code: "OUTCOME_UNKNOWN",
+        message: failure.message,
+        userMessage: failure.message,
+      });
+    }
     await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
   }
 
