@@ -858,7 +858,10 @@ export class RemoteHostsClient {
     const before = registry.require(hostId);
     const connection = this.options.manager.get(hostId);
     if (!connection || this.options.manager.connectionState(hostId).status !== "connected") {
-      return { outcome: { status: "not-connected" }, baselines: registry.sshHostKeyBaselines(hostId) };
+      return {
+        outcome: { status: "not-connected" },
+        baselines: registry.sshHostKeyBaselines(hostId),
+      };
     }
     let outcome: HostSshReadOutcome;
     try {

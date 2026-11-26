@@ -100,7 +100,10 @@ beforeEach(() => {
         connect: vi.fn(async () => ({ status: "connecting", attempt: 1 })),
         discover: vi.fn(async () => []),
         listClipboardGrants: vi.fn(async () => []),
-        readSshHostKeys: vi.fn(async () => ({ outcome: { status: "not-connected" }, baselines: [] })),
+        readSshHostKeys: vi.fn(async () => ({
+          outcome: { status: "not-connected" },
+          baselines: [],
+        })),
         listPluginViewConsents: vi.fn(async () => []),
         resetClipboardGrants: vi.fn(async () => {}),
         onEvent: vi.fn(() => () => {}),

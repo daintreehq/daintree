@@ -212,7 +212,12 @@ export interface HostSshListenerBaseline {
 
 /** What asking the host for its SSH host keys came to just now. */
 export type HostSshReadOutcome =
-  | { status: "reading"; complete: boolean; truncated: boolean; listeners: HostSshListenerReading[] }
+  | {
+      status: "reading";
+      complete: boolean;
+      truncated: boolean;
+      listeners: HostSshListenerReading[];
+    }
   | { status: "no-sshd-visible" }
   | { status: "discovery-failed" }
   | { status: "timed-out" }

@@ -110,7 +110,12 @@ describe("HostSshKeysSection", () => {
     const before = key("A");
     const now = key("C");
     await show({
-      outcome: { status: "reading", complete: true, truncated: false, listeners: [listener([now])] },
+      outcome: {
+        status: "reading",
+        complete: true,
+        truncated: false,
+        listeners: [listener([now])],
+      },
       baselines: [baseline([now], { previous: [before], changedAt: Date.now() - 1000 })],
     });
     const change = screen.getByTestId("ssh-key-change");
@@ -130,7 +135,9 @@ describe("HostSshKeysSection", () => {
           listener([partial], {
             complete: false,
             gaps: ["timed-out"],
-            keyGaps: [{ publicKeyPath: "/etc/ssh/ssh_host_rsa_key.pub", reason: "permission-denied" }],
+            keyGaps: [
+              { publicKeyPath: "/etc/ssh/ssh_host_rsa_key.pub", reason: "permission-denied" },
+            ],
           }),
         ],
       },
@@ -154,9 +161,12 @@ describe("HostSshKeysSection", () => {
 
   it("shows what this computer kept while the host isn't connected, and reads again on Refresh", async () => {
     const kept = key("A");
-    await show({ outcome: { status: "not-connected" }, baselines: [baseline([kept])] }, {
-      connected: false,
-    });
+    await show(
+      { outcome: { status: "not-connected" }, baselines: [baseline([kept])] },
+      {
+        connected: false,
+      }
+    );
     expect(screen.getByText("Last complete reading")).toBeTruthy();
     expect(screen.getByText(kept.fingerprint)).toBeTruthy();
     const refresh = screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement;
@@ -166,7 +176,12 @@ describe("HostSshKeysSection", () => {
   it("reads again on Refresh", async () => {
     await show({ outcome: { status: "timed-out" }, baselines: [] });
     client.readSshHostKeys.mockResolvedValue({
-      outcome: { status: "reading", complete: true, truncated: false, listeners: [listener([key("D")])] },
+      outcome: {
+        status: "reading",
+        complete: true,
+        truncated: false,
+        listeners: [listener([key("D")])],
+      },
       baselines: [baseline([key("D")])],
     });
     await act(async () => {

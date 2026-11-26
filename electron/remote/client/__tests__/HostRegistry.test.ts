@@ -805,7 +805,11 @@ describe("HostRegistry SSH host-key baselines", () => {
     configFile: null,
     listenAddresses: ["0.0.0.0:22"],
     keys: [
-      { type: "ssh-ed25519", fingerprint: `SHA256:${"A".repeat(43)}`, publicKey: "ssh-ed25519 AAAA" },
+      {
+        type: "ssh-ed25519",
+        fingerprint: `SHA256:${"A".repeat(43)}`,
+        publicKey: "ssh-ed25519 AAAA",
+      },
     ],
     readAt: 10,
     change: null,

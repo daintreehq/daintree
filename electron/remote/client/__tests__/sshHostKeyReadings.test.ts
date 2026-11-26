@@ -158,7 +158,11 @@ describe("readBaselines", () => {
     expect(
       readBaselines([
         good,
-        { ...good, listenerId: "bad-key", keys: [{ type: "x", fingerprint: "nope", publicKey: "" }] },
+        {
+          ...good,
+          listenerId: "bad-key",
+          keys: [{ type: "x", fingerprint: "nope", publicKey: "" }],
+        },
         { ...good, listenerId: "" },
         good,
         "junk",

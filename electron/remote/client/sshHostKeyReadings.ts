@@ -33,23 +33,21 @@ export function readOutcome(answer: SshHostKeysAnswer): HostSshReadOutcome {
     status: "reading",
     complete: answer.complete,
     truncated: answer.truncated,
-    listeners: answer.listeners.map(
-      (listener): HostSshListenerReading => ({
-        listenerId: listener.listenerId,
-        configFile: listener.configFile,
-        listenAddresses: listener.listenAddresses,
-        complete: listener.complete,
-        gaps: listener.gaps,
-        keys: listener.keys.flatMap((key) =>
-          key.outcome === "read"
-            ? [{ type: key.type, fingerprint: key.fingerprint, publicKey: key.publicKey }]
-            : []
-        ),
-        keyGaps: listener.keys.flatMap((key) =>
-          key.outcome === "read" ? [] : [{ publicKeyPath: key.publicKeyPath, reason: key.outcome }]
-        ),
-      })
-    ),
+    listeners: answer.listeners.map((listener): HostSshListenerReading => ({
+      listenerId: listener.listenerId,
+      configFile: listener.configFile,
+      listenAddresses: listener.listenAddresses,
+      complete: listener.complete,
+      gaps: listener.gaps,
+      keys: listener.keys.flatMap((key) =>
+        key.outcome === "read"
+          ? [{ type: key.type, fingerprint: key.fingerprint, publicKey: key.publicKey }]
+          : []
+      ),
+      keyGaps: listener.keys.flatMap((key) =>
+        key.outcome === "read" ? [] : [{ publicKeyPath: key.publicKeyPath, reason: key.outcome }]
+      ),
+    })),
   };
 }
 
