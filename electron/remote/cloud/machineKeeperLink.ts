@@ -158,5 +158,16 @@ export const KeepAwakeStatusSchema = z.object({
   reachedAt: z.number().nullable(),
   /** Why it holds none, in a sentence; null while it holds one or was never given one. */
   problem: z.string().max(500).nullable(),
+  /**
+   * When a request through any URL it held for this machine last reached it
+   * (#17976). Absent before the first, and from hosts from before it.
+   */
+  lastRequest: z.object({ resourceId: z.string().max(128), at: z.number() }).optional(),
+  /**
+   * The latest stretch between two passes while it saw work that took far
+   * longer than a pass should, or across which its clocks disagreed: by its
+   * wall clock at either end, so `from` may be after `to` across a step back.
+   */
+  gap: z.object({ from: z.number(), to: z.number() }).optional(),
 });
 export type KeepAwakeStatus = z.infer<typeof KeepAwakeStatusSchema>;

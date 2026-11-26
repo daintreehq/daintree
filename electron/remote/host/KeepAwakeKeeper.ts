@@ -53,6 +53,12 @@ const RETRY_BASE_MS = 15_000;
 const RETRY_MAX_MS = 60_000;
 /** A listener opened for a URL that never came is closed after this long. */
 const LISTENER_GRACE_MS = 5 * 60_000;
+/**
+ * Busy passes this far apart, by either clock, or clocks that disagree by this
+ * much between them, are a gap the host can't explain: a delayed tick, a
+ * frozen process, a clock step. Well inside Agent 37's shortest idle time.
+ */
+const GAP_MS = 2 * PING_EVERY_MS;
 
 const EXPIRED =
   "The link Daintree gave this host to keep Agent 37 from sleeping it expired. Connect to it from Daintree to renew it.";
@@ -92,6 +98,15 @@ export class KeepAwakeKeeper {
    */
   private fallback: HeldUrl | null = null;
   private problem: string | null = null;
+  /**
+   * When a request through any URL last reached this listener, by the wall
+   * clock: one URL's own time can stand still while another's requests land.
+   */
+  private lastRequest: { resourceId: string; at: number } | null = null;
+  /** The last busy pass, by both clocks; null once idle or holding nothing. */
+  private lastBusyPass: { wall: number; mono: number } | null = null;
+  /** The latest gap between busy passes, by the wall clock at either end. */
+  private gap: { from: number; to: number } | null = null;
   /** When the last request that reached this listener went out, by the monotonic clock. */
   private lastSentAt = Number.NEGATIVE_INFINITY;
   private retryAt = Number.NEGATIVE_INFINITY;
@@ -130,6 +145,8 @@ export class KeepAwakeKeeper {
       expiresAt: covering?.expiresAt ?? null,
       reachedAt: covering?.reachedAt ?? null,
       problem: held ? null : (this.problem ?? this.listenerProblem),
+      ...(this.lastRequest ? { lastRequest: { ...this.lastRequest } } : {}),
+      ...(this.gap ? { gap: { ...this.gap } } : {}),
     };
   }
 
@@ -211,6 +228,7 @@ export class KeepAwakeKeeper {
     if (reached) {
       candidate.verified = true;
       candidate.reachedAt = this.now();
+      this.noteReached(candidate);
       this.lastSentAt = this.mono();
     } else if (outcome?.kind === "retry") {
       this.noteRetry();
@@ -285,6 +303,12 @@ export class KeepAwakeKeeper {
     this.controller = null;
     this.held = next;
     this.fallback = null;
+    this.lastBusyPass = null;
+    // What reached it is about the machine, not one URL: only another machine's URL forgets it.
+    if (next && this.lastRequest && this.lastRequest.resourceId !== next.resourceId) {
+      this.lastRequest = null;
+      this.gap = null;
+    }
     this.lastSentAt = Number.NEGATIVE_INFINITY;
     this.retryAt = Number.NEGATIVE_INFINITY;
     this.failures = 0;
@@ -335,7 +359,11 @@ export class KeepAwakeKeeper {
     if (this.fallback && this.now() >= this.fallback.expiresAt) this.fallback = null;
     if (this.verifying) return;
     // Only while the host sees work: nothing sent then is still out once an idle time can end.
-    if (!this.deps.idle.observation().busy) return;
+    if (!this.deps.idle.observation().busy) {
+      this.lastBusyPass = null;
+      return;
+    }
+    this.notePass();
     if (this.mono() < this.retryAt) return;
     if (held.verified && this.mono() - this.lastSentAt < PING_EVERY_MS) return;
     const generation = this.generation;
@@ -365,9 +393,25 @@ export class KeepAwakeKeeper {
     this.retryAt = Number.NEGATIVE_INFINITY;
     held.verified = true;
     held.reachedAt = this.now();
+    this.noteReached(held);
     // The URL it replaced stays behind it while that one outlasts it, to go back to once it expires.
     if (this.fallback && this.fallback.expiresAt <= held.expiresAt) this.fallback = null;
     this.lastSentAt = startedAt;
+  }
+
+  private noteReached(held: HeldUrl): void {
+    this.lastRequest = { resourceId: held.resourceId, at: held.reachedAt ?? this.now() };
+  }
+
+  /** A busy pass: one too long after the last, or with the clocks apart, is a gap of unknown cause. */
+  private notePass(): void {
+    const pass = { wall: this.now(), mono: this.mono() };
+    const last = this.lastBusyPass;
+    this.lastBusyPass = pass;
+    if (!last) return;
+    const mono = pass.mono - last.mono;
+    const wall = pass.wall - last.wall;
+    if (mono > GAP_MS || Math.abs(wall - mono) > GAP_MS) this.gap = { from: last.wall, to: pass.wall };
   }
 
   /** One request through the URL, carrying a nonce only this listener knows to expect. */

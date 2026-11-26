@@ -107,6 +107,11 @@ export class FakeAgent37Api {
   readonly sshKeys: Array<{ id: string; name: string | null; key: string; created: number }> = [];
   readonly requests: FakeAgent37Request[] = [];
   billing = { balance_usd: 4.2, tier: 0, memory_limit_gb: 32, past_due: false };
+  /**
+   * Whether a request through an instance's own URL counts as its activity.
+   * Agent 37's docs say both ways for one the instance sends itself (#17976).
+   */
+  creditsEdge = true;
   /** Leave `region` out of every instance it answers, as an older Agent 37 did. */
   unsayRegion = false;
   readonly signedUrls: FakeAgent37SignedUrl[] = [];
@@ -233,7 +238,7 @@ export class FakeAgent37Api {
     const handler = this.ports.get(key);
     // Whether a transport error counts is undocumented, so the fake never credits one.
     if (!handler) return new Response("Bad Gateway", { status: 502 });
-    this.activityAt.set(instance.id, this.clock);
+    if (this.creditsEdge) this.activityAt.set(instance.id, this.clock);
     this.edgeHits.set(key, (this.edgeHits.get(key) ?? 0) + 1);
     url.searchParams.delete("a37_token");
     return handler(`${url.pathname}${url.search}`, init?.method ?? "GET");

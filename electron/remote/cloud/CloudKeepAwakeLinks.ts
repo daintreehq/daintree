@@ -1,9 +1,13 @@
-import type { CloudKeepAwake } from "../../../shared/types/cloudHosts.js";
+import type { CloudKeepAwake, CloudKeepAwakeSeen } from "../../../shared/types/cloudHosts.js";
 import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
-import type { CloudHostStore, StoredCloudBinding } from "./CloudHostStore.js";
+import type {
+  CloudHostStore,
+  StoredCloudBinding,
+  StoredKeepAwakeSleep,
+} from "./CloudHostStore.js";
 import {
   KeepAwakeLinkMethod,
   KeepAwakeStatusSchema,
@@ -76,6 +80,9 @@ function withoutLink(text: string, url?: string): string {
   );
 }
 
+/** Within this of a gap's ends, a reported sleep explains it: the host's and the provider's clocks differ. */
+const CLOCK_SLACK_MS = 60_000;
+
 /** A view of what the host holds, apart from when it last said so: that alone isn't news. */
 function viewKey(view: CloudKeepAwake | null): string {
   return JSON.stringify(view?.kind === "held" ? { ...view, confirmedAt: 0 } : view);
@@ -138,6 +145,19 @@ export class CloudKeepAwakeLinks {
   private readonly mintedAt = new Map<string, number>();
   /** The link on which the host said it doesn't know these calls: not asked again on it. */
   private readonly unsupportedOn = new Map<string, LinkSession>();
+  /**
+   * When a request the host sent last reached it, as it said: kept here, not
+   * stored, since it moves every minute the host is busy (#17976).
+   */
+  private readonly lastRequestAt = new Map<string, number>();
+  /** The latest gap of unknown cause the host said it saw. */
+  private readonly gaps = new Map<string, { from: number; to: number }>();
+  /**
+   * The host's last request as first heard after a sleep was recorded: one
+   * it reports apart from that is a request since, and the sleep is over.
+   * Null when it had reported none; absent until heard.
+   */
+  private readonly sleepBaseline = new Map<string, number | null>();
   /** Stored expiries already seen passing, so the details change once when one runs out. */
   private readonly expiredSeen = new Set<string>();
   private disposed = false;
@@ -152,17 +172,74 @@ export class CloudKeepAwakeLinks {
   statusFor(bindingId: string): CloudKeepAwake | null {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId || !this.providerOf(binding)) return null;
+    const seen = this.seen(binding);
     const stored = binding.keepAwake;
     if (stored && stored.resourceId === binding.resourceId) {
-      if (stored.expiresAt <= this.now()) return { kind: "expired", expiredAt: stored.expiresAt };
+      if (stored.expiresAt <= this.now()) {
+        return { kind: "expired", expiredAt: stored.expiresAt, ...seen };
+      }
       return {
         kind: "held",
         expiresAt: stored.expiresAt,
         confirmedAt: Math.max(stored.confirmedAt, this.confirmedAt.get(bindingId) ?? 0),
         reached: stored.reached === true,
+        ...seen,
       };
     }
-    return { kind: "none", problem: this.problems.get(bindingId) ?? null };
+    return { kind: "none", problem: this.problems.get(bindingId) ?? null, ...seen };
+  }
+
+  /** What was seen of the host's requests and the machine's sleeps, whatever link it holds. */
+  private seen(binding: StoredCloudBinding): CloudKeepAwakeSeen {
+    const seen: CloudKeepAwakeSeen = {};
+    const lastRequestAt = this.lastRequestAt.get(binding.id);
+    if (lastRequestAt !== undefined) seen.lastRequestAt = lastRequestAt;
+    const sleep =
+      binding.keepAwakeSleep?.resourceId === binding.resourceId ? binding.keepAwakeSleep : null;
+    if (sleep && !sleep.cleared) {
+      seen.sleep = { sleptAt: sleep.sleptAt, lastRequestAt: sleep.lastRequestAt };
+    }
+    const gap = this.gaps.get(binding.id);
+    // A sleep the provider reported inside it is what it was, and is said as that.
+    const explained =
+      gap &&
+      sleep &&
+      sleep.sleptAt >= Math.min(gap.from, gap.to) - CLOCK_SLACK_MS &&
+      sleep.sleptAt <= Math.max(gap.from, gap.to) + CLOCK_SLACK_MS;
+    if (gap && !explained) seen.gap = { ...gap };
+    return seen;
+  }
+
+  /**
+   * The provider's latest read of the machine was written: a sleep it
+   * reports is recorded for the details, with the host's last request as
+   * known here, and kept through later reads until a request reaches the
+   * host after it. Only the provider's own sleep counts: a gap never does.
+   */
+  observed(bindingId: string): void {
+    if (this.disposed) return;
+    const binding = this.deps.store.binding(bindingId);
+    const observation = binding?.observation;
+    if (!binding?.resourceId || !observation?.asleep || !observation.stoppedAt) return;
+    if (!this.providerOf(binding)) return;
+    const sleptAt = Date.parse(observation.stoppedAt);
+    if (!Number.isFinite(sleptAt)) return;
+    const resourceId = binding.resourceId;
+    const stored = binding.keepAwakeSleep;
+    if (stored?.resourceId === resourceId && stored.sleptAt === sleptAt) return;
+    const before = viewKey(this.statusFor(bindingId));
+    const lastRequestAt = this.lastRequestAt.get(bindingId);
+    if (lastRequestAt === undefined) this.sleepBaseline.delete(bindingId);
+    else this.sleepBaseline.set(bindingId, lastRequestAt);
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.resourceId === resourceId
+        ? {
+            ...current,
+            keepAwakeSleep: { resourceId, sleptAt, lastRequestAt: lastRequestAt ?? null },
+          }
+        : current
+    );
+    if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
   }
 
   /** A link to a host came up: hand its machine a fresh link to hold. */
@@ -217,6 +294,9 @@ export class CloudKeepAwakeLinks {
     const live = new Set(bindings.map((binding) => binding.id));
     for (const map of [
       this.problems,
+      this.lastRequestAt,
+      this.gaps,
+      this.sleepBaseline,
       this.checkedAt,
       this.confirmedAt,
       this.retryAt,
@@ -433,6 +513,7 @@ export class CloudKeepAwakeLinks {
     const now = this.now();
     const before = viewKey(this.statusFor(bindingId));
     this.checkedAt.set(bindingId, now);
+    if (status) this.noteRequests(bindingId, resourceId, status);
     const expiresAt = status?.expiresAt ?? null;
     if (expiresAt !== null && expiresAt > now) {
       this.confirmedAt.set(bindingId, now);
@@ -469,6 +550,62 @@ export class CloudKeepAwakeLinks {
       }
     }
     if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
+  }
+
+  /** What the host said of its requests: when the last reached it, the latest gap, and a sleep since over. */
+  private noteRequests(bindingId: string, resourceId: string, status: KeepAwakeStatus): void {
+    // A host from before #17976 says only when the link it holds was last reached.
+    const at =
+      status.lastRequest === undefined
+        ? (status.reachedAt ?? undefined)
+        : status.lastRequest.resourceId === resourceId
+          ? status.lastRequest.at
+          : undefined;
+    if (at !== undefined) this.lastRequestAt.set(bindingId, at);
+    if (status.gap) this.gaps.set(bindingId, { ...status.gap });
+    const sleep = this.deps.store.binding(bindingId)?.keepAwakeSleep;
+    if (sleep?.resourceId !== resourceId || sleep.cleared) return;
+    const reported = at ?? null;
+    if (!this.sleepBaseline.has(bindingId)) {
+      // The first word after the sleep: what it says may be a request from before it, heard late.
+      this.sleepBaseline.set(bindingId, reported);
+      if (reported !== null && reported <= sleep.sleptAt) this.pairSleep(bindingId, sleep, reported);
+      return;
+    }
+    if (reported === null || reported === this.sleepBaseline.get(bindingId)) return;
+    this.sleepBaseline.set(bindingId, reported);
+    if (reported <= sleep.sleptAt) {
+      this.pairSleep(bindingId, sleep, reported);
+      return;
+    }
+    // A request reached the host since the sleep: kept, marked over, so a repeat of it isn't news.
+    this.updateSleep(bindingId, sleep, { cleared: true });
+  }
+
+  /** A request from before the sleep, later than the one it was recorded beside. */
+  private pairSleep(
+    bindingId: string,
+    sleep: StoredKeepAwakeSleep,
+    at: number
+  ): void {
+    if (sleep.lastRequestAt !== null && sleep.lastRequestAt >= at) return;
+    this.updateSleep(bindingId, sleep, { lastRequestAt: at });
+  }
+
+  /** Changes the stored sleep, if it is still the one this read. */
+  private updateSleep(
+    bindingId: string,
+    sleep: StoredKeepAwakeSleep,
+    change: Partial<Pick<StoredKeepAwakeSleep, "lastRequestAt" | "cleared">>
+  ): void {
+    this.deps.store.updateBinding(bindingId, (binding) => {
+      const current = binding.keepAwakeSleep;
+      return current?.resourceId === sleep.resourceId &&
+        current.sleptAt === sleep.sleptAt &&
+        binding.resourceId === sleep.resourceId
+        ? { ...binding, keepAwakeSleep: { ...current, ...change } }
+        : binding;
+    });
   }
 
   private async call(

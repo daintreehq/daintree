@@ -187,6 +187,13 @@ export interface StoredCloudBinding {
    */
   keepAwake?: StoredKeepAwake;
   /**
+   * The provider's last reported sleep of `resourceId` (#17976), with when the
+   * host's last request reached it as this device knew then; `cleared` once a
+   * request reached the host after it. Kept apart from `keepAwake`, which goes
+   * with the link the host holds. Never the link itself.
+   */
+  keepAwakeSleep?: StoredKeepAwakeSleep;
+  /**
    * The rate the machine was leased at through an offer (#18233), kept from
    * the write that bound it. Absent for a lease whose rate nobody said, for a
    * machine imported or made by an immediate create, and for a machine other
@@ -207,6 +214,13 @@ export interface StoredKeepAwake {
   confirmedAt: number;
   /** The host said a request through it had reached it. */
   reached?: true;
+}
+
+export interface StoredKeepAwakeSleep {
+  resourceId: string;
+  sleptAt: number;
+  lastRequestAt: number | null;
+  cleared?: true;
 }
 
 /** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
@@ -717,6 +731,7 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
     ...(value.mcpServerOnConnect === true ? { mcpServerOnConnect: true as const } : {}),
     ...readKeepAwake(value.keepAwake, resourceId),
+    ...readKeepAwakeSleep(value.keepAwakeSleep, resourceId),
     ...readLeaseRate(value.leaseRate, resourceId),
   };
 }
@@ -754,6 +769,24 @@ function readKeepAwake(
       expiresAt,
       confirmedAt,
       ...(value.reached === true ? { reached: true as const } : {}),
+    },
+  };
+}
+
+function readKeepAwakeSleep(
+  raw: unknown,
+  resourceId: string | null
+): { keepAwakeSleep: StoredKeepAwakeSleep } | Record<string, never> {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || resourceId === null) return {};
+  const sleptAt = num(value.sleptAt);
+  if (value.resourceId !== resourceId || sleptAt === null) return {};
+  return {
+    keepAwakeSleep: {
+      resourceId,
+      sleptAt,
+      lastRequestAt: num(value.lastRequestAt),
+      ...(value.cleared === true ? { cleared: true as const } : {}),
     },
   };
 }
