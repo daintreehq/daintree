@@ -2142,6 +2142,7 @@ export class CloudHostLifecycle {
     for (const orderId of order.orderIds ?? []) {
       if (this.disposed) throw new AppError({ code: "CANCELLED", message: "Stopping" });
       const outcome = await offers.closeOrder(credentials, orderId);
+      if (this.disposed) throw new AppError({ code: "CANCELLED", message: "Stopping" });
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
@@ -2333,7 +2334,9 @@ export class CloudHostLifecycle {
     provider: CloudProvider | null
   ): void {
     const binding = this.deps.store.binding(order.bindingId);
-    if (!binding?.hostId || binding.resourceId || this.operations.has(binding.id)) return;
+    if (this.disposed || !binding?.hostId || binding.resourceId) return;
+    if (this.operations.has(binding.id) || binding.lastError?.message === LEASED_BEFORE_CANCEL)
+      return;
     // A choice waiting on the person speaks for the host.
     if (this.ordersFor(binding.id).some((other) => other.state === "open")) return;
     const said = asSentence(
@@ -2357,7 +2360,8 @@ export class CloudHostLifecycle {
     provider: CloudProvider | null
   ): void {
     const binding = this.deps.store.binding(order.bindingId);
-    if (!binding?.hostId || binding.resourceId || this.operations.has(binding.id)) return;
+    if (this.disposed || !binding?.hostId || binding.resourceId) return;
+    if (this.operations.has(binding.id)) return;
     const name = provider ? nameOf(provider) : "the provider";
     if (outcome.kind === "pending") {
       // A lease unanswered: the host says what is awaited, once.
@@ -2748,8 +2752,9 @@ export class CloudHostLifecycle {
         described.code === "refused" ||
         described.code === "not-found" ||
         described.code === "capacity";
-      const message =
-        reopened?.state === "close"
+      const message = !host
+        ? `${asSentence(described.message)} Nothing was leased.`
+        : reopened?.state === "close"
           ? `${asSentence(described.message)} Nothing was leased, and this host has its machine already.`
           : `${asSentence(described.message)} Nothing was leased, and the order is still open${offerAtFault ? ": choose another offer." : "."}`;
       throw new AppError({ code: "VALIDATION", message, userMessage: message });
@@ -3320,10 +3325,20 @@ export class CloudHostLifecycle {
     for (const order of closesOrders ? this.ordersFor(confirmed.id) : []) {
       if (order.state === "placing") continue;
       this.withdrawOrder(order.id);
+      let outcome: OrderSettlement;
       try {
-        await this.settleOrder(order.id);
+        outcome = await this.settleOrder(order.id);
       } catch (error) {
         throw this.deps.accounts.asAppError(this.deps.accounts.provider(order.providerId), error);
+      }
+      // A lease that may still land keeps the host, which a machine it makes is then deleted from.
+      if (
+        outcome.kind === "pending" &&
+        this.deps.store.createOrder(order.id)?.state === "leasing"
+      ) {
+        const message =
+          "Daintree is still finding out whether the lease for this host went through, so it can't delete the host yet. Try again in a minute.";
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
       }
       // A lease that landed just before is being deleted already: that delete is this one.
       await this.withdrawnDeletes.get(order.id);

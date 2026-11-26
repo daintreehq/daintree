@@ -1034,6 +1034,7 @@ describe("CloudHostStore create orders (#18230)", () => {
     store.putCreateOrder(order({ id: "co_2", bindingId: "cb_other00001" }));
     store.putCreateOrder(order({ id: "co_3", state: "placing", orderIds: null }));
     store.putCreateOrder(order({ id: "co_4" }));
+    store.putCreateOrder(order({ id: "co_5", state: "leasing", offerId: "bid-8" }));
     const writes: string[] = [];
     const set = backend.set.bind(backend);
     backend.set = ((key: "cloudHosts", value: CloudHostsValue) => {
@@ -1048,6 +1049,7 @@ describe("CloudHostStore create orders (#18230)", () => {
       ["co_2", "open", null],
       ["co_3", "close", null],
       ["co_4", "close", null],
+      ["co_5", "leasing", "bid-8"],
     ]);
     // A lease sent is kept as it was, to be read back before its order is closed (#18251).
     expect(store.createOrder("co_1")).toEqual(
@@ -1073,6 +1075,7 @@ describe("CloudHostStore create orders (#18230)", () => {
       { ...order({ id: "co_2", state: "leasing", offerId: "bid-7" }), cancelled: "true" },
       { ...order({ id: "co_3", state: "leasing", offerId: "bid-7" }), cancelled: 1 },
       { ...order({ id: "co_4" }), cancelled: true },
+      { ...order({ id: "co_5", state: "placing", orderIds: null }), cancelled: true },
     ] as StoredCreateOrder[]);
     const legacy = new CloudHostStore(backend);
     expect(legacy.createOrder("co_1")).toEqual(order({ state: "leasing", offerId: "bid-7" }));
@@ -1083,6 +1086,9 @@ describe("CloudHostStore create orders (#18230)", () => {
       order({ id: "co_3", state: "leasing", offerId: "bid-7" })
     );
     expect(legacy.createOrder("co_4")).toEqual(order({ id: "co_4" }));
+    expect(legacy.createOrder("co_5")).toEqual(
+      order({ id: "co_5", state: "placing", orderIds: null })
+    );
   });
 
   it("never acts on an order that doesn't read, and keeps it on disk through every write", () => {

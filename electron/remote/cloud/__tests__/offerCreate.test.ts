@@ -1000,6 +1000,7 @@ describe("offer-based create (#18230)", () => {
       await expect(
         env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
       ).rejects.toMatchObject({
+        code: "OUTCOME_UNKNOWN",
         userMessage: expect.stringContaining("couldn't be read back yet"),
       });
       expect(env.store.createOrders()).toMatchObject([{ state: "leasing", offerId: "a" }]);
@@ -1244,7 +1245,10 @@ describe("offer-based create (#18230)", () => {
       expect(env.store.createOrders()).toMatchObject([{ state: "leasing", offerId: "a" }]);
       // Nobody waits on the order now, so a refusal closes it rather than opening it again.
       env.api.answerLease("refuse");
-      await expect(chosen).rejects.toThrow();
+      await expect(chosen).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.not.stringContaining("has its machine"),
+      });
       await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
       expect(env.api.sent).toEqual([`lease ${orderId}`, `close ${orderId}`]);
       expect(env.api.orders.get(orderId)?.state).toBe("closed");
@@ -1467,6 +1471,31 @@ describe("offer-based create (#18230)", () => {
       expect(env.status()?.lastError?.message).toContain("leased just before the cancel");
     });
 
+    it("keeps a host whose lease may still land when it is deleted, and deletes it once the order settles", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.lease.push("hang");
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5).catch(() => {});
+      await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+      env.crash();
+      await vi.waitFor(() => expect(env.api.readOrder).toHaveBeenCalledTimes(1));
+      await expect(env.lifecycle.deleteMachine(hostId, null)).rejects.toMatchObject({
+        code: "OUTCOME_UNKNOWN",
+        userMessage: expect.stringContaining("can't delete the host yet"),
+      });
+      expect(env.hosts.map((host) => host.id)).toEqual([hostId]);
+      expect(env.api.closeOrder).not.toHaveBeenCalled();
+      env.clock.at += 61_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+      expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
+      await env.lifecycle.deleteMachine(hostId, null);
+      expect(env.hosts).toEqual([]);
+    });
+
     it("deleting the host while its lease is out, then quitting: the next run deletes what the lease made", async () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const env = await offerCloud();
@@ -1513,7 +1542,12 @@ describe("offer-based create (#18230)", () => {
         expect(env.status()?.lastError?.message).toContain("Cancelled. Daintree closes the order")
       );
       expect(env.api.closeOrder).not.toHaveBeenCalled();
-      env.clock.at += 61_000;
+      // Not yet after half a minute, read again on a pass of its own.
+      env.clock.at += 30_000;
+      await env.lifecycle.cancelOrder(hostId, choice.order.id);
+      await vi.waitFor(() => expect(env.api.readOrder).toHaveBeenCalledTimes(3));
+      expect(env.api.closeOrder).not.toHaveBeenCalled();
+      env.clock.at += 31_000;
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
       expect(env.api.sent.slice(-2)).toEqual([
