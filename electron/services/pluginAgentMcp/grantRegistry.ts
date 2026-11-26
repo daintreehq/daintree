@@ -282,6 +282,13 @@ export class PluginMcpGrantRegistry {
     );
   }
 
+  listForHelpSession(helpSessionId: string): PluginMcpGlobalAssistantGrant[] {
+    return this.filter(
+      (grant): grant is PluginMcpGlobalAssistantGrant =>
+        grant.consumer === "global-assistant" && grant.helpSessionId === helpSessionId
+    );
+  }
+
   /** Revoke one grant, as its holder replaces it. */
   revokeCredential(credentialId: string, reason: PluginMcpGrantRevokeReason): PluginMcpGrant[] {
     return this.revokeWhere((grant) => grant.credentialId === credentialId, reason);

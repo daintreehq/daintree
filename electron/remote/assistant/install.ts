@@ -331,11 +331,13 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           // A plugin's tool may change the project, so it runs only while
           // another machine doesn't drive it, as any other relayed change.
           refuseWrite: async (projectId) => {
-            const [{ relayWriteStanding }, { DriveHolderUnavailableError, RelayDrivenElsewhereError }] =
-              await Promise.all([
-                import("../../services/mcp-server/relayWriteRule.js"),
-                import("../../services/mcp-server/rendererBridge.js"),
-              ]);
+            const [
+              { relayWriteStanding },
+              { DriveHolderUnavailableError, RelayDrivenElsewhereError },
+            ] = await Promise.all([
+              import("../../services/mcp-server/relayWriteRule.js"),
+              import("../../services/mcp-server/rendererBridge.js"),
+            ]);
             const standing = relayWriteStanding(projectId, LOCAL_RELAY_LINK_SESSION_ID, true);
             if (standing.kind === "vacant" || standing.kind === "own-view") return null;
             return standing.kind === "unavailable"

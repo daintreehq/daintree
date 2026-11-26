@@ -454,6 +454,26 @@ describe("host.call audit projection (#13493)", () => {
     expect(JSON.stringify(projected)).not.toContain("COMMAND-SENTINEL");
   });
 
+  it("keeps a plugin tool call to its plugin, tool and argument names (#18254)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "local",
+      tool: "plugin.callTool",
+      args: {
+        pluginInstanceId: "acme.ledger",
+        tool: "lookup",
+        arguments: { id: "VALUE-SENTINEL", note: "more" },
+      },
+    }) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({
+      tool: "plugin.callTool",
+      "args.pluginInstanceId": "acme.ledger",
+      "args.tool": "lookup",
+      "args.argumentNames": "id, note",
+    });
+    expect(JSON.stringify(projected)).not.toContain("VALUE-SENTINEL");
+  });
+
   it("drops a tool name that isn't one, and never projects a relay of a relay", () => {
     expect(
       projectAuditArgs("host.call", {

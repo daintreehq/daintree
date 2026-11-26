@@ -175,6 +175,32 @@ describe("agent MCP over the worker bridge", () => {
     expect(Object.isFrozen(caller)).toBe(true);
   });
 
+  it("carries the global Assistant's caller across with no terminal (#18254)", async () => {
+    const { host, proxy } = makeConnectedPair();
+    const execute = vi.fn(() => null);
+    await proxy.host.mcp.registerTools("data", {
+      list_rows: { description: "Lists rows.", inputSchema: { type: "object" }, execute },
+    });
+    await flush();
+
+    const globalCaller = {
+      credentialId: CALLER.credentialId,
+      projectId: CALLER.projectId,
+      consumer: "global-assistant",
+      // Picked up upstream: never the plugin's to see.
+      helpSessionId: "help-g",
+    } as PluginMcpCaller;
+    await host.rosters[0].tools.list_rows.execute({}, globalCaller, new AbortController().signal);
+
+    const caller = (execute.mock.calls[0] as unknown[])[1];
+    expect(caller).toEqual({
+      credentialId: CALLER.credentialId,
+      projectId: CALLER.projectId,
+      consumer: "global-assistant",
+    });
+    expect(Object.isFrozen(caller)).toBe(true);
+  });
+
   it("does not invent a consumer for a caller that has none", async () => {
     const { host, proxy } = makeConnectedPair();
     const execute = vi.fn(() => null);

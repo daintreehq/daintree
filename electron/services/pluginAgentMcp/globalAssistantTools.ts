@@ -253,9 +253,10 @@ export class GlobalAssistantPluginTools {
       const declared = resolved.declared.find(
         (entry) => entry.plugin.pluginInstanceId === pluginInstanceId
       );
-      if (declared?.scope === null) {
+      // No plugin on for the Assistant here means this one isn't either.
+      if (declared?.scope === null || resolved.noAccess === true) {
         return failure(
-          "This plugin's agent tools are off for the Assistant in this project. Nothing was run. The person can turn them on in the project's settings."
+          "That plugin's agent tools aren't on for the Assistant in this project. Nothing was run. The person can turn them on in the project's settings."
         );
       }
       if (resolved.pending) {
@@ -309,7 +310,11 @@ export class GlobalAssistantPluginTools {
    * session has ended: checked in the same turn as the mint, so a session
    * that ended while this call resolved plugins never gets one.
    */
-  private heldFor(helpSessionId: string, projectId: string, launch: LaunchPlugin): HeldTools | null {
+  private heldFor(
+    helpSessionId: string,
+    projectId: string,
+    launch: LaunchPlugin
+  ): HeldTools | null {
     const pluginInstanceId = launch.plugin.pluginInstanceId;
     const key = keyOf(helpSessionId, projectId, pluginInstanceId);
     const existing = this.held.get(key);

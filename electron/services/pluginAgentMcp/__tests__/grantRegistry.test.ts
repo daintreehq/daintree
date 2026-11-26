@@ -451,4 +451,116 @@ describe("PluginMcpGrantRegistry tool groups", () => {
     expect(revoked.map((grant) => grant.credentialId)).toEqual([grouped.credentialId]);
     expect(registry.isLive(databases.credentialId)).toBe(true);
   });
+
+  describe("for the global Assistant (#18254)", () => {
+    function issueGlobal(
+      registry: PluginMcpGrantRegistry,
+      overrides: Partial<Parameters<PluginMcpGrantRegistry["issueForGlobalAssistant"]>[0]> = {}
+    ) {
+      return registry.issueForGlobalAssistant({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: false, pluginEndpointId: "data" },
+        serverName: "daintree-ledger",
+        projectId: PROJECT_A,
+        helpSessionId: "help-g",
+        ...overrides,
+      });
+    }
+
+    it("holds a session's grant by credential id, with no bearer and no terminal", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const grant = issueGlobal(registry);
+
+      expect(grant).toMatchObject({ consumer: "global-assistant", helpSessionId: "help-g" });
+      expect(grant).not.toHaveProperty("bearerSha256");
+      expect(grant).not.toHaveProperty("terminalId");
+      expect(Object.isFrozen(grant)).toBe(true);
+      expect(registry.isLive(grant.credentialId)).toBe(true);
+      expect(registry.listForHelpSession("help-g")).toEqual([grant]);
+      // Nothing a client presents names it.
+      expect(registry.authenticate(grant.credentialId)).toBeNull();
+    });
+
+    it("keeps it out of every terminal's grants", () => {
+      const registry = new PluginMcpGrantRegistry();
+      issueGlobal(registry);
+      const pane = issue(registry, { terminalId: "term-1" });
+
+      expect(registry.listForTerminal("term-1")).toEqual([pane.grant]);
+      registry.revokeTerminal("term-1");
+      expect(registry.listForHelpSession("help-g")).toHaveLength(1);
+    });
+
+    it("revokes one session's grants as session-ended, leaving another's and the panes'", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const mine = issueGlobal(registry);
+      const theirs = issueGlobal(registry, { helpSessionId: "help-h" });
+      const pane = issue(registry);
+      const listener = vi.fn();
+      registry.onRevoked(listener);
+
+      registry.revokeHelpSession("help-g");
+
+      expect(registry.isLive(mine.credentialId)).toBe(false);
+      expect(registry.isLive(theirs.credentialId)).toBe(true);
+      expect(registry.authenticate(pane.token)).toBe(pane.grant);
+      expect(listener).toHaveBeenCalledWith([mine], "session-ended");
+    });
+
+    it("goes with its plugin, a narrowed answer and a regroup, as a pane's does", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const unloaded = issueGlobal(registry);
+      registry.revokePlugin("acme.ledger");
+      expect(registry.isLive(unloaded.credentialId)).toBe(false);
+
+      const narrowed = issueGlobal(registry);
+      registry.revokeDisabledInProject(PROJECT_A, () => false);
+      expect(registry.isLive(narrowed.credentialId)).toBe(false);
+
+      const grouped = issueGlobal(registry, {
+        scope: {
+          databases: false,
+          pluginEndpointId: "data",
+          pluginGroups: [{ id: "search", access: "read" }],
+        },
+      });
+      registry.revokeRegrouped("acme.ledger", "data");
+      expect(registry.isLive(grouped.credentialId)).toBe(false);
+    });
+
+    it("is held across a reload and settled with the launch grants", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const grant = issueGlobal(registry);
+
+      registry.holdPlugin("acme.ledger", "surface-1");
+      expect(registry.isHeld(grant.credentialId)).toBe(true);
+      registry.releasePlugin("acme.ledger", "surface-2");
+      expect(registry.isLive(grant.credentialId)).toBe(false);
+    });
+
+    it("refuses another project's plugin, a non-project, and a missing session", () => {
+      const registry = new PluginMcpGrantRegistry();
+
+      expect(() =>
+        issueGlobal(registry, {
+          pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+          projectId: PROJECT_B,
+        })
+      ).toThrow(/different project/);
+      expect(() => issueGlobal(registry, { projectId: "not-a-project" })).toThrow(/workspace id/);
+      expect(() => issueGlobal(registry, { helpSessionId: "" })).toThrow(/help session id/);
+      expect(() => issueGlobal(registry, { scope: { databases: false } })).toThrow(
+        /reaches no tools/
+      );
+    });
+
+    it("revokes one grant by credential id", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const first = issueGlobal(registry);
+      const second = issueGlobal(registry, { pluginInstanceId: "acme.crm" });
+
+      expect(registry.revokeCredential(first.credentialId, "rescoped")).toEqual([first]);
+      expect(registry.isLive(second.credentialId)).toBe(true);
+    });
+  });
 });
