@@ -40,8 +40,8 @@ export const DEFAULT_PLUGIN_TOOLS_PAGE_BYTES = 32 * 1024;
 const MAX_UNAVAILABLE_REASON_CHARS = 300;
 /** A plugin's display name as a row carries it: manifests don't bound it. */
 const MAX_PLUGIN_NAME_CHARS = 120;
-/** What the first page spends on `off` and `unavailable` at most; the rest is counted. */
-const MAX_NOTES_BYTES = 8 * 1024;
+/** What a page spends on `off` or `unavailable` at most; the rest is counted. */
+const MAX_NOTES_BYTES = 4 * 1024;
 const LISTED_STALE =
   "Its tools changed while they were being listed. List again with plugin.tools.";
 
@@ -127,12 +127,20 @@ function pluginName(plugin: DeclaredAgentMcpPlugin): string {
   return clip(plugin.pluginDisplayName.trim() || plugin.pluginManifestId, MAX_PLUGIN_NAME_CHARS);
 }
 
+/**
+ * What `value` costs a `host.call` answer at most: as JSON escaped into a
+ * string, the form the relay falls back to for an object it can't carry whole.
+ */
+function carriedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(JSON.stringify(value)), "utf8");
+}
+
 /** As many entries as fit `maxBytes`, and how many didn't. */
 function fitted<T>(entries: readonly T[], maxBytes: number): { kept: T[]; omitted: number } {
   const kept: T[] = [];
   let bytes = 2;
   for (const entry of entries) {
-    const size = Buffer.byteLength(JSON.stringify(entry), "utf8") + 1;
+    const size = carriedBytes(entry) + 1;
     if (bytes + size > maxBytes) break;
     kept.push(entry);
     bytes += size;
@@ -142,6 +150,8 @@ function fitted<T>(entries: readonly T[], maxBytes: number): { kept: T[]; omitte
 
 /** `work`, or `null` as soon as `signal` aborts, whichever is first. */
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  // Given up on, its failure is nobody's to hear.
+  work.catch(() => {});
   if (signal.aborted) return Promise.resolve(null);
   return new Promise<T | null>((resolve, reject) => {
     const onAbort = () => resolve(null);
@@ -238,7 +248,11 @@ export class GlobalAssistantPluginTools {
         const held = this.heldFor(helpSessionId, projectId, launch);
         if (typeof held === "string") return { launch, error: held };
         try {
-          return { launch, held, tools: await held.tools.listTools(signal) };
+          // A plugin slow to start doesn't hold a call already cancelled or out of time.
+          const tools = await untilAborted(held.tools.listTools(signal), signal);
+          return tools === null
+            ? { launch, error: "The call was cancelled or ran out of time." }
+            : { launch, held, tools };
         } catch (err) {
           return { launch, error: formatErrorMessage(err, "Its tools couldn't be listed.") };
         }
@@ -256,21 +270,21 @@ export class GlobalAssistantPluginTools {
     const rows = current.flatMap(({ launch, tools }) =>
       (tools ?? []).map((tool) => rowOf(launch, tool))
     );
-    // Said once, on the first page, within a bound of their own.
+    // Each within a bound of its own. What couldn't be listed is said on
+    // every page, since a later page's roster is rebuilt and may have lost
+    // some; what's off is said once.
     const first = offset === 0;
     const unavailable = fitted(
-      first
-        ? current.flatMap(({ launch, error }) =>
-            error === undefined
-              ? []
-              : [
-                  {
-                    pluginInstanceId: launch.plugin.pluginInstanceId,
-                    reason: clip(error, MAX_UNAVAILABLE_REASON_CHARS),
-                  },
-                ]
-          )
-        : [],
+      current.flatMap(({ launch, error }) =>
+        error === undefined
+          ? []
+          : [
+              {
+                pluginInstanceId: launch.plugin.pluginInstanceId,
+                reason: clip(error, MAX_UNAVAILABLE_REASON_CHARS),
+              },
+            ]
+      ),
       MAX_NOTES_BYTES
     );
     const off = fitted(
@@ -289,12 +303,10 @@ export class GlobalAssistantPluginTools {
     );
     const budget = this.deps.pageBytes ?? DEFAULT_PLUGIN_TOOLS_PAGE_BYTES;
     const page: GlobalAssistantPluginToolRow[] = [];
-    let bytes =
-      Buffer.byteLength(JSON.stringify({ unavailable: unavailable.kept, off: off.kept }), "utf8") +
-      256;
+    let bytes = carriedBytes({ unavailable: unavailable.kept, off: off.kept }) + 256;
     let next = offset;
     while (next < rows.length) {
-      const size = Buffer.byteLength(JSON.stringify(rows[next]), "utf8") + 1;
+      const size = carriedBytes(rows[next]) + 1;
       // A page always carries at least one row, so a large schema can't stall it.
       if (page.length > 0 && bytes + size > budget) break;
       page.push(rows[next]);

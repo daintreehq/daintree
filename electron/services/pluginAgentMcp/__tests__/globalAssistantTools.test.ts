@@ -251,6 +251,7 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
 
     const listed = structured(await tools.list(SESSION, PROJECT_A, {}, signal()));
     expect(listed.tools).toEqual([]);
+    expect(listed.stillLoading).toBe(false);
     const called = await tools.call(
       SESSION,
       PROJECT_A,
@@ -550,6 +551,14 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
       expect(Buffer.byteLength(JSON.stringify(reply), "utf8")).toBeLessThanOrEqual(
         MCP_RESPONSE_TEXT_MAX_BYTES
       );
+      // And as text, the form the relay carries an object it can't keep whole in.
+      const asText = {
+        ...reply,
+        result: { ...reply.result, structured: null, text: JSON.stringify(page) },
+      };
+      expect(Buffer.byteLength(JSON.stringify(asText), "utf8")).toBeLessThanOrEqual(
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
       names.push(...page.tools.map((row) => row.name));
       cursor = page.nextCursor;
       pages += 1;
@@ -617,6 +626,7 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     );
 
     expect(result.isError).toBe(true);
+    expect(text(result)).toContain("studio-01");
     expect(activatePlugin).not.toHaveBeenCalled();
     expect(grantIds().size).toBe(0);
     expect(invoke).not.toHaveBeenCalled();
@@ -654,6 +664,42 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     expect(read.isError).not.toBe(true);
     expect(readInvoke).toHaveBeenCalledTimes(1);
     expect(refuseWrite).not.toHaveBeenCalled();
+  });
+
+  it("answers a cancelled list without waiting for a plugin slow to start", async () => {
+    allowLedger();
+    activatePlugin.mockImplementation(() => new Promise<void>(() => {}));
+    const controller = new AbortController();
+    const pending = tools.list(SESSION, PROJECT_A, {}, controller.signal);
+    await vi.waitFor(() => expect(activatePlugin).toHaveBeenCalled());
+    controller.abort();
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+  });
+
+  it("says on a later page which plugin couldn't be listed", async () => {
+    allowLedger();
+    records = [record(LEDGER), record(CRM)];
+    loaded.add(CRM);
+    setProjectAgentMcpAccess(PROJECT_A, CRM, "read-write");
+    setProjectAssistantAgentMcpAccess(PROJECT_A, CRM, "read-write");
+    endpoints.register({ pluginInstanceId: CRM, endpointId: "data", tools: [LOOKUP], invoke });
+    tools.dispose();
+    tools = makeTools({ pageBytes: 1 });
+    const first = structured(await tools.list(SESSION, PROJECT_A, {}, signal()));
+    expect(first.nextCursor).toBe("1");
+
+    // CRM's grant is held by a reload when the next page is asked for: its
+    // row is gone from the rebuilt roster, and the page says so.
+    pluginMcpGrantRegistry.holdPlugin(CRM, "surface-1");
+    const later = structured(
+      await tools.list(SESSION, PROJECT_A, { cursor: first.nextCursor! }, signal())
+    );
+    expect(later.tools).toEqual([]);
+    expect(later.unavailable).toEqual([
+      { pluginInstanceId: CRM, reason: expect.stringContaining("reloading") },
+    ]);
   });
 
   it("mints nothing and runs nothing once disposed mid-call", async () => {
