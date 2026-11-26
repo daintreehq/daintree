@@ -169,6 +169,7 @@ function deps(overrides: Partial<SshHostKeyReaderDeps> = {}): SshHostKeyReaderDe
     },
     stat: (file) => record("stat", file, () => fsp.stat(file)),
     lstat: (file) => record("lstat", file, () => fsp.lstat(file)),
+    realpath: (file) => fsp.realpath(file),
     canRead: async (file) => !unreadable.has(file) && fs.existsSync(file),
     trustBinary: async (binary) => (trusted.has(binary) ? binary : null),
     runConfigDump: async (binary, args) => {
@@ -291,7 +292,9 @@ describe("readSshHostKeys (#18257)", () => {
     const outsideProc = touched.filter((entry) => !entry.file.startsWith(proc));
     // Each private key is stat-ed, to tell it from its .pub, and nothing more.
     for (const key of privateKeys) {
-      expect(outsideProc.filter((e) => e.file === key).map((e) => e.how)).toEqual(["stat"]);
+      const hows = outsideProc.filter((e) => e.file === key).map((e) => e.how);
+      expect(hows.length).toBeGreaterThan(0);
+      expect(new Set(hows)).toEqual(new Set(["stat"]));
     }
     const opened = outsideProc.filter((e) => e.how === "open").map((e) => e.file);
     expect(opened.sort()).toEqual([...privateKeys].map((file) => `${file}.pub`).sort());
@@ -396,6 +399,54 @@ describe("readSshHostKeys (#18257)", () => {
     const answer = await reading();
     expect(answer.listeners[1]!.keys.map((k) => k.outcome)).toEqual(["not-a-public-file"]);
     expect(touched.some((e) => e.how === "open" && e.file === `${ecdsa}.pub`)).toBe(false);
+  });
+
+  it("refuses a .pub with a second name, whatever the other name is", async () => {
+    standardDaemon();
+    const rsa = path.join(etc, "ssh/ssh_host_rsa_key");
+    fs.linkSync(`${rsa}.pub`, path.join(root, "elsewhere.pub"));
+    const answer = await reading();
+    expect(answer.listeners[0]!.keys.map((k) => k.outcome)).toEqual(["read", "not-a-public-file"]);
+  });
+
+  it("checks the mount of a key however its path is spelled", async () => {
+    const key = path.join(etc, "ssh/odd_key");
+    keyPair(key, "ed25519");
+    const odd = key.replace("/ssh/", "//ssh/./");
+    processEntry(100, {
+      argv: [SSHD, "-D", "-f", "none", "-h", odd],
+      mountinfo: `${HOST_ROOT}77 22 259:2 /srv/provider-ssh ${etc}/ssh ro,relatime - ext4 /dev/nvme0n1p2 ro\n`,
+    });
+    const answer = await reading();
+    expect(answer.listeners[0]).toMatchObject({ gaps: ["other-namespace"], keys: [] });
+    expect(touched.some((e) => e.how === "open")).toBe(false);
+  });
+
+  it("runs no sshd -G on a config bound over in the daemon's namespace", async () => {
+    standardDaemon();
+    const tunnel = path.join(root, "opt/tunnel");
+    config(path.join(tunnel, "sshd_config"), ["Port 2222"]);
+    processEntry(200, {
+      argv: [SSHD, "-D", "-f", path.join(tunnel, "sshd_config")],
+      mountinfo: `${HOST_ROOT}78 22 259:2 /srv/provider ${tunnel} ro,relatime - ext4 /dev/nvme0n1p2 ro\n`,
+    });
+    const answer = await reading();
+    expect(answer.listeners[1]).toMatchObject({ gaps: ["other-namespace"], keys: [] });
+    expect(dumps.map((dump) => dump.args)).toEqual([["-G"]]);
+  });
+
+  it("leaves a daemon unread when a directory it includes is bound over for it", async () => {
+    standardDaemon();
+    const extra = path.join(root, "opt/extra.d");
+    fs.mkdirSync(extra, { recursive: true });
+    fs.appendFileSync(path.join(etc, "ssh/sshd_config"), `Include ${extra}/*.conf\n`);
+    fs.rmSync(path.join(proc, "100"), { recursive: true });
+    processEntry(100, {
+      argv: [SSHD, "-D"],
+      mountinfo: `${HOST_ROOT}79 22 259:2 /srv/extra ${extra} ro,relatime - ext4 /dev/nvme0n1p2 ro\n`,
+    });
+    const answer = await reading();
+    expect(answer.listeners[0]).toMatchObject({ gaps: ["other-namespace"], keys: [] });
   });
 
   it("leaves a daemon with its own mount over the key directory unread", async () => {
@@ -536,11 +587,18 @@ describe("readSshHostKeys (#18257)", () => {
     fs.appendFileSync(conf, "Include sshd_config.d/*.conf\n");
     const included = path.join(etc, "ssh/sshd_config.d");
     fs.mkdirSync(included);
-    // A comment, a quoted path, a literal that names nothing and `Include=` are all fine.
+    // A comment, quoted paths, CRLF, a literal or a directory that names nothing, and `Include=`
+    // are all fine.
     fs.mkdirSync(path.join(etc, "ssh/more conf"));
     fs.appendFileSync(
       conf,
-      `Include "${etc}/ssh/more conf/*.conf" # extra\nInclude=${etc}/ssh/absent.conf\n`
+      [
+        `Include "${etc}/ssh/more conf/*.conf" # extra`,
+        `Include '${etc}/ssh/more conf/a.conf'\r`,
+        `Include=${etc}/ssh/absent.conf`,
+        `Include ${etc}/nowhere/x.conf ${etc}/nowhere.d/*.conf`,
+        "",
+      ].join("\n")
     );
     expect((await reading()).listeners[0]!.gaps).toEqual([]);
     unreadable.add(included);
@@ -758,6 +816,24 @@ describe.skipIf(!realDump)("readSshHostKeys against this machine's sshd -G", () 
       listener.keys.map((k) => (k.outcome === "read" ? k.fingerprint : k.outcome)).sort()
     ).toEqual([FIXTURE_KEYS.ed25519.fingerprint, FIXTURE_KEYS.rsa.fingerprint].sort());
   });
+});
+
+describe("the production sshd -G runner", () => {
+  it.skipIf(process.platform === "win32")(
+    "reports a dump that couldn't get its directory as failed, not as a thrown read",
+    async () => {
+      const tmp = process.env.TMPDIR;
+      process.env.TMPDIR = path.join(os.tmpdir(), "no-such-dir-18257", "deeper");
+      try {
+        await expect(
+          systemSshHostKeyReaderDeps.runConfigDump("/usr/bin/true", ["-G"], 1_000)
+        ).resolves.toEqual({ ok: false, reason: "failed" });
+      } finally {
+        if (tmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = tmp;
+      }
+    }
+  );
 });
 
 describe("the host.ssh-host-keys link method", () => {

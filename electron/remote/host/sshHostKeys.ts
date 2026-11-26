@@ -70,7 +70,8 @@ export interface SshHostKeyReaderDeps {
    */
   stat(file: string): Promise<FileIdentity & { size: number; isFile(): boolean }>;
   /** A `.pub`'s own entry, symlink unfollowed, checked before it is opened. */
-  lstat(file: string): Promise<FileIdentity & { isFile(): boolean }>;
+  lstat(file: string): Promise<FileIdentity & { nlink: number; isFile(): boolean }>;
+  realpath(file: string): Promise<string>;
   /** Whether this user can read a file, or list a directory, `sshd -G` would include. */
   canRead(file: string, directory: boolean): Promise<boolean>;
   /**
@@ -117,32 +118,47 @@ function parseStat(stat: string): { ppid: number; startTime: string } | null {
 }
 
 /**
- * A config line's arguments as sshd splits them: on spaces and tabs, a
- * double-quoted argument whole, and a `#` starting an argument ending the line.
+ * A config line's arguments as OpenSSH's `argv_split` makes them: split on
+ * spaces and tabs, single or double quotes keeping one together, a backslash
+ * escaping a quote, a backslash or a space, and a `#` starting an argument
+ * ending the line. Null for an unterminated quote, which sshd refuses.
  */
-function configTokens(rest: string): string[] {
+function configTokens(rest: string): string[] | null {
   const tokens: string[] = [];
   let i = 0;
   while (i < rest.length) {
     while (rest[i] === " " || rest[i] === "\t") i++;
     if (i >= rest.length || rest[i] === "#") break;
-    if (rest[i] === '"') {
-      const end = rest.indexOf('"', i + 1);
-      if (end < 0) return [];
-      tokens.push(rest.slice(i + 1, end));
-      i = end + 1;
-    } else {
-      const start = i;
-      while (i < rest.length && rest[i] !== " " && rest[i] !== "\t") i++;
-      tokens.push(rest.slice(start, i));
+    let token = "";
+    let quote: string | null = null;
+    for (; i < rest.length; i++) {
+      const char = rest[i]!;
+      const next = rest[i + 1];
+      if (
+        char === "\\" &&
+        (next === "'" || next === '"' || next === "\\" || (quote === null && next === " "))
+      ) {
+        token += next;
+        i++;
+      } else if (quote === null && (char === " " || char === "\t")) {
+        break;
+      } else if (quote === null && (char === "'" || char === '"')) {
+        quote = char;
+      } else if (char === quote) {
+        quote = null;
+      } else {
+        token += char;
+      }
     }
+    if (quote !== null) return null;
+    tokens.push(token);
   }
   return tokens;
 }
 
 /** The arguments of a config line for `keyword`, as `keyword value` or `keyword=value`. */
 function configArguments(line: string, keyword: string): string[] | null {
-  const match = new RegExp(`^\\s*${keyword}(?:\\s*=\\s*|[ \\t]+)(.*)$`, "i").exec(line);
+  const match = new RegExp(`^\\s*${keyword}(?:\\s*=\\s*|[ \\t]+)(.*?)\\r?$`, "i").exec(line);
   return match ? configTokens(match[1]!) : null;
 }
 
@@ -245,12 +261,29 @@ export function coveringMount(mountinfo: string, file: string): string | null {
 
 type View = { kind: "different" | "unknown" } | { kind: "same"; own: string; theirs: string };
 
-/** Whether every one of `files` is the same file to the daemon as to this Host. */
-function sameFiles(view: Extract<View, { kind: "same" }>, files: readonly string[]): boolean {
-  return files.every((file) => {
-    const own = coveringMount(view.own, file);
-    return own !== null && own === coveringMount(view.theirs, file);
-  });
+/**
+ * Whether every one of `files` is the same file to the daemon as to this Host:
+ * each lies on the same mount in both views, spelled as given (normalised, as
+ * the kernel reads `//` and `.`) and as this Host resolves its directory's
+ * symlinks.
+ */
+async function sameFiles(
+  deps: SshHostKeyReaderDeps,
+  view: Extract<View, { kind: "same" }>,
+  files: readonly string[]
+): Promise<boolean> {
+  for (const file of files) {
+    const spelled = path.posix.normalize(file);
+    const resolved = await deps
+      .realpath(path.posix.dirname(spelled))
+      .then((dir) => path.posix.join(dir, path.posix.basename(spelled)))
+      .catch(() => null);
+    for (const candidate of resolved ? [spelled, resolved] : [spelled]) {
+      const own = coveringMount(view.own, candidate);
+      if (own === null || own !== coveringMount(view.theirs, candidate)) return false;
+    }
+  }
+  return true;
 }
 
 async function viewOf(deps: SshHostKeyReaderDeps, pid: number): Promise<View> {
@@ -275,7 +308,7 @@ async function viewOf(deps: SshHostKeyReaderDeps, pid: number): Promise<View> {
   }
   if (ownMounts === null || theirMounts === null) return { kind: "unknown" };
   const view = { kind: "same" as const, own: ownMounts, theirs: theirMounts };
-  return sameFiles(view, ["/"]) ? view : { kind: "different" };
+  return (await sameFiles(deps, view, ["/"])) ? view : { kind: "different" };
 }
 
 async function candidateOf(deps: SshHostKeyReaderDeps, pid: number): Promise<Candidate | null> {
@@ -327,34 +360,43 @@ async function readConfig(
 /**
  * Whether every `Include` of `configFile` is one this user can read, so `-G`
  * saw it all: OpenSSH skips a glob it can't list as if nothing matched. Only
- * the main file's own includes are checked.
+ * the main file's own includes are checked. `paths` are what they name, for
+ * the mount check.
  */
 async function includesReadable(
   deps: SshHostKeyReaderDeps,
   configFile: string,
   privateInodes: ReadonlySet<string>
-): Promise<boolean> {
+): Promise<{ readable: boolean; paths: string[] }> {
+  const paths: string[] = [];
   const text = await readConfig(deps, configFile, privateInodes);
-  if (text === null) return false;
+  if (text === null) return { readable: false, paths };
   const sshdDir = path.posix.dirname(deps.defaultConfigFile);
+  const absent = (file: string) =>
+    deps.lstat(file).then(
+      () => false,
+      (error: unknown) => errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR"
+    );
   for (const line of text.split("\n")) {
-    for (const raw of configArguments(line, "include") ?? []) {
+    const args = configArguments(line, "include");
+    if (args === null) {
+      if (/^\s*include\b/i.test(line)) return { readable: false, paths };
+      continue;
+    }
+    for (const raw of args) {
       const pattern = path.posix.resolve(sshdDir, raw);
       const dir = path.posix.dirname(pattern);
       // A glob above the last component can't be checked one directory at a time.
-      if (GLOB.test(dir)) return false;
-      if (!(await deps.canRead(dir, true))) return false;
-      // A literal that names nothing is skipped by sshd too; one that exists must be readable.
-      if (!GLOB.test(path.posix.basename(pattern))) {
-        const exists = await deps.lstat(pattern).then(
-          () => true,
-          (error: unknown) => errnoOf(error) !== "ENOENT"
-        );
-        if (exists && !(await deps.canRead(pattern, false))) return false;
-      }
+      if (GLOB.test(dir)) return { readable: false, paths };
+      const glob = GLOB.test(path.posix.basename(pattern));
+      const target = glob ? dir : pattern;
+      paths.push(target);
+      // What doesn't exist matches nothing, for sshd too; what does must be readable.
+      if (await absent(target)) continue;
+      if (!(await deps.canRead(target, glob))) return { readable: false, paths };
     }
   }
-  return true;
+  return { readable: true, paths };
 }
 
 /**
@@ -384,13 +426,14 @@ async function readPublicSibling(
     if (code === "ELOOP") return gap("not-a-public-file");
     return gap("unreadable");
   };
-  let entry: FileIdentity & { isFile(): boolean };
+  let entry: FileIdentity & { nlink: number; isFile(): boolean };
   try {
     entry = await deps.lstat(publicKeyPath);
   } catch (error) {
     return fileGap(error);
   }
-  if (!entry.isFile() || privateInodes.has(`${entry.dev}:${entry.ino}`)) {
+  // A second name could be any private key's, configured here or not: none is opened.
+  if (!entry.isFile() || entry.nlink !== 1 || privateInodes.has(`${entry.dev}:${entry.ino}`)) {
     return gap("not-a-public-file");
   }
   let handle: fs.FileHandle;
@@ -484,6 +527,29 @@ async function resolveListener(
     gaps.add("relative-path");
     return resolved;
   }
+  const configPath = configFile ?? deps.defaultConfigFile;
+  const view = resolved.view;
+  const inodesOf = async (files: readonly string[]) => {
+    const inodes = new Set<string>();
+    for (const file of files) {
+      if (contextDependent(file)) continue;
+      const info = await deps.stat(file).catch(() => null);
+      if (info) inodes.add(`${info.dev}:${info.ino}`);
+    }
+    return inodes;
+  };
+  // `sshd -G` opens the config: it must be the daemon's file and none of its keys.
+  if (!isNone(configPath)) {
+    if (!(await sameFiles(deps, view, [configPath]))) {
+      gaps.add("other-namespace");
+      return resolved;
+    }
+    const config = await deps.stat(configPath).catch(() => null);
+    if (config && (await inodesOf(named)).has(`${config.dev}:${config.ino}`)) {
+      gaps.add("config-unreadable");
+      return resolved;
+    }
+  }
   resolved.withhold = false;
   resolved.hostKeys = named;
 
@@ -523,9 +589,30 @@ async function resolveListener(
   const parsed = parseConfigDump(dump.stdout);
   // sshd made a relative `HostKey` absolute against the dump's directory; the daemon's is unknown.
   const relativeTo = `${dump.cwd.replace(/\/+$/, "")}/`;
-  resolved.hostKeys = parsed.hostKeys.map((key) =>
-    key.startsWith(relativeTo) ? key.slice(relativeTo.length) : key
-  );
+  const hostKeys = [
+    ...new Set(
+      parsed.hostKeys.map((key) =>
+        key.startsWith(relativeTo) ? key.slice(relativeTo.length) : key
+      )
+    ),
+  ];
+  const withheld = (gap: SshListenerGap) => {
+    gaps.add(gap);
+    resolved.withhold = true;
+    resolved.hostKeys = [];
+    return resolved;
+  };
+  // A directory bound over in the daemon's own namespace holds other files than this Host sees.
+  const keyFiles = hostKeys
+    .filter((key) => !contextDependent(key))
+    .flatMap((key) => [key, `${key}.pub`]);
+  if (!(await sameFiles(deps, view, keyFiles))) return withheld("other-namespace");
+  if (!isNone(configPath)) {
+    const includes = await includesReadable(deps, configPath, await inodesOf(hostKeys));
+    if (!(await sameFiles(deps, view, includes.paths))) return withheld("other-namespace");
+    if (!includes.readable) gaps.add("config-unreadable");
+  }
+  resolved.hostKeys = hostKeys;
   const fitting = parsed.listenAddresses.filter(
     (address) => address.length <= MAX_SSH_LISTEN_ADDRESS_LENGTH
   );
@@ -548,26 +635,6 @@ async function finishListener(
   let keys: SshHostKeyFile[] = [];
   let listenerId = resolved.listenerId;
   const unique = [...new Set(resolved.hostKeys)];
-  const configPath = configFile ?? deps.defaultConfigFile;
-  if (!resolved.withhold && resolved.view.kind === "same") {
-    const files = unique
-      .filter((key) => !contextDependent(key))
-      .flatMap((key) => [key, `${key}.pub`]);
-    if (!isNone(configPath)) files.push(configPath);
-    // A directory bound over in the daemon's own namespace holds other files than this Host sees.
-    if (!sameFiles(resolved.view, files)) {
-      gaps.add("other-namespace");
-      resolved.withhold = true;
-    }
-  }
-  if (
-    !resolved.withhold &&
-    listenerId !== null &&
-    !isNone(configPath) &&
-    !(await includesReadable(deps, configPath, privateInodes))
-  ) {
-    gaps.add("config-unreadable");
-  }
   if (!resolved.withhold) {
     const fitting = unique.filter((key) => key.length + ".pub".length <= MAX_SSH_PATH_LENGTH);
     if (fitting.length < unique.length || fitting.length > MAX_SSH_HOST_KEYS_PER_LISTENER) {
@@ -649,7 +716,8 @@ export async function readSshHostKeys(deps: SshHostKeyReaderDeps): Promise<SshHo
   for (const { candidate, options } of listeners.slice(0, MAX_SSH_LISTENERS)) {
     resolved.push(await resolveListener(deps, candidate, options, deadline));
   }
-  // Every listener's private keys, so no listener's `.pub` can be another's private key.
+  // Every listener's private keys, so no listener's `.pub` can be another's private key. A
+  // withheld listener's keys aren't this Host's files, and are left out.
   const configuredAll = new Set(resolved.flatMap((listener) => listener.hostKeys));
   const privateInodes = new Set<string>();
   for (const key of configuredAll) {
@@ -708,10 +776,22 @@ async function runConfigDump(
 ): Promise<ConfigDumpResult> {
   // sshd resolves a relative `HostKey` against its working directory: an empty one of its own
   // shows which keys were relative, since the daemon's directory can't be read.
-  const made = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-sshd-g-"));
+  const started = Date.now();
+  let made: string;
+  let cwd: string;
   try {
-    const cwd = await fs.realpath(made);
-    return await dumpIn(binary, args, timeoutMs, cwd);
+    made = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-sshd-g-"));
+    cwd = await fs.realpath(made).catch(async (error: unknown) => {
+      await fs.rm(made, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    });
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
+  try {
+    const left = timeoutMs - (Date.now() - started);
+    if (left <= 0) return { ok: false, reason: "timed-out" };
+    return await dumpIn(binary, args, left, cwd);
   } finally {
     await fs.rm(made, { recursive: true, force: true }).catch(() => {});
   }
@@ -764,6 +844,7 @@ export const systemSshHostKeyReaderDeps: SshHostKeyReaderDeps = {
   open: (file, flags) => fs.open(file, flags),
   stat: (file) => fs.stat(file),
   lstat: (file) => fs.lstat(file),
+  realpath: (file) => fs.realpath(file),
   canRead: (file, directory) =>
     fs.access(file, directory ? fsConstants.R_OK | fsConstants.X_OK : fsConstants.R_OK).then(
       () => true,
