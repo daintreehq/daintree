@@ -24,6 +24,7 @@ function harness(open: LinkTransport["open"]) {
     providerId: "gce",
     sshTrust: "pinned-from-api",
     hostKey: "ssh-ed25519 AAAA",
+    pinOrigin: null,
     revision: 1,
   };
   const access: CloudTransportAccess = {
@@ -125,6 +126,7 @@ describe("createCloudTransports", () => {
       providerId: "gce",
       sshTrust: "pinned-from-api",
       hostKey: "ssh-ed25519 AAAA",
+      pinOrigin: null,
     });
     ok.forget();
     expect(ok.dialledWith()).toBeUndefined();
@@ -138,23 +140,36 @@ describe("createCloudTransports", () => {
         providerId: "gce",
         sshTrust: "pinned-from-api",
         hostKey: "ssh-ed25519 BBBB",
+        pinOrigin: null,
         revision: 2,
       });
       return {} as LinkTransportConnection;
     });
     await env.transport.open(signal());
-    expect(env.dialledWith()).toEqual({ providerId: "gce", sshTrust: null, hostKey: null });
+    expect(env.dialledWith()).toEqual({
+      providerId: "gce",
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+    });
   });
 
   it("takes the trust the route had once access resolved, unknown as it was before (#18258)", async () => {
     // A first dial after a restart: nothing vouched for the files until access resolved them.
     const env = harness(async () => ({}) as LinkTransportConnection);
-    env.setTrust({ providerId: "gce", sshTrust: null, hostKey: null, revision: 0 });
+    env.setTrust({
+      providerId: "gce",
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+      revision: 0,
+    });
     vi.mocked(env.access.ensureAccess).mockImplementationOnce(async () => {
       env.setTrust({
         providerId: "gce",
         sshTrust: "pinned-from-api",
         hostKey: "ssh-ed25519 AAAA",
+        pinOrigin: null,
         revision: 2,
       });
       return ROUTE;
@@ -164,6 +179,7 @@ describe("createCloudTransports", () => {
       providerId: "gce",
       sshTrust: "pinned-from-api",
       hostKey: "ssh-ed25519 AAAA",
+      pinOrigin: null,
     });
   });
 
@@ -174,6 +190,7 @@ describe("createCloudTransports", () => {
         providerId: "gce",
         sshTrust: "pinned-from-api",
         hostKey: "ssh-ed25519 AAAA",
+        pinOrigin: null,
         revision: 5,
       });
       return {} as LinkTransportConnection;
@@ -190,6 +207,7 @@ describe("createCloudTransports", () => {
       providerId: "gce",
       sshTrust: "pinned-from-api",
       hostKey: "ssh-ed25519 BBBB",
+      pinOrigin: null,
       revision: 2,
     });
     await env.transports.transportFor("cb_abcdefgh12", undefined, "h2").open(signal());
@@ -204,7 +222,13 @@ describe("createCloudTransports", () => {
 
   it("leaves the trust unknown when the provider's trust changed mid-dial on the same route", async () => {
     const env: ReturnType<typeof harness> = harness(async () => {
-      env.setTrust({ providerId: "gce", sshTrust: "provider-tunnel", hostKey: null, revision: 1 });
+      env.setTrust({
+        providerId: "gce",
+        sshTrust: "provider-tunnel",
+        hostKey: null,
+        pinOrigin: null,
+        revision: 1,
+      });
       return {} as LinkTransportConnection;
     });
     await env.transport.open(signal());

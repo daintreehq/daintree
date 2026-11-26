@@ -13,6 +13,7 @@ import {
   type CloudProviderId,
   type CloudProvisioningPick,
   type CloudProvisioningSelection,
+  type CloudSshTrust,
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
@@ -101,13 +102,30 @@ export interface StoredSshAccess {
   /** Null when the provider's tunnel vouched for the machine and nothing was pinned. */
   hostKey: string | null;
   obtainedAt: number;
+  /**
+   * The trust the provider declared when this access was resolved (#18258):
+   * what its key rests on. Absent in a record from before it was kept.
+   */
+  sshTrust?: CloudSshTrust;
 }
 
 /** A server key, `type base64`, and when it was trusted or seen. */
 export interface StoredHostKey {
   key: string;
   at: number;
+  /**
+   * Who vouched for a trusted key (#18258): the provider's API, or the person
+   * confirming it. Absent in a record from before it was kept.
+   */
+  origin?: "provider" | "person";
 }
+
+const SSH_TRUSTS: ReadonlySet<string> = new Set<CloudSshTrust>([
+  "pinned-from-api",
+  "confirm-on-first-connect",
+  "api-or-confirm",
+  "provider-tunnel",
+]);
 
 export interface StoredCloudObservation {
   machine: string;
@@ -557,14 +575,28 @@ function readAccess(raw: unknown): StoredSshAccess | null {
   // Only an explicit null is a tunnel's access; a missing or empty key is a broken record.
   const hostKey = value.hostKey === null ? null : str(value.hostKey);
   if (!user || !host || port === null || (value.hostKey !== null && !hostKey)) return null;
-  return { user, host, port, hostKey, obtainedAt: num(value.obtainedAt) ?? 0 };
+  const sshTrust =
+    typeof value.sshTrust === "string" && SSH_TRUSTS.has(value.sshTrust)
+      ? (value.sshTrust as CloudSshTrust)
+      : undefined;
+  return {
+    user,
+    host,
+    port,
+    hostKey,
+    obtainedAt: num(value.obtainedAt) ?? 0,
+    ...(sshTrust ? { sshTrust } : {}),
+  };
 }
 
 function readHostKey(raw: unknown): StoredHostKey | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || typeof value !== "object") return null;
   const key = normalizeHostKey(str(value.key));
-  return key ? { key, at: num(value.at) ?? 0 } : null;
+  if (!key) return null;
+  const origin =
+    value.origin === "provider" || value.origin === "person" ? value.origin : undefined;
+  return { key, at: num(value.at) ?? 0, ...(origin ? { origin } : {}) };
 }
 
 function readObservation(raw: unknown): StoredCloudObservation | null {

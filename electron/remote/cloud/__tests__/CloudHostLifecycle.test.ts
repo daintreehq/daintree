@@ -895,6 +895,25 @@ describe("CloudHostLifecycle access", () => {
     expect(lifecycle.dialTrust(bindingId)!.revision).toBeGreaterThan(first);
   });
 
+  it("keeps the trust access was resolved under, and asks again after a restart once it changed (#18258)", async () => {
+    const { lifecycle, provider, bindingId, restart, store } = await imported({ machine: "running" });
+    await lifecycle.ensureAccess(bindingId);
+    const resolvedUnder = store.binding(bindingId)?.access?.sshTrust;
+    expect(resolvedUnder).toBe(provider.info(process.platform).capabilities.sshTrust);
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => {
+      const info = declared(platform);
+      return {
+        ...info,
+        capabilities: { ...info.capabilities, sshTrust: "confirm-on-first-connect" },
+      };
+    };
+    // Within the access TTL and with the same files: a key chosen under the old trust isn't reused.
+    const next = restart(lifecycle).lifecycle;
+    await next.ensureAccess(bindingId).catch(() => {});
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
   it("tells no trust for a route resolved under a trust the provider no longer declares (#18258)", async () => {
     const { lifecycle, provider, bindingId } = await imported({ machine: "running" });
     await lifecycle.ensureAccess(bindingId);

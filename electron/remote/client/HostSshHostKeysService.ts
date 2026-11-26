@@ -58,6 +58,20 @@ const PINNED_BASIS: Record<Exclude<CloudSshTrust, "provider-tunnel">, HostSshTru
   "api-or-confirm": "provider-or-person-pin",
 };
 
+/**
+ * What a pinned key rests on: who vouched for it where the binding recorded
+ * that, else what the provider declared. A key the API vouched for under a
+ * provider that has since asked the person is still the provider's.
+ */
+function pinnedBasis(
+  dial: CloudDialTrust & { sshTrust: Exclude<CloudSshTrust, "provider-tunnel"> }
+) {
+  if (dial.sshTrust === "pinned-from-api") return PINNED_BASIS[dial.sshTrust];
+  if (dial.pinOrigin === "provider") return "provider-pin";
+  if (dial.pinOrigin === "person") return "person-confirmed-pin";
+  return PINNED_BASIS[dial.sshTrust];
+}
+
 function cloudTrust(dial: CloudDialTrust | undefined): SessionTrust {
   const providerId = dial?.providerId ? dial.providerId : null;
   const unknown = {
@@ -78,7 +92,7 @@ function cloudTrust(dial: CloudDialTrust | undefined): SessionTrust {
   if (pinnedKey === null) return unknown;
   return {
     trust: {
-      basis: PINNED_BASIS[dial.sshTrust],
+      basis: pinnedBasis({ ...dial, sshTrust: dial.sshTrust }),
       providerId,
       pinnedFingerprint: hostKeyFingerprint(pinnedKey),
     },

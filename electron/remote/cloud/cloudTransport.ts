@@ -27,6 +27,8 @@ export interface CloudDialTrust {
   providerId: string;
   sshTrust: CloudSshTrust | null;
   hostKey: string | null;
+  /** Who vouched for `hostKey`, where the binding recorded it: the provider's API or the person. */
+  pinOrigin: "provider" | "person" | null;
 }
 
 /** One look at what a dial would rest on, with a count that moves on every route rewrite. */
@@ -93,8 +95,14 @@ export function createCloudTransports(deps: {
                       providerId: trust.providerId,
                       sshTrust: trust.sshTrust,
                       hostKey: trust.hostKey,
+                      pinOrigin: trust.pinOrigin,
                     }
-                  : { providerId: trust?.providerId ?? "", sshTrust: null, hostKey: null },
+                  : {
+                      providerId: trust?.providerId ?? "",
+                      sshTrust: null,
+                      hostKey: null,
+                      pinOrigin: null,
+                    },
             });
           }
           return opened;
@@ -125,6 +133,7 @@ function sameDialSample(a: CloudDialSample | null, b: CloudDialSample): boolean 
     a.providerId === b.providerId &&
     a.sshTrust === b.sshTrust &&
     a.hostKey === b.hostKey &&
+    a.pinOrigin === b.pinOrigin &&
     a.revision === b.revision
   );
 }

@@ -111,7 +111,7 @@ describe("HostSshHostKeysService", () => {
     const env = harness(
       { kind: "cloud", bindingId: "cb_abcdefgh12" },
       {
-        dial: { providerId: "gce", sshTrust: "pinned-from-api", hostKey: ED25519 },
+        dial: { providerId: "gce", sshTrust: "pinned-from-api", hostKey: ED25519, pinOrigin: null },
         answer: async () => readingOf(FIXTURE_KEYS.ed25519, FIXTURE_KEYS.ecdsa),
       }
     );
@@ -131,24 +131,38 @@ describe("HostSshHostKeysService", () => {
   });
 
   it.each([
-    ["confirm-on-first-connect", "person-confirmed-pin"],
-    ["api-or-confirm", "provider-or-person-pin"],
-  ] as const)("names a %s provider's pin as %s", async (sshTrust, basis) => {
-    const env = harness(
-      { kind: "cloud", bindingId: "cb_abcdefgh12" },
-      { dial: { providerId: "digitalocean", sshTrust, hostKey: ECDSA } }
-    );
-    env.connect();
-    expect(await env.service.read("h1")).toMatchObject({
-      status: "read",
-      trust: { basis, pinnedFingerprint: FIXTURE_KEYS.ecdsa.fingerprint },
-    });
-  });
+    ["confirm-on-first-connect", null, "person-confirmed-pin"],
+    ["api-or-confirm", null, "provider-or-person-pin"],
+    // Who vouched, where the binding recorded it, outranks what the provider declares now.
+    ["api-or-confirm", "person", "person-confirmed-pin"],
+    ["api-or-confirm", "provider", "provider-pin"],
+    ["confirm-on-first-connect", "provider", "provider-pin"],
+  ] as const)(
+    "names a %s provider's pin vouched by %s as %s",
+    async (sshTrust, pinOrigin, basis) => {
+      const env = harness(
+        { kind: "cloud", bindingId: "cb_abcdefgh12" },
+        { dial: { providerId: "digitalocean", sshTrust, hostKey: ECDSA, pinOrigin } }
+      );
+      env.connect();
+      expect(await env.service.read("h1")).toMatchObject({
+        status: "read",
+        trust: { basis, pinnedFingerprint: FIXTURE_KEYS.ecdsa.fingerprint },
+      });
+    }
+  );
 
   it("names an Agent 37 host's tunnel, with no pin to match", async () => {
     const env = harness(
       { kind: "cloud", bindingId: "cb_abcdefgh12" },
-      { dial: { providerId: "agent37", sshTrust: "provider-tunnel", hostKey: null } }
+      {
+        dial: {
+          providerId: "agent37",
+          sshTrust: "provider-tunnel",
+          hostKey: null,
+          pinOrigin: null,
+        },
+      }
     );
     env.connect();
     const read = await env.service.read("h1");
@@ -165,6 +179,7 @@ describe("HostSshHostKeysService", () => {
       providerId: "gce",
       sshTrust: "pinned-from-api",
       hostKey: ED25519,
+      pinOrigin: null,
     };
     const env = harness({ kind: "cloud", bindingId: "cb_abcdefgh12" }, { dial });
     env.connect();
@@ -178,7 +193,7 @@ describe("HostSshHostKeysService", () => {
   it("calls the trust unknown when the dial's pin couldn't be told", async () => {
     const env = harness(
       { kind: "cloud", bindingId: "cb_abcdefgh12" },
-      { dial: { providerId: "gce", sshTrust: null, hostKey: null } }
+      { dial: { providerId: "gce", sshTrust: null, hostKey: null, pinOrigin: null } }
     );
     env.connect();
     expect(await env.service.read("h1")).toMatchObject({
@@ -191,7 +206,9 @@ describe("HostSshHostKeysService", () => {
   it("calls a cloud link that opened before it was told of it unknown, and a WSL one local", async () => {
     const cloud = harness(
       { kind: "cloud", bindingId: "cb_abcdefgh12" },
-      { dial: { providerId: "gce", sshTrust: "pinned-from-api", hostKey: ED25519 } }
+      {
+        dial: { providerId: "gce", sshTrust: "pinned-from-api", hostKey: ED25519, pinOrigin: null },
+      }
     );
     cloud.setCurrent(cloud.session);
     expect(await cloud.service.read("h1")).toMatchObject({ trust: { basis: "unknown" } });
@@ -306,7 +323,12 @@ describe("HostSshHostKeysService", () => {
       const env = harness(
         { kind: "cloud", bindingId: "cb_abcdefgh12" },
         {
-          dial: { providerId: "gce", sshTrust: "pinned-from-api", hostKey: ED25519 },
+          dial: {
+            providerId: "gce",
+            sshTrust: "pinned-from-api",
+            hostKey: ED25519,
+            pinOrigin: null,
+          },
           answer: async () => answer,
         }
       );

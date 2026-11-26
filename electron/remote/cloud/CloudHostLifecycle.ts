@@ -4229,8 +4229,8 @@ export class CloudHostLifecycle {
       (!confirmed || access.hostKey === binding.trustedHostKey?.key) &&
       // Access resolved under another trust (a provider that changed what it vouches with) is asked for again.
       (access.hostKey === null) === (policy.trust === "provider-tunnel") &&
-      // Nor is a key this run pinned under a trust the provider no longer declares.
-      (this.routeTrust.get(bindingId) ?? policy.trust) === policy.trust &&
+      // Nor is a key pinned under a trust the provider no longer declares.
+      (access.sshTrust ?? this.routeTrust.get(bindingId) ?? policy.trust) === policy.trust &&
       (await this.deps.files.exists(bindingId))
     ) {
       const record: CloudSshAccessRecord = {
@@ -4247,7 +4247,7 @@ export class CloudHostLifecycle {
         (written === undefined &&
           (await this.deps.files.isCurrent(bindingId, binding.accountId, record)))
       ) {
-        this.noteRoute(bindingId, generation, policy.trust);
+        this.noteRoute(bindingId, generation, access.sshTrust ?? policy.trust);
         this.clearAccessErrors(bindingId);
         return this.deps.files.route(bindingId);
       }
@@ -4301,6 +4301,7 @@ export class CloudHostLifecycle {
         port: record.endpoint.port,
         hostKey: record.hostKey,
         obtainedAt: this.now(),
+        sshTrust: policy.trust,
       },
     }));
     // Only once its route is written: a dial cut short before that bypasses the cached route again.
@@ -4377,7 +4378,7 @@ export class CloudHostLifecycle {
           ? current
           : {
               ...current,
-              trustedHostKey: { key: vouched, at: this.now() },
+              trustedHostKey: { key: vouched, at: this.now(), origin: "provider" },
               offeredHostKey: null,
             }
       );
@@ -4491,7 +4492,7 @@ export class CloudHostLifecycle {
       current.offeredHostKey?.key === offered.key
         ? {
             ...current,
-            trustedHostKey: { key: offered.key, at: this.now() },
+            trustedHostKey: { key: offered.key, at: this.now(), origin: "person" },
             offeredHostKey: null,
             access: null,
           }
@@ -4702,7 +4703,13 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding) return null;
     const revision = this.routeRevisions.get(bindingId) ?? 0;
-    const unknown = { providerId: binding.providerId, sshTrust: null, hostKey: null, revision };
+    const unknown = {
+      providerId: binding.providerId,
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+      revision,
+    };
     const resolvedUnder = this.routeTrust.get(bindingId);
     if (resolvedUnder === undefined) return unknown;
     let declared: CloudSshTrust | null;
@@ -4713,10 +4720,14 @@ export class CloudHostLifecycle {
       declared = null;
     }
     if (declared !== resolvedUnder) return unknown;
+    const hostKey = binding.access?.hostKey ?? null;
+    const trusted = binding.trustedHostKey;
     return {
       providerId: binding.providerId,
       sshTrust: resolvedUnder,
-      hostKey: binding.access?.hostKey ?? null,
+      hostKey,
+      // Who vouched for the pinned key, when it is the binding's trusted one.
+      pinOrigin: hostKey !== null && trusted?.key === hostKey ? (trusted.origin ?? null) : null,
       revision,
     };
   }
