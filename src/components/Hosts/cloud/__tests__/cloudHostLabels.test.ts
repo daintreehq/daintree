@@ -519,34 +519,110 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
       keepAwake,
     });
 
-  it("says the host keeps it awake while it sees work through a link it holds until its expiry, and the timer after", () => {
-    const held = { kind: "held" as const, expiresAt, confirmedAt, reached: true };
+  /** No sentence says a request kept, holds, or holds up the machine awake. */
+  const noClaim = (text: string) => {
+    expect(text).not.toMatch(/keeps? (it|the machine) awake|kept (it|the machine) awake/);
+    expect(text).not.toMatch(/to keep the machine awake|holds? (it|the machine) awake/);
+  };
+
+  it("says the host sends requests while it sees work, when its last reached it, and when the link expires", () => {
+    const lastRequestAt = Date.UTC(2026, 10, 19, 14, 58);
+    const held = { kind: "held" as const, expiresAt, confirmedAt, reached: true, lastRequestAt };
     const offline = sentence(held);
-    // Two different moments, each in its own place.
-    expect(dayTime(expiresAt)).not.toBe(dayTime(confirmedAt));
-    expect(offline).toContain(
-      `the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(expiresAt)} (as the host said ${dayTime(confirmedAt)}).`
+    // Different moments, each in its own place.
+    expect(new Set([dayTime(expiresAt), dayTime(confirmedAt), dayTime(lastRequestAt)]).size).toBe(
+      3
     );
-    // Away, what this device knows is what the host said when it last asked.
-    expect(offline).toContain(`(as the host said ${dayTime(confirmedAt)})`);
     expect(offline).toContain(
-      "Once the host is idle, Agent 37's own idle timer (30 minutes) puts it to sleep after 30 minutes without activity."
+      `With no device connected, the host sends requests through a link from Daintree while it sees work (as the host said ${dayTime(confirmedAt)}). Its last request reached it ${dayTime(lastRequestAt)}. The link expires ${dayTime(expiresAt)}.`
+    );
+    expect(offline).toContain(
+      "Agent 37's own idle timer (30 minutes) puts the machine to sleep after 30 minutes without activity."
     );
     expect(offline).not.toContain("is in charge while no device is connected");
+    noClaim(offline);
 
     const linked = sentence(held, true);
     expect(linked).toContain("The host's idle time is in charge while this device is connected");
-    expect(linked).toContain(`holds that link until ${dayTime(expiresAt)}.`);
+    expect(linked).toContain(`The link expires ${dayTime(expiresAt)}.`);
     expect(linked).not.toContain("as the host said");
-    expect(linked).not.toContain("no request through it");
+    noClaim(linked);
 
-    expect(sentence({ ...held, reached: false }, true)).toContain(
-      "though no request through it has reached the host yet."
-    );
+    // Said by a host from before #17976: only that one reached it, no time.
+    const { lastRequestAt: _time, ...untimed } = held;
+    expect(sentence(untimed)).not.toContain("last request");
+    expect(sentence(untimed)).not.toContain("No request");
     // Taken while the host was idle, it hasn't been tried: said so, not taken for protection.
-    expect(sentence({ ...held, reached: false })).toContain(
-      `holds that link until ${dayTime(expiresAt)}, though no request through it has reached the host yet (as the host said ${dayTime(confirmedAt)}).`
+    const untried = sentence({ ...untimed, reached: false });
+    expect(untried).toContain(
+      `while it sees work (as the host said ${dayTime(confirmedAt)}). No request through it has reached the host yet. The link expires ${dayTime(expiresAt)}.`
     );
+    noClaim(untried);
+  });
+
+  it("says when Agent 37 put it to sleep, and how long after the host's last request", () => {
+    const lastRequestAt = Date.UTC(2026, 10, 19, 13, 59);
+    const sleptAt = Date.UTC(2026, 10, 19, 14, 2);
+    const held = {
+      kind: "held" as const,
+      expiresAt,
+      confirmedAt,
+      reached: true,
+      lastRequestAt,
+      sleep: { sleptAt, lastRequestAt },
+    };
+    const said = sentence(held);
+    expect(said).toContain(
+      `Agent 37 put it to sleep ${dayTime(sleptAt)}, 3 minutes after the host's last request this device heard of.`
+    );
+    noClaim(said);
+    // No request known before it, or one stamped after it by a clock that's off: the time alone.
+    for (const before of [null, sleptAt + 60_000]) {
+      const alone = sentence({ ...held, sleep: { sleptAt, lastRequestAt: before } });
+      expect(alone).toContain(`Agent 37 put it to sleep ${dayTime(sleptAt)}.`);
+      expect(alone).not.toContain("after the host's last request");
+    }
+    // With the link gone, the sleep and what came before it are still said.
+    const expired = sentence({
+      kind: "expired",
+      expiredAt: expiresAt,
+      lastRequestAt,
+      sleep: { sleptAt, lastRequestAt },
+    });
+    expect(expired).toContain(`expired ${dayTime(expiresAt)}.`);
+    expect(expired).toContain(`Agent 37 put it to sleep ${dayTime(sleptAt)}, 3 minutes after`);
+    expect(sentence({ kind: "none", problem: null, lastRequestAt })).toContain(
+      `The host's last request reached it ${dayTime(lastRequestAt)}.`
+    );
+    expect(apartFor(2 * 3_600_000)).toContain("2 hours after");
+    expect(apartFor(59_000)).toContain("less than a minute after");
+    expect(apartFor(60_000)).toContain(", 1 minute after");
+    expect(apartFor(0)).toContain("less than a minute after");
+    // With the link gone, a later request than the one the sleep follows is said too, once.
+    const later = sentence({
+      kind: "none",
+      problem: null,
+      lastRequestAt: sleptAt + 120_000,
+      sleep: { sleptAt, lastRequestAt },
+    });
+    expect(later.split("last request reached it")).toHaveLength(2);
+    expect(
+      sentence({ kind: "none", problem: null, lastRequestAt, sleep: { sleptAt, lastRequestAt } })
+    ).not.toContain("last request reached it");
+
+    function apartFor(ms: number) {
+      return sentence({ ...held, sleep: { sleptAt, lastRequestAt: sleptAt - ms } });
+    }
+  });
+
+  it("says a gap with no sleep reported is of unknown cause, never a sleep", () => {
+    const gap = { from: Date.UTC(2026, 10, 19, 14, 0), to: Date.UTC(2026, 10, 19, 14, 9) };
+    const said = sentence({ kind: "held", expiresAt, confirmedAt, reached: true, gap });
+    expect(said).toContain(
+      `Before ${dayTime(gap.to)}, the host's checks for work came late or its clock jumped, for a reason it can't tell. Agent 37 reported no sleep then.`
+    );
+    expect(said).not.toContain("put it to sleep");
+    noClaim(said);
   });
 
   it("says Agent 37's own timer is in charge once the link expired, was refused, or was never given", () => {

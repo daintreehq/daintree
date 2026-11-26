@@ -844,25 +844,46 @@ export interface CloudHostStatus {
    */
   idleTimeFollowsHost?: boolean;
   /**
-   * Whether the host holds the machine awake while it sees work with no
-   * device connected, as this device last heard from it (#17918). Absent or
-   * null for a provider with no such hold.
+   * The link the host sends requests through while it sees work with no
+   * device connected, as this device last heard from it (#17918), and what
+   * this device saw of them (#17976). Absent or null for a provider with no
+   * such link.
    */
   keepAwake?: CloudKeepAwake | null;
 }
 
 /**
- * `held`: the host said it holds a link that keeps the machine awake while
- * it sees work until `expiresAt`, when this device last asked at
+ * `held`: the host said it holds a link it sends requests through while it
+ * sees work until `expiresAt`, when this device last asked at
  * `confirmedAt`; `reached` once it said a request through that link reached
  * it. `expired`: the last one it said it held has run out. `none`: it holds
  * none, with why when the host or this device found out; a null problem is
  * nothing handed over yet.
  */
-export type CloudKeepAwake =
+export type CloudKeepAwake = (
   | { kind: "held"; expiresAt: number; confirmedAt: number; reached: boolean }
   | { kind: "expired"; expiredAt: number }
-  | { kind: "none"; problem: string | null };
+  | { kind: "none"; problem: string | null }
+) &
+  CloudKeepAwakeSeen;
+
+/**
+ * What this device saw of the host's requests and the machine's sleeps
+ * (#17976), whatever link the host holds now; each absent while unknown.
+ * Observations only: nothing here says a request kept the machine awake.
+ * `lastRequestAt`: when, as the host last said, a request it sent reached its
+ * listener. `sleep`: the provider reported the machine asleep since
+ * `sleptAt`, after a request last reached the host at `lastRequestAt` as far
+ * as this device knew then; kept until a request reaches the host after it.
+ * `gap`: the host's passes while it saw work stopped for a stretch, or its
+ * clocks jumped, with no sleep reported for it: cause unknown. By the host's
+ * wall clock, so `from` may be after `to` across a clock step back.
+ */
+export interface CloudKeepAwakeSeen {
+  lastRequestAt?: number;
+  sleep?: { sleptAt: number; lastRequestAt: number | null };
+  gap?: { from: number; to: number };
+}
 
 /**
  * `stops`: this device stops the machine with the provider's normal stop once

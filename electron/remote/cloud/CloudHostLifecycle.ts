@@ -330,7 +330,7 @@ export interface CloudHostLifecycleDeps {
     "problemFor" | "standsInFor" | "arm" | "tick" | "forgetRemoved"
   >;
   /** The links Agent 37 instances' hosts hold them awake with while they see work (#17918). */
-  keepAwake?: Pick<CloudKeepAwakeLinks, "statusFor" | "tick" | "forgetRemoved">;
+  keepAwake?: Pick<CloudKeepAwakeLinks, "statusFor" | "tick" | "forgetRemoved" | "observed">;
   /**
    * What this device hears of a host's idle clock, for stopping a machine
    * once its idle time ends where the machine can't stop itself (#17923,
@@ -4448,6 +4448,7 @@ export class CloudHostLifecycle {
     // A binding forgotten while the request was out keeps no mark behind.
     if (!written) return false;
     this.observedTicket.set(bindingId, ticket);
+    this.deps.keepAwake?.observed(bindingId);
     // Whoever's read shows the deadline moved, or the run ending, settles an earlier failure to move it.
     if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
     if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);

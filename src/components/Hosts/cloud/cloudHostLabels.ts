@@ -268,7 +268,7 @@ export interface IdleSleepMachine {
   lifetime: CloudLifetimeModel | null;
   /** Its own idle timeout follows the host's idle time (`CloudHostStatus.idleTimeFollowsHost`). */
   followsHost: boolean;
-  /** What the host holds the machine awake with while it sees work (`CloudHostStatus.keepAwake`, #17918). */
+  /** The link the host sends requests through while it sees work (`CloudHostStatus.keepAwake`, #17918). */
   keepAwake?: CloudKeepAwake | null;
 }
 
@@ -296,7 +296,7 @@ export function idleSleepTimerSentence(
     own === null
       ? "once it's been idle for a while"
       : `after ${durationLabel(own)} without activity`;
-  const away = awaySentence(ownTimer, afterIdle, machine);
+  const away = awaySentence(name, ownTimer, afterIdle, machine);
   const inCharge = machine.connected
     ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.${away.connected ? ` ${away.connected}` : ""}`
     : `${away.offline} The host's idle time takes over while this device is connected.`;
@@ -311,40 +311,93 @@ export function idleSleepTimerSentence(
 }
 
 /**
- * What holds the machine awake, or doesn't, with no device connected
- * (#17918): the host, while it sees work, through the link this device last
- * heard it holds; otherwise the provider's own timer, with why. `connected`
- * is said after the connected sentence, and is null when there is nothing
- * worth adding there; `offline` stands on its own.
+ * What the host does about the machine's idle timer with no device connected
+ * (#17918), and what this device saw of it (#17976): the host sends requests
+ * through the link this device last heard it holds while it sees work, and
+ * when its last one reached it; otherwise the provider's own timer, with why.
+ * Whether the provider counts those requests is its own, so nothing here says
+ * they kept the machine awake. `connected` is said after the connected
+ * sentence, and is null when there is nothing worth adding there; `offline`
+ * stands on its own.
  */
 function awaySentence(
+  name: string,
   ownTimer: string,
   afterIdle: string,
   machine: IdleSleepMachine
 ): { connected: string | null; offline: string } {
   const keepAwake = machine.keepAwake ?? null;
+  const seen = keepAwake ? seenSentences(name, keepAwake) : "";
+  const withSeen = (text: string) => (seen ? `${text} ${seen}` : text);
   const ownInCharge = `${sentenceCase(ownTimer)} is in charge while no device is connected`;
   if (keepAwake?.kind === "held") {
     const said = machine.connected ? "" : ` (as the host said ${dayTime(keepAwake.confirmedAt)})`;
-    const untried = keepAwake.reached
-      ? ""
-      : ", though no request through it has reached the host yet";
-    const held = `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(keepAwake.expiresAt)}${untried}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
+    const last =
+      keepAwake.lastRequestAt !== undefined
+        ? ` Its last request reached it ${dayTime(keepAwake.lastRequestAt)}.`
+        : keepAwake.reached
+          ? ""
+          : " No request through it has reached the host yet.";
+    const held = withSeen(
+      `With no device connected, the host sends requests through a link from Daintree while it sees work${said}.${last} The link expires ${dayTime(keepAwake.expiresAt)}. ${sentenceCase(ownTimer)} puts the machine to sleep ${afterIdle}.`
+    );
     return { connected: held, offline: held };
   }
   if (keepAwake?.kind === "expired") {
-    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host kept the machine awake with expired ${dayTime(keepAwake.expiredAt)}.`;
-    return { connected: expired, offline: `${expired} Connecting renews it.` };
+    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host held expired ${dayTime(keepAwake.expiredAt)}.`;
+    return { connected: withSeen(expired), offline: withSeen(`${expired} Connecting renews it.`) };
   }
   if (keepAwake?.kind === "none" && keepAwake.problem) {
     const problem = /[.!?]$/.test(keepAwake.problem) ? keepAwake.problem : `${keepAwake.problem}.`;
-    const refused = `${ownInCharge}, even while the host sees work: ${problem}`;
+    const refused = withSeen(`${ownInCharge}, even while the host sees work: ${problem}`);
     return { connected: refused, offline: refused };
   }
-  const own = `${ownInCharge}: it puts the machine to sleep ${afterIdle}.`;
+  const own = withSeen(`${ownInCharge}: it puts the machine to sleep ${afterIdle}.`);
   // The host said it holds none: said while connected too, where someone decides to leave.
   if (keepAwake?.kind === "none") return { connected: own, offline: own };
   return { connected: null, offline: own };
+}
+
+/** "3 minutes", "2 hours", "less than a minute": how far apart two times are. */
+function apart(ms: number): string {
+  if (ms < 60_000) return "less than a minute";
+  return durationLabel(Math.round(ms / 60_000) * 60);
+}
+
+/**
+ * What this device saw beside the link (#17976): a sleep the provider
+ * reported, with how long after the host's last request it came, and a gap
+ * the host saw in its own passes with no sleep reported, of unknown cause.
+ * The last request itself is said with the link while one is held.
+ */
+function seenSentences(
+  name: string,
+  keepAwake: NonNullable<IdleSleepMachine["keepAwake"]>
+): string {
+  const out: string[] = [];
+  // Said once: with the link while one is held, or with the sleep when that's the one it follows.
+  if (
+    keepAwake.kind !== "held" &&
+    keepAwake.lastRequestAt !== undefined &&
+    keepAwake.lastRequestAt !== keepAwake.sleep?.lastRequestAt
+  ) {
+    out.push(`The host's last request reached it ${dayTime(keepAwake.lastRequestAt)}.`);
+  }
+  const sleep = keepAwake.sleep;
+  if (sleep) {
+    const after =
+      sleep.lastRequestAt !== null && sleep.lastRequestAt <= sleep.sleptAt
+        ? `, ${apart(sleep.sleptAt - sleep.lastRequestAt)} after the host's last request this device heard of`
+        : "";
+    out.push(`${name} put it to sleep ${dayTime(sleep.sleptAt)}${after}.`);
+  }
+  const gap = keepAwake.gap;
+  if (gap) {
+    out.push(
+      `Before ${dayTime(gap.to)}, the host's checks for work came late or its clock jumped, for a reason it can't tell. ${name} reported no sleep then.`
+    );
+  }
+  return out.join(" ");
 }
 
 /**

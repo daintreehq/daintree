@@ -9,8 +9,11 @@ export interface KeepAwakeListener {
   readonly port: number;
   /** A nonce a coming request should carry; a few may be outstanding at once. */
   expect(nonce: string): void;
-  /** Whether a request carrying `nonce` reached this listener, forgetting it either way. */
-  take(nonce: string): boolean;
+  /**
+   * When a request carrying `nonce` reached this listener, by its wall clock,
+   * or null if none did; forgetting it either way.
+   */
+  take(nonce: string): number | null;
   close(): void;
 }
 
@@ -53,10 +56,17 @@ const RETRY_BASE_MS = 15_000;
 const RETRY_MAX_MS = 60_000;
 /** A listener opened for a URL that never came is closed after this long. */
 const LISTENER_GRACE_MS = 5 * 60_000;
+/**
+ * Busy passes this far apart, by either clock, or clocks that disagree by this
+ * much between them, are a gap the host can't explain: a delayed tick, a
+ * frozen process, a clock step. Well inside Agent 37's shortest idle time.
+ */
+const GAP_MS = 2 * PING_EVERY_MS;
 
 const EXPIRED =
-  "The link Daintree gave this host to keep Agent 37 from sleeping it expired. Connect to it from Daintree to renew it.";
-const REFUSED = "Agent 37 no longer accepts the link Daintree gave this host to keep it awake.";
+  "The link Daintree gave this host to send requests through while it sees work expired. Connect to the host from Daintree to get a new one.";
+const REFUSED =
+  "Agent 37 no longer accepts the link Daintree gave this host to send requests through.";
 const NOT_ARRIVED = "A request through the link Daintree gave this host never arrived at it.";
 const UNREACHED = "Agent 37 couldn't reach this host through the link Daintree gave it.";
 const PORT_CLOSED = "This host's port closed while it checked that link. Ask for its port again.";
@@ -92,6 +102,15 @@ export class KeepAwakeKeeper {
    */
   private fallback: HeldUrl | null = null;
   private problem: string | null = null;
+  /**
+   * When a request through any URL last reached this listener, by the wall
+   * clock: one URL's own time can stand still while another's requests land.
+   */
+  private lastRequest: { resourceId: string; at: number } | null = null;
+  /** The last busy pass, by both clocks; null once idle or holding nothing. */
+  private lastBusyPass: { wall: number; mono: number } | null = null;
+  /** The latest gap between busy passes, by the wall clock at either end. */
+  private gap: { from: number; to: number } | null = null;
   /** When the last request that reached this listener went out, by the monotonic clock. */
   private lastSentAt = Number.NEGATIVE_INFINITY;
   private retryAt = Number.NEGATIVE_INFINITY;
@@ -130,6 +149,8 @@ export class KeepAwakeKeeper {
       expiresAt: covering?.expiresAt ?? null,
       reachedAt: covering?.reachedAt ?? null,
       problem: held ? null : (this.problem ?? this.listenerProblem),
+      ...(this.lastRequest ? { lastRequest: { ...this.lastRequest } } : {}),
+      ...(this.gap ? { gap: { ...this.gap } } : {}),
     };
   }
 
@@ -192,10 +213,15 @@ export class KeepAwakeKeeper {
         while (this.running) await this.running;
         if (!this.disposed && this.deps.idle.observation().busy) {
           outcome = await this.send(candidate, check.signal);
+        } else {
+          this.lastBusyPass = null;
         }
       } finally {
         if (this.verifying === check) this.verifying = null;
       }
+    } else {
+      // Seen idle here: the next busy pass is no gap after the one before.
+      this.lastBusyPass = null;
     }
     if (this.disposed) throw shuttingDown();
     if (this.listener !== listener) refuse(PORT_CLOSED);
@@ -254,7 +280,7 @@ export class KeepAwakeKeeper {
       })
       .catch((error: unknown) => {
         this.listenerProblem =
-          "This host couldn't open a port for Agent 37 to reach it, so it can't keep the machine awake.";
+          "This host couldn't open a port for Agent 37 to reach it, so it sends no requests while it sees work.";
         throw error;
       })
       .finally(() => {
@@ -283,8 +309,16 @@ export class KeepAwakeKeeper {
     this.generation += 1;
     this.controller?.abort();
     this.controller = null;
+    // What it saw is about the machine, not one URL: only another machine's URL, or none, forgets
+    // the last pass; only another machine's forgets what reached it.
+    const machine = next?.resourceId ?? null;
+    if (machine === null || machine !== this.held?.resourceId) this.lastBusyPass = null;
     this.held = next;
     this.fallback = null;
+    if (machine !== null && this.lastRequest && this.lastRequest.resourceId !== machine) {
+      this.lastRequest = null;
+      this.gap = null;
+    }
     this.lastSentAt = Number.NEGATIVE_INFINITY;
     this.retryAt = Number.NEGATIVE_INFINITY;
     this.failures = 0;
@@ -335,7 +369,11 @@ export class KeepAwakeKeeper {
     if (this.fallback && this.now() >= this.fallback.expiresAt) this.fallback = null;
     if (this.verifying) return;
     // Only while the host sees work: nothing sent then is still out once an idle time can end.
-    if (!this.deps.idle.observation().busy) return;
+    if (!this.deps.idle.observation().busy) {
+      this.lastBusyPass = null;
+      return;
+    }
+    this.notePass();
     if (this.mono() < this.retryAt) return;
     if (held.verified && this.mono() - this.lastSentAt < PING_EVERY_MS) return;
     const generation = this.generation;
@@ -370,6 +408,30 @@ export class KeepAwakeKeeper {
     this.lastSentAt = startedAt;
   }
 
+  /**
+   * Whether the request reached this listener; one that did is what the host
+   * last saw reach it, at the moment it arrived, not when its answer came back.
+   */
+  private arrived(listener: KeepAwakeListener, nonce: string, held: HeldUrl): boolean {
+    const at = listener.take(nonce);
+    if (at === null) return false;
+    // The latest to arrive, whatever its time says: a clock stepped back still moves it on.
+    this.lastRequest = { resourceId: held.resourceId, at };
+    return true;
+  }
+
+  /** A busy pass: one too long after the last, or with the clocks apart, is a gap of unknown cause. */
+  private notePass(): void {
+    const pass = { wall: this.now(), mono: this.mono() };
+    const last = this.lastBusyPass;
+    this.lastBusyPass = pass;
+    if (!last) return;
+    const mono = pass.mono - last.mono;
+    const wall = pass.wall - last.wall;
+    if (mono > GAP_MS || Math.abs(wall - mono) > GAP_MS)
+      this.gap = { from: last.wall, to: pass.wall };
+  }
+
   /** One request through the URL, carrying a nonce only this listener knows to expect. */
   private async send(held: HeldUrl, signal: AbortSignal): Promise<Outcome> {
     const listener = this.listener;
@@ -390,13 +452,13 @@ export class KeepAwakeKeeper {
       status = response.status;
       await response.body?.cancel().catch(() => {});
     } catch {
-      const arrived = listener.take(nonce);
+      const arrived = this.arrived(listener, nonce, held);
       // Run out while its answer was awaited, it can hold nothing up from now on.
       if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
       // Arrived, its answer slow or lost on the way back: it went through the edge all the same.
       return arrived ? { kind: "reached" } : { kind: "retry" };
     }
-    const arrived = listener.take(nonce);
+    const arrived = this.arrived(listener, nonce, held);
     if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
     if (status >= 200 && status < 300) {
       return arrived ? { kind: "reached" } : { kind: "lost", problem: NOT_ARRIVED };

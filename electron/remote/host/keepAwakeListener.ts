@@ -13,15 +13,16 @@ const MAX_OUTSTANDING = 4;
  * 404 to anything else, and reads no body: it tells a caller nothing about
  * this machine.
  */
-export function openKeepAwakeListener(): Promise<KeepAwakeListener> {
+export function openKeepAwakeListener(now: () => number = Date.now): Promise<KeepAwakeListener> {
   const expected = new Set<string>();
-  const received = new Set<string>();
+  /** When each nonce arrived. */
+  const received = new Map<string, number>();
   const server = http.createServer((request, response) => {
     const path = (request.url ?? "").split("?")[0] ?? "";
     const nonce = path.startsWith(KEEP_AWAKE_PATH) ? path.slice(KEEP_AWAKE_PATH.length) : "";
     // Each nonce is answered once: a replay finds nothing.
     const known = request.method === "GET" && NONCE.test(nonce) && expected.delete(nonce);
-    if (known) received.add(nonce);
+    if (known) received.set(nonce, now());
     response.writeHead(known ? 204 : 404, { "cache-control": "no-store", connection: "close" });
     response.end();
   });
@@ -49,7 +50,9 @@ export function openKeepAwakeListener(): Promise<KeepAwakeListener> {
         },
         take(nonce) {
           expected.delete(nonce);
-          return received.delete(nonce);
+          const at = received.get(nonce) ?? null;
+          received.delete(nonce);
+          return at;
         },
         close() {
           server.closeAllConnections();
