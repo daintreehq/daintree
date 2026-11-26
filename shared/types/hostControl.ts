@@ -322,9 +322,6 @@ export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 export const HostListResultSchema = z.object({ hosts: z.array(HostListEntrySchema) });
 export type HostListResult = z.infer<typeof HostListResultSchema>;
 
-/** The longest tool id a host's link carries. */
-const MAX_LINK_TOOL_ID_CHARS = 128;
-
 /** A call names exactly one target: one of the host's projects, or a throwaway agent (#14444). */
 function namesOneTarget(args: { projectId?: string; throwaway?: true }): boolean {
   return (args.projectId === undefined) !== (args.throwaway === undefined);
@@ -340,8 +337,8 @@ export const HostCallArgsSchema = z
       .describe(
         "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, status, output, sendCommand, sendKeys, close."
       ),
-    // Longer on this machine, where a project plugin's action id carries its
-    // 64-character project id (#18153); a host's link still takes 128.
+    // A project plugin's action id carries its 64-character project id
+    // (#18153), on this machine or another one (#18255).
     tool: z
       .string()
       .min(1)
@@ -365,10 +362,6 @@ export const HostCallArgsSchema = z
   })
   .refine(namesOneTarget, {
     params: { reason: "should name one target: a projectId, or throwaway: true" },
-  })
-  .refine((args) => args.hostId === "local" || args.tool.length <= MAX_LINK_TOOL_ID_CHARS, {
-    path: ["tool"],
-    params: { reason: `should be at most ${MAX_LINK_TOOL_ID_CHARS} characters on another machine` },
   })
   // A throwaway target takes only its own tools, with their own arguments.
   .refine(

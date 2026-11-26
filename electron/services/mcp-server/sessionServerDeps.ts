@@ -963,14 +963,15 @@ export function createSessionServerDeps(
       }
       const holdUntil =
         callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
-      // A plugin's opted-in action (#18153) runs only in this machine's own
-      // view, where its dialog is asked, so even a query never counts as a
-      // read another machine's driving view could answer.
+      // A plugin's opted-in action (#18153, #18255) runs only in this
+      // machine's own view, where its dialog is asked, so even a query never
+      // counts as a read another machine's driving view could answer, and the
+      // Shell is never asked in its place.
       const relayPluginAction = relay !== undefined && isPluginAssistantReachAction(actionId);
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
             ...(holdUntil !== undefined ? { holdUntil } : {}),
-            ...(relay.local === true && relay.global === true
+            ...(relay.global === true && (relay.local === true || relayPluginAction)
               ? { callerOrigin: "global-assistant" as const }
               : {}),
             relay: {
@@ -980,10 +981,14 @@ export function createSessionServerDeps(
                 relayEntry !== undefined &&
                 buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
+              ...(relayPluginAction ? { pluginAction: true as const } : {}),
+              ...(relayPluginAction && relay.stillAccepted
+                ? { stillAccepted: relay.stillAccepted }
+                : {}),
               ...(relayCallId !== undefined
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
                 : {}),
-              ...(askShell !== undefined && relayCallId !== undefined
+              ...(askShell !== undefined && relayCallId !== undefined && !relayPluginAction
                 ? {
                     requestApproval: (ask) =>
                       askShell({

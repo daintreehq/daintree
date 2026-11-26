@@ -41,9 +41,10 @@ export function createSessionContext(sessionId: string, deps: SessionServerDeps)
     paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
     relay: deps.relay !== undefined,
     relayGlobal: deps.relay?.global === true,
-    // This machine's own global Assistant (#18153): a remote Shell's relay can
-    // say `global`, but only the in-process relay ever says `local`.
-    relayPluginReach: deps.relay?.global === true && deps.relay.local === true,
+    // A global Assistant (#18153): this machine's own, or another machine's,
+    // whose calls reach here only while this host lets them (#18255). Where
+    // its plugin actions run, and who answers for them, is the bridge's.
+    relayPluginReach: deps.relay?.global === true,
   };
 
   // `host.list` and `host.call` (#13493): any of this machine's own

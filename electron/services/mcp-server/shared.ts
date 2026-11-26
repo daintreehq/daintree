@@ -227,12 +227,18 @@ export interface WorkspaceDispatchOptions {
    */
   actionsListWalk?: boolean;
   /**
-   * This machine's global Assistant made the call, through `host.call` into
-   * the bound project (#18153), so the view tells an action's handler so.
-   * Sent to a local view only, and set by main from the relay's own lane,
+   * A global Assistant made the call, through `host.call` into the bound
+   * project: this machine's (#18153), or another machine's reaching one of
+   * this host's plugin actions (#18255). The view tells the action's handler
+   * so. Sent to a local view only, and set by main from the relay's own lane,
    * never from a call's arguments.
    */
   callerOrigin?: "global-assistant";
+  /**
+   * Asked as a person's approval is about to run the action (#18255): why it
+   * may no longer, or null. Set by the bridge itself, never by a caller.
+   */
+  approvalCheck?: () => Error | null;
   /**
    * Another machine is timing this call and didn't say for how long (#14989):
    * a host too old to say, dispatching into the view this Shell drives it
@@ -269,6 +275,18 @@ export interface WorkspaceDispatchOptions {
      * while no view shows it, and never while another machine drives it.
      */
     local?: true;
+    /**
+     * One of the plugin actions that opted into `assistantReach`, for a global
+     * Assistant (#18153, #18255): it runs only in this machine's own view of
+     * the project, where its dialog is asked, never while another machine
+     * drives it, and never without a view.
+     */
+    pluginAction?: true;
+    /**
+     * This host's consent to the requesting machine's assistants, read again
+     * before a person's approval of a plugin action runs it (#18255).
+     */
+    stillAccepted?: () => boolean;
     /**
      * Asks the person at the requesting Shell, in its own window, about this
      * one call when no view here can (#13501). Absent, an unapproved
@@ -1221,6 +1239,8 @@ export interface PendingRequest<T> {
   onDelegationApproved?: () => void;
   /** Dispatches only: sent with a `confirmationCondition`, so a reported skip is believed (#17917). */
   offeredCondition?: true;
+  /** Dispatches only: {@link WorkspaceDispatchOptions.approvalCheck}, asked as an approval lands. */
+  approvalCheck?: () => Error | null;
 }
 
 /**
@@ -1346,6 +1366,12 @@ export interface McpRelayCaller {
    * from an older Shell, so such a caller is an ordinary assistant here.
    */
   global?: true;
+  /**
+   * This host's consent to other machines' assistants (#18255), read again
+   * when a person's answer to one of their plugin actions is about to run it.
+   * Absent for this machine's own assistants.
+   */
+  stillAccepted?: () => boolean;
   /**
    * Takes the notices this session's calls arm (#13500), for the Shell to
    * type into the run that asked. Absent, a relayed call can't ask for one.

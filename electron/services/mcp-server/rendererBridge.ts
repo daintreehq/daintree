@@ -249,25 +249,27 @@ export class RelayDrivenElsewhereError extends Error {
   constructor(
     workspaceId: string,
     holderName: string | null,
-    options?: { stopped?: boolean; withoutView?: boolean; local?: boolean }
+    options?: { stopped?: boolean; withoutView?: boolean; local?: boolean; pluginAction?: boolean }
   ) {
     const holder = holderName ?? "Another window";
     super(
-      options?.local === true
-        ? options.stopped === true
-          ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. The person can take it back in a window here.`
-          : `${holder} has control of this project, so this call can't change it. Nothing was run. The person can take it back in a window here.`
-        : options?.withoutView === true
+      options?.pluginAction === true
+        ? `${holder} has control of this project, so this plugin action can't run: its dialog is answered in a window on the host. Nothing was run. The person can take control back in a window there.`
+        : options?.local === true
           ? options.stopped === true
-            ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
-            : holderName !== null
-              ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
-              : `This assistant isn't attached to a window of this project, and with Host mode off it can only change the project through one. Nothing was run. Open the project in one window here, which takes this assistant over, and retry once it has.`
-          : options?.stopped === true
-            ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
-            : holderName !== null
-              ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
-              : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
+            ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. The person can take it back in a window here.`
+            : `${holder} has control of this project, so this call can't change it. Nothing was run. The person can take it back in a window here.`
+          : options?.withoutView === true
+            ? options.stopped === true
+              ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
+              : holderName !== null
+                ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
+                : `This assistant isn't attached to a window of this project, and with Host mode off it can only change the project through one. Nothing was run. Open the project in one window here, which takes this assistant over, and retry once it has.`
+            : options?.stopped === true
+              ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
+              : holderName !== null
+                ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
+                : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
     );
     this.name = "RelayDrivenElsewhereError";
     this.workspaceId = workspaceId;
@@ -993,6 +995,7 @@ export function createRendererBridge(
       | "actionsListWalk"
       | "confirmationCondition"
       | "callerOrigin"
+      | "approvalCheck"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -1042,6 +1045,7 @@ export function createRendererBridge(
       | "actionsListWalk"
       | "confirmationCondition"
       | "callerOrigin"
+      | "approvalCheck"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1144,6 +1148,7 @@ export function createRendererBridge(
             }
           : {}),
         ...(offersConfirmationCondition(confirmed, approval) ? { offeredCondition: true } : {}),
+        ...(approval?.approvalCheck ? { approvalCheck: approval.approvalCheck } : {}),
       });
 
       const send = () => {
@@ -1486,6 +1491,12 @@ export function createRendererBridge(
   ): boolean {
     if (relay === undefined) return false;
     if (relay.local === true) return admitLocalRelay(workspaceId, actionId, driver, relay.readOnly);
+    // Another machine's global Assistant calling one of this host's plugin
+    // actions (#18255): asked in a window here, as this machine's own is,
+    // never in the Shell's view or at the Shell.
+    if (relay.pluginAction === true) {
+      return admitLocalRelay(workspaceId, actionId, driver, false, { pluginAction: true });
+    }
     if (relay.readOnly) return false;
     if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) {
       return false;
@@ -1515,11 +1526,12 @@ export function createRendererBridge(
     workspaceId: string,
     actionId: string,
     driver: ReturnType<typeof resolveDriver>,
-    readOnly: boolean
+    readOnly: boolean,
+    refusal: { local: true } | { pluginAction: true } = { local: true }
   ): boolean {
     if (driver?.remote !== undefined) {
       if (readOnly) return false;
-      throw new RelayDrivenElsewhereError(workspaceId, driver.holderName ?? null, { local: true });
+      throw new RelayDrivenElsewhereError(workspaceId, driver.holderName ?? null, refusal);
     }
     if (driver !== null && driver.vacant !== true) return false;
     if (getWebContentsForProject(workspaceId).some((wc) => !wc.isDestroyed())) return false;
@@ -2059,6 +2071,10 @@ export function createRendererBridge(
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
     const driver = resolveDriver(workspaceId);
+    const relay = options.relay;
+    if (relay?.pluginAction === true) {
+      options = { ...options, approvalCheck: () => pluginApprovalRefusal(workspaceId, relay) };
+    }
     if (admitRelayedWrite(workspaceId, actionId, driver, options.relay)) {
       return dispatchWithoutFrontend(
         workspaceId,
@@ -2316,8 +2332,20 @@ export function createRendererBridge(
       hold.expire();
       return { held: false };
     }
-    // The approval stands from here, before its action runs (#16752).
-    if (phase === "approved") noteDelegationApproved(pending);
+    if (phase === "approved") {
+      // What let the call reach this view may have gone while the person
+      // read the dialog (#18255): then their approval runs nothing.
+      const refused = approvalRefusal(pending);
+      if (refused !== null) {
+        clearTimeout(pending.timer);
+        pending.destroyedCleanup?.();
+        pendingDispatches.delete(requestId);
+        pending.reject(refused);
+        return { held: false };
+      }
+      // The approval stands from here, before its action runs (#16752).
+      noteDelegationApproved(pending);
+    }
     if (HOLD_PHASE_ORDER[phase] > HOLD_PHASE_ORDER[hold.phase]) {
       hold.phase = phase;
       // The decision window and the run each start afresh when they begin,
@@ -2342,6 +2370,39 @@ export function createRendererBridge(
   }
 
   /** Tells the offer's owner the person approved, once. */
+  function approvalRefusal(pending: PendingRequest<DispatchEnvelope>): Error | null {
+    if (!pending.approvalCheck) return null;
+    try {
+      return pending.approvalCheck();
+    } catch (err) {
+      return normalizeError(err, "Couldn't tell whether this call may still run, so it didn't");
+    }
+  }
+
+  /**
+   * Why a person's approval of a global Assistant's plugin action may no
+   * longer run it (#18255): this host stopped taking other machines'
+   * assistants, or another machine took the project over, while the dialog
+   * was open. Either would have refused the call before it was asked.
+   */
+  function pluginApprovalRefusal(
+    workspaceId: string,
+    relay: NonNullable<WorkspaceDispatchOptions["relay"]>
+  ): Error | null {
+    if (relay.stillAccepted?.() === false) {
+      return new Error(
+        "This host stopped letting other machines' assistants work here before the dialog was answered, so the plugin action didn't run. Nothing was run."
+      );
+    }
+    const driver = resolveDriver(workspaceId);
+    if (driver?.remote === undefined) return null;
+    return new RelayDrivenElsewhereError(
+      workspaceId,
+      driver.holderName ?? null,
+      relay.local === true ? { local: true } : { pluginAction: true }
+    );
+  }
+
   function noteDelegationApproved(pending: PendingRequest<DispatchEnvelope>): void {
     const approved = pending.onDelegationApproved;
     if (approved === undefined) return;
