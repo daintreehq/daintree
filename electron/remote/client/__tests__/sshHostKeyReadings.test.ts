@@ -10,9 +10,24 @@ import {
   readBaselines,
   readOutcome,
 } from "../sshHostKeyReadings.js";
+import { FIXTURE_KEYS } from "../../host/__tests__/sshKeyFixtures.js";
 
-function key(char: string, type = "ssh-ed25519"): HostSshKey {
-  return { type, fingerprint: `SHA256:${char.repeat(43)}`, publicKey: `${type} AAAA${char}` };
+const FIXTURES = { A: "ed25519", B: "ecdsa", C: "rsa", D: "ed25519" } as const;
+
+/** A real key, so the blob bears out the fingerprint. */
+function key(char: keyof typeof FIXTURES, _type?: string): HostSshKey {
+  const { line, fingerprint } = FIXTURE_KEYS[FIXTURES[char]];
+  const [type, blob] = line.split(" ") as [string, string];
+  return { type, fingerprint, publicKey: `${type} ${blob}` };
+}
+
+function hostKey(sshKey: HostSshKey) {
+  return {
+    outcome: "read" as const,
+    hostKeyPath: "/etc/ssh/k",
+    publicKeyPath: "/etc/ssh/k.pub",
+    ...sshKey,
+  };
 }
 
 function listener(
@@ -101,6 +116,46 @@ describe("applyReading", () => {
     expect(applyReading([], twice, 10)).toEqual([]);
   });
 
+  it("leaves the baselines alone when the answer was truncated", () => {
+    const truncated = { ...reading(listener([key("A")])), truncated: true } as HostSshReadOutcome;
+    expect(applyReading([], truncated, 10)).toEqual([]);
+  });
+
+  it("advances one listener while a partial sibling keeps its baseline", () => {
+    const first = applyReading(
+      [],
+      reading(listener([key("A")]), listener([key("B")], { listenerId: "tunnel" })),
+      10
+    );
+    const next = applyReading(
+      first,
+      reading(
+        listener([key("C")]),
+        listener([key("A")], { listenerId: "tunnel", complete: false, gaps: ["exited"] })
+      ),
+      20
+    );
+    expect(next.find((b) => b.listenerId === "main")!.change?.previous).toEqual([key("A")]);
+    expect(next.find((b) => b.listenerId === "tunnel")).toEqual(
+      first.find((b) => b.listenerId === "tunnel")
+    );
+  });
+
+  it("evicts the listener read longest ago, not the first one kept", () => {
+    let baselines = applyReading([], reading(listener([key("A")], { listenerId: "first" })), 1);
+    baselines = applyReading(baselines, reading(listener([key("A")], { listenerId: "old" })), 2);
+    baselines = applyReading(baselines, reading(listener([key("A")], { listenerId: "first" })), 3);
+    for (let i = 0; i < MAX_SAVED_SSH_LISTENERS - 1; i++) {
+      baselines = applyReading(
+        baselines,
+        reading(listener([key("A")], { listenerId: `l${i}` })),
+        10 + i
+      );
+    }
+    expect(baselines.some((b) => b.listenerId === "first")).toBe(true);
+    expect(baselines.some((b) => b.listenerId === "old")).toBe(false);
+  });
+
   it("keeps at most the most recently read listeners", () => {
     let baselines = applyReading([], reading(listener([key("A")], { listenerId: "old" })), 1);
     for (let i = 0; i < MAX_SAVED_SSH_LISTENERS; i++) {
@@ -130,12 +185,7 @@ describe("readOutcome", () => {
           configFile: null,
           listenAddresses: [],
           keys: [
-            {
-              outcome: "read",
-              hostKeyPath: "/etc/ssh/ssh_host_ed25519_key",
-              publicKeyPath: "/etc/ssh/ssh_host_ed25519_key.pub",
-              ...key("A"),
-            },
+            hostKey(key("A")),
             {
               outcome: "permission-denied",
               hostKeyPath: "/etc/ssh/ssh_host_rsa_key",
@@ -149,6 +199,32 @@ describe("readOutcome", () => {
       keys: [key("A")],
       keyGaps: [{ publicKeyPath: "/etc/ssh/ssh_host_rsa_key.pub", reason: "permission-denied" }],
     });
+  });
+
+  it("refuses a key whose blob doesn't bear out its fingerprint, leaving the listener partial", () => {
+    const outcome = readOutcome({
+      status: "reading",
+      complete: true,
+      truncated: false,
+      listeners: [
+        {
+          listenerId: "main",
+          pid: 42,
+          complete: true,
+          gaps: [],
+          configFile: null,
+          listenAddresses: [],
+          keys: [hostKey(key("A")), hostKey({ ...key("C"), fingerprint: key("B").fingerprint })],
+        },
+      ],
+    });
+    expect(outcome).toMatchObject({ complete: false });
+    expect(outcome.status === "reading" && outcome.listeners[0]).toMatchObject({
+      complete: false,
+      keys: [key("A")],
+      keyGaps: [{ publicKeyPath: "/etc/ssh/k.pub", reason: "invalid" }],
+    });
+    expect(applyReading([], outcome, 10)).toEqual([]);
   });
 });
 
@@ -169,5 +245,13 @@ describe("readBaselines", () => {
       ])
     ).toEqual([good]);
     expect(readBaselines({})).toEqual([]);
+  });
+
+  it("keeps a change on record through a reload, and drops a key whose blob disagrees", () => {
+    const first = applyReading([], reading(listener([key("A")])), 10);
+    const changed = applyReading(first, reading(listener([key("C")])), 20);
+    expect(readBaselines(JSON.parse(JSON.stringify(changed)))).toEqual(changed);
+    const forged = [{ ...changed[0]!, keys: [{ ...key("C"), fingerprint: key("A").fingerprint }] }];
+    expect(readBaselines(forged)).toEqual([]);
   });
 });

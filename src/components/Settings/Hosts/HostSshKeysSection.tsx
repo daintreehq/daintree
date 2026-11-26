@@ -98,22 +98,35 @@ function Fingerprints({ keys }: { keys: HostSshKey[] }) {
 function KeyRow({ sshKey, pinned }: { sshKey: HostSshKey; pinned: boolean }) {
   return (
     <SettingsRow
+      layout="stacked"
       label={sshKey.type}
       accessory={pinned ? <Badge>Pinned</Badge> : undefined}
       description={<span className="font-mono break-all">{sshKey.fingerprint}</span>}
       control={
-        <SettingsRowActions>
-          <CopyButton
-            size="icon-sm"
-            text={sshKey.fingerprint}
-            aria-label={`Copy ${sshKey.type} fingerprint`}
-          />
-          <CopyButton
-            size="icon-sm"
-            text={sshKey.publicKey}
-            aria-label={`Copy ${sshKey.type} public key`}
-          />
-        </SettingsRowActions>
+        <div className="space-y-2">
+          <p
+            className="font-mono text-xs break-all text-text-secondary select-text"
+            data-testid="ssh-public-key"
+          >
+            {sshKey.publicKey}
+          </p>
+          <SettingsRowActions>
+            <CopyButton
+              variant="outline"
+              size="sm"
+              label="Copy fingerprint"
+              text={sshKey.fingerprint}
+              aria-label={`Copy ${sshKey.type} fingerprint`}
+            />
+            <CopyButton
+              variant="outline"
+              size="sm"
+              label="Copy public key"
+              text={sshKey.publicKey}
+              aria-label={`Copy ${sshKey.type} public key`}
+            />
+          </SettingsRowActions>
+        </div>
       }
     />
   );
@@ -125,15 +138,15 @@ function ChangeRow({ baseline }: { baseline: HostSshListenerBaseline }) {
     <SettingsRow
       layout="stacked"
       label="Keys changed"
-      description={`A reading ${formatRelativeTime(baseline.change.changedAt)} differed from the one before it. Check the change was expected before you trust the new keys anywhere`}
+      description={`A complete reading ${formatRelativeTime(baseline.change.changedAt)} found different keys from the one before it. Check the change was expected before you trust the new keys anywhere`}
       control={
         <div className="space-y-2" data-testid="ssh-key-change">
-          <div>
+          <div data-testid="ssh-key-change-before">
             <div className="text-xs text-text-secondary">Before</div>
             <Fingerprints keys={baseline.change.previous} />
           </div>
-          <div>
-            <div className="text-xs text-text-secondary">Now</div>
+          <div data-testid="ssh-key-change-after">
+            <div className="text-xs text-text-secondary">After</div>
             <Fingerprints keys={baseline.keys} />
           </div>
         </div>
@@ -153,24 +166,13 @@ function ListenerGroup({
   pinnedFingerprint: string | null;
 }) {
   const gaps = reading.gaps.map((gap) => LISTENER_GAP_TEXT[gap] ?? gap);
+  const why = gaps.length > 0 ? `: ${gaps.join("; ")}` : "";
   return (
     <SettingsGroup label={listenerLabel(reading)}>
-      {baseline && <ChangeRow baseline={baseline} />}
-      {reading.keys.map((key) => (
-        <KeyRow key={key.fingerprint} sshKey={key} pinned={key.fingerprint === pinnedFingerprint} />
-      ))}
-      {reading.keyGaps.map((gap) => (
-        <SettingsRow
-          key={gap.publicKeyPath}
-          label={<span className="font-mono break-all">{gap.publicKeyPath}</span>}
-          labelText={gap.publicKeyPath}
-          description={KEY_GAP_TEXT[gap.reason]}
-        />
-      ))}
       {reading.listenerId === null ? (
         <SettingsRow
-          label="Not compared"
-          description="This server can't be told apart from another one on the host, so its keys aren't kept or compared"
+          label="Not kept or compared"
+          description={`Daintree can't be sure this is the same server from one reading to the next${why}, so its keys aren't kept or compared`}
         />
       ) : (
         !reading.complete && (
@@ -179,13 +181,32 @@ function ListenerGroup({
             label="Partial reading"
             description={
               baseline
-                ? `Not every key could be read${gaps.length > 0 ? `: ${gaps.join("; ")}` : ""}. The last complete reading, from ${formatRelativeTime(baseline.readAt)}, stays what the next one is compared with`
-                : `Not every key could be read${gaps.length > 0 ? `: ${gaps.join("; ")}` : ""}. Nothing is kept to compare with until a complete reading`
+                ? `Not every key could be read${why}. The keys below aren't compared; the last complete reading, from ${formatRelativeTime(baseline.readAt)}, stays what the next one is compared with`
+                : `Not every key could be read${why}. Nothing is kept to compare with until a complete reading`
             }
-            control={baseline ? <Fingerprints keys={baseline.keys} /> : undefined}
+            control={
+              baseline ? (
+                <div data-testid="ssh-key-baseline">
+                  <div className="text-xs text-text-secondary">Last complete reading</div>
+                  <Fingerprints keys={baseline.keys} />
+                </div>
+              ) : undefined
+            }
           />
         )
       )}
+      {reading.keys.map((key) => (
+        <KeyRow key={key.fingerprint} sshKey={key} pinned={key.fingerprint === pinnedFingerprint} />
+      ))}
+      {reading.keyGaps.map((gap, index) => (
+        <SettingsRow
+          key={`${gap.publicKeyPath}\n${index}`}
+          label={<span className="font-mono break-all">{gap.publicKeyPath}</span>}
+          labelText={gap.publicKeyPath}
+          description={KEY_GAP_TEXT[gap.reason]}
+        />
+      ))}
+      {baseline && <ChangeRow baseline={baseline} />}
     </SettingsGroup>
   );
 }
@@ -194,15 +215,18 @@ function ListenerGroup({
 function KeptGroup({
   baseline,
   pinnedFingerprint,
+  missing,
 }: {
   baseline: HostSshListenerBaseline;
   pinnedFingerprint: string | null;
+  /** The latest reading didn't find this server. */
+  missing: boolean;
 }) {
   return (
     <SettingsGroup label={listenerLabel(baseline)}>
       <SettingsRow
         label="Last complete reading"
-        description={`Read ${formatRelativeTime(baseline.readAt)}`}
+        description={`Read ${formatRelativeTime(baseline.readAt)}${missing ? ". The latest reading didn't find this server" : ""}`}
       />
       <ChangeRow baseline={baseline} />
       {baseline.keys.map((key) => (
@@ -225,12 +249,19 @@ export function HostSshKeysSection({
   trust,
   pinnedFingerprint,
 }: HostSshKeysSectionProps) {
-  const [state, setState] = useState<{ key: string; keys: HostSshHostKeys } | null>(null);
+  const [result, setResult] = useState<HostSshHostKeys | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   // Only the latest request lands: an older one settling late says nothing now.
   const requestRef = useRef(0);
+  // Another host, or this one pointed elsewhere: nothing read before is about it.
   const requestKey = `${hostId}\n${connectionKey}`;
+  const [shownKey, setShownKey] = useState(requestKey);
+  if (shownKey !== requestKey) {
+    setShownKey(requestKey);
+    setResult(null);
+    setError(null);
+  }
 
   const read = () => {
     const request = ++requestRef.current;
@@ -238,7 +269,7 @@ export function HostSshKeysSection({
     remoteHostsClient.readSshHostKeys(hostId).then(
       (keys) => {
         if (request !== requestRef.current) return;
-        setState({ key: requestKey, keys });
+        setResult(keys);
         setError(null);
         setReading(false);
       },
@@ -256,7 +287,6 @@ export function HostSshKeysSection({
     readOnChange();
   }, [hostId, connectionKey, connected]);
 
-  const result = state?.key === requestKey ? state.keys : null;
   const outcome = result?.outcome ?? null;
   const baselines = result?.baselines ?? [];
   const byId = new Map(baselines.map((baseline) => [baseline.listenerId, baseline]));
@@ -268,7 +298,7 @@ export function HostSshKeysSection({
   return (
     <SettingsSection
       title="SSH host keys"
-      description={`The keys ${hostName}'s SSH server presents, read by Daintree on the host as its own user`}
+      description={`The public keys of ${hostName}'s SSH servers, read from their key files by Daintree on the host as its own user`}
       action={
         <Button variant="outline" size="sm" onClick={read} disabled={!connected || reading}>
           <SpinningIcon icon={RefreshCw} active={reading} size={14} />
@@ -317,6 +347,7 @@ export function HostSshKeysSection({
           key={baseline.listenerId}
           baseline={baseline}
           pinnedFingerprint={pinnedFingerprint}
+          missing={outcome?.status === "reading"}
         />
       ))}
     </SettingsSection>

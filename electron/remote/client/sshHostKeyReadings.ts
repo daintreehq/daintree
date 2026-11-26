@@ -5,6 +5,7 @@ import type {
   HostSshReadOutcome,
 } from "../../../shared/types/ipc/remoteHosts.js";
 import type { SshHostKeysAnswer } from "../host/linkMethods.js";
+import { parsePublicKeyFile } from "../host/sshPublicKey.js";
 
 /** Listeners kept per host: listener ids that stop appearing would otherwise pile up. */
 export const MAX_SAVED_SSH_LISTENERS = 32;
@@ -26,28 +27,49 @@ function sameKeys(a: HostSshKey[], b: HostSshKey[]): boolean {
   return a.length === b.length && a.every((key, i) => key.fingerprint === b[i]!.fingerprint);
 }
 
+/**
+ * The key as its own blob says it is: the type and fingerprint worked out
+ * here, never taken on the host's word, so a fingerprint shown, compared or
+ * matched to a pin is always the one of the key that is copied.
+ */
+function verifiedKey(key: { type: string; fingerprint: string; publicKey: string }) {
+  const parsed = parsePublicKeyFile(key.publicKey);
+  if (!parsed || parsed.type !== key.type || parsed.fingerprint !== key.fingerprint) return null;
+  return parsed;
+}
+
 /** The host's answer, as the renderer reads it. */
 export function readOutcome(answer: SshHostKeysAnswer): HostSshReadOutcome {
   if (answer.status !== "reading") return answer;
-  return {
-    status: "reading",
-    complete: answer.complete,
-    truncated: answer.truncated,
-    listeners: answer.listeners.map((listener): HostSshListenerReading => ({
+  const listeners = answer.listeners.map((listener): HostSshListenerReading => {
+    const keys: HostSshKey[] = [];
+    const keyGaps: HostSshListenerReading["keyGaps"] = [];
+    for (const key of listener.keys) {
+      const verified = key.outcome === "read" ? verifiedKey(key) : null;
+      if (verified) keys.push(verified);
+      else {
+        keyGaps.push({
+          publicKeyPath: key.publicKeyPath,
+          reason: key.outcome === "read" ? "invalid" : key.outcome,
+        });
+      }
+    }
+    return {
       listenerId: listener.listenerId,
       configFile: listener.configFile,
       listenAddresses: listener.listenAddresses,
-      complete: listener.complete,
+      // A key whose blob doesn't bear out its fingerprint leaves the listener short.
+      complete: listener.complete && keyGaps.length === 0,
       gaps: listener.gaps,
-      keys: listener.keys.flatMap((key) =>
-        key.outcome === "read"
-          ? [{ type: key.type, fingerprint: key.fingerprint, publicKey: key.publicKey }]
-          : []
-      ),
-      keyGaps: listener.keys.flatMap((key) =>
-        key.outcome === "read" ? [] : [{ publicKeyPath: key.publicKeyPath, reason: key.outcome }]
-      ),
-    })),
+      keys: keySet(keys),
+      keyGaps,
+    };
+  });
+  return {
+    status: "reading",
+    complete: answer.complete && listeners.every((listener) => listener.complete),
+    truncated: answer.truncated,
+    listeners,
   };
 }
 
@@ -63,7 +85,8 @@ export function applyReading(
   outcome: HostSshReadOutcome,
   now: number
 ): HostSshListenerBaseline[] {
-  if (outcome.status !== "reading") return baselines;
+  // A truncated answer may have left out a listener sharing an id with one it kept.
+  if (outcome.status !== "reading" || outcome.truncated) return baselines;
   const next = new Map(baselines.map((baseline) => [baseline.listenerId, baseline]));
   const ids = outcome.listeners.map((listener) => listener.listenerId);
   for (const listener of outcome.listeners) {
@@ -95,7 +118,7 @@ function readKey(raw: unknown): HostSshKey | null {
   const { type, fingerprint, publicKey } = raw as Record<string, unknown>;
   if (typeof type !== "string" || typeof publicKey !== "string") return null;
   if (typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) return null;
-  return { type, fingerprint, publicKey };
+  return verifiedKey({ type, fingerprint, publicKey });
 }
 
 function readKeys(raw: unknown): HostSshKey[] | null {

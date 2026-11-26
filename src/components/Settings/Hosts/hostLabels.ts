@@ -478,12 +478,24 @@ export function sshKeyTrustText(subject: {
   if (subject.connectionKind === "ssh") {
     return "Your own SSH configuration decides which host key this computer accepts. Compare these with it";
   }
-  const provider = subject.providerName ?? "The provider";
-  if (subject.sshTrust === "provider-tunnel") {
-    return `${provider}'s tunnel vouches for the machine, so no host key is pinned. A change shown here is the only sign its key moved`;
+  const provider = subject.providerName ?? "the provider";
+  const pin = subject.pinnedFingerprint;
+  switch (subject.sshTrust) {
+    case "provider-tunnel":
+      return `${provider}'s tunnel vouches for the machine, so no host key is pinned and nothing else on this computer flags a new one`;
+    case "pinned-from-api":
+      return pin !== null
+        ? `This computer pins ${pin}, the key ${provider}'s API reports for the machine`
+        : `This computer pins the key ${provider}'s API reports, once it reports one`;
+    case "api-or-confirm":
+      return pin !== null
+        ? `This computer pins ${pin}. A different key waits for you to trust it`
+        : `The first key is trusted when ${provider}'s API reports the one the machine presents, or when you confirm it`;
+    case "confirm-on-first-connect":
+      return pin !== null
+        ? `This computer pins ${pin}, which you confirmed. A different key waits for you to trust it`
+        : "No host key is pinned yet: you confirm the machine's key the first time it connects";
+    case null:
+      return "How this computer trusts the machine's key isn't known while its provider is unavailable";
   }
-  if (subject.pinnedFingerprint !== null) {
-    return `This computer pins ${subject.pinnedFingerprint} for the machine. A new key is trusted only when you confirm it`;
-  }
-  return "No host key is pinned for this machine yet";
 }

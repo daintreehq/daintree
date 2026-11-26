@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { isValidRemoteHostId, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { HostRegistry, type RemoteHostsStore, type RemoteHostsValue } from "../HostRegistry.js";
+import { FIXTURE_KEYS } from "../../host/__tests__/sshKeyFixtures.js";
 
 function memoryStore(initial?: unknown): RemoteHostsStore & { value: unknown; writes: number } {
   const store = {
@@ -800,19 +801,24 @@ describe("HostRegistry", () => {
 });
 
 describe("HostRegistry SSH host-key baselines", () => {
+  const [type, blob] = FIXTURE_KEYS.ed25519.line.split(" ") as [string, string];
+  const [rsaType, rsaBlob] = FIXTURE_KEYS.rsa.line.split(" ") as [string, string];
   const baseline = {
     listenerId: "main",
     configFile: null,
     listenAddresses: ["0.0.0.0:22"],
-    keys: [
-      {
-        type: "ssh-ed25519",
-        fingerprint: `SHA256:${"A".repeat(43)}`,
-        publicKey: "ssh-ed25519 AAAA",
-      },
-    ],
+    keys: [{ type, fingerprint: FIXTURE_KEYS.ed25519.fingerprint, publicKey: `${type} ${blob}` }],
     readAt: 10,
-    change: null,
+    change: {
+      previous: [
+        {
+          type: rsaType,
+          fingerprint: FIXTURE_KEYS.rsa.fingerprint,
+          publicKey: `${rsaType} ${rsaBlob}`,
+        },
+      ],
+      changedAt: 10,
+    },
   };
 
   it("keeps them across a reopen and an unrelated write", () => {
@@ -833,6 +839,7 @@ describe("HostRegistry SSH host-key baselines", () => {
     registry.recordSshHostKeyBaselines(a.id, a.connection, [baseline]);
     registry.recordSshHostKeyBaselines(b.id, b.connection, [baseline]);
     registry.forget(a.id);
+    expect(registry.sshHostKeyBaselines(b.id)).toEqual([baseline]);
     registry.update({ hostId: b.id, connection: { kind: "ssh", target: "c" } });
     expect(registry.sshHostKeyBaselines(a.id)).toEqual([]);
     expect(registry.sshHostKeyBaselines(b.id)).toEqual([]);
@@ -840,10 +847,13 @@ describe("HostRegistry SSH host-key baselines", () => {
   });
 
   it("keeps nothing read over a connection the host no longer has", () => {
-    const registry = new HostRegistry(memoryStore());
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
     const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
-    registry.recordSshHostKeyBaselines(host.id, { kind: "ssh", target: "old" }, [baseline]);
+    registry.recordSshHostKeyBaselines(host.id, host.connection, [baseline]);
+    const kept = JSON.stringify(store.value);
+    registry.recordSshHostKeyBaselines(host.id, { kind: "ssh", target: "old" }, []);
     registry.recordSshHostKeyBaselines("gone", { kind: "ssh", target: "box" }, [baseline]);
-    expect(registry.sshHostKeyBaselines(host.id)).toEqual([]);
+    expect(JSON.stringify(store.value)).toBe(kept);
   });
 });

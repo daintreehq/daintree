@@ -18,6 +18,7 @@ import {
   restartImpactLines,
   restartTerminalCount,
   shellWord,
+  sshKeyTrustText,
   sshRefusalAdvice,
   verdictCopy,
 } from "../hostLabels";
@@ -385,5 +386,55 @@ describe("hostModeSwitchedOn where Daintree starts on connect", () => {
     expect(verdictCopy("host-mode-temporary", temporary, "box", "1.4.0", false).detail).toContain(
       "so connecting from Daintree starts it again"
     );
+  });
+});
+
+describe("sshKeyTrustText", () => {
+  const pin = `SHA256:${"P".repeat(43)}`;
+  const cloud = (
+    sshTrust: Parameters<typeof sshKeyTrustText>[0]["sshTrust"],
+    pinned: string | null
+  ) =>
+    sshKeyTrustText({
+      connectionKind: "cloud",
+      providerName: "Acme",
+      sshTrust,
+      pinnedFingerprint: pinned,
+    });
+
+  it("names the pin only where this computer holds one", () => {
+    for (const trust of [
+      "pinned-from-api",
+      "api-or-confirm",
+      "confirm-on-first-connect",
+    ] as const) {
+      expect(cloud(trust, pin)).toContain(pin);
+      expect(cloud(trust, null)).not.toContain("SHA256:");
+    }
+    // A tunnel-vouched machine has no pin, whatever a stale status still carries.
+    expect(cloud("provider-tunnel", pin)).not.toContain(pin);
+  });
+
+  it("only promises a confirmation where the provider's policy asks for one", () => {
+    expect(cloud("pinned-from-api", pin)).not.toMatch(/trust it|confirm/);
+    expect(cloud("api-or-confirm", pin)).toMatch(/trust it/);
+    expect(cloud("confirm-on-first-connect", null)).toMatch(/confirm/);
+  });
+
+  it("never claims a host key check for SSH or WSL hosts it doesn't make", () => {
+    const ssh = sshKeyTrustText({
+      connectionKind: "ssh",
+      providerName: null,
+      sshTrust: null,
+      pinnedFingerprint: pin,
+    });
+    expect(ssh).not.toContain(pin);
+    const wsl = sshKeyTrustText({
+      connectionKind: "wsl",
+      providerName: null,
+      sshTrust: null,
+      pinnedFingerprint: null,
+    });
+    expect(wsl).toMatch(/not SSH/);
   });
 });

@@ -157,8 +157,16 @@ function readLastUsed(raw: unknown, hosts: HostDescriptor[]): Map<string, number
   return out;
 }
 
-/** SSH host-key readings for hosts still listed, each still over the connection it was read on. */
-function readSshHostKeys(raw: unknown, hosts: HostDescriptor[]): Map<string, SavedSshHostKeys> {
+/**
+ * SSH host-key readings for hosts still listed, each still over the connection
+ * it was read on. Writes carry the other hosts' listeners as they are, since
+ * checking every key is for the reads that show or compare them.
+ */
+function readSshHostKeys(
+  raw: unknown,
+  hosts: HostDescriptor[],
+  check = false
+): Map<string, SavedSshHostKeys> {
   const out = new Map<string, SavedSshHostKeys>();
   if (!raw || typeof raw !== "object") return out;
   const saved = (raw as { sshHostKeys?: unknown }).sshHostKeys;
@@ -169,7 +177,9 @@ function readSshHostKeys(raw: unknown, hosts: HostDescriptor[]): Map<string, Sav
     if (!entry || typeof entry !== "object") continue;
     const connection = parseHostConnection((entry as { connection?: unknown }).connection);
     if (!connection || !sameHostConnection(connection, host.connection)) continue;
-    const listeners = readBaselines((entry as { listeners?: unknown }).listeners);
+    const kept = (entry as { listeners?: unknown }).listeners;
+    if (!Array.isArray(kept)) continue;
+    const listeners = check ? readBaselines(kept) : (kept as HostSshListenerBaseline[]);
     if (listeners.length > 0) out.set(host.id, { connection, listeners });
   }
   return out;
@@ -458,7 +468,7 @@ export class HostRegistry {
   /** The last complete SSH host-key reading per listener this device keeps for the host. */
   sshHostKeyBaselines(hostId: HostId): HostSshListenerBaseline[] {
     const raw = this.store.get("remoteHosts");
-    return readSshHostKeys(raw, sanitize(raw)).get(hostId)?.listeners ?? [];
+    return readSshHostKeys(raw, sanitize(raw), true).get(hostId)?.listeners ?? [];
   }
 
   /**
