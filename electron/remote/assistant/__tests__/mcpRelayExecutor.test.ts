@@ -746,3 +746,84 @@ describe("createMcpRelayExecutor and a call sent as a plugin action (#18255)", (
     expect(calls).toEqual([]);
   });
 });
+
+describe("createMcpRelayExecutor and a global caller's plugin tool operations (#18256)", () => {
+  let executor: McpRelayExecutor | undefined;
+
+  afterEach(() => executor?.dispose());
+
+  const REMOTE: RelayMcpSessionSpec = {
+    linkSessionId: "link-1",
+    senderId: "sender-a",
+    helpSessionId: "help-1",
+    projectId: "proj-2",
+    tier: "core",
+    shellName: "studio",
+    global: true,
+    deliverNotices: () => {},
+    requestApproval: async () => ({ decision: "unavailable" }),
+  };
+  const { global: _global, ...NOT_GLOBAL } = REMOTE;
+
+  function harness() {
+    const calls: string[] = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: async (tool) => {
+          calls.push(tool);
+          return ANSWER;
+        },
+        close: () => {},
+      }),
+    });
+    return { executor, calls };
+  }
+
+  it.each(["plugin.tools", "plugin.callTool"])(
+    "never hands a global caller's %s answer to the same callId from another lane",
+    async (tool) => {
+      const { executor, calls } = harness();
+      const sent = { ...PAYLOAD, tool, args: { pluginInstanceId: "acme.ledger" } };
+      await executor.call(REMOTE, sent);
+
+      await expect(executor.call(NOT_GLOBAL, { ...sent, resend: true })).resolves.toEqual({
+        status: "conflict",
+      });
+      // The global caller's own resend still reads what it ran.
+      await expect(executor.call(REMOTE, { ...sent, resend: true })).resolves.toMatchObject({
+        status: "done",
+      });
+      expect(calls).toEqual([tool]);
+    }
+  );
+
+  it("keeps every other tool's resend as it was, whichever lane sent it", async () => {
+    const { executor, calls } = harness();
+    await executor.call(REMOTE, PAYLOAD);
+
+    await expect(executor.call(NOT_GLOBAL, { ...PAYLOAD, resend: true })).resolves.toMatchObject({
+      status: "done",
+    });
+    expect(calls).toEqual(["terminal.list"]);
+  });
+
+  it("arms no notice for an operation's own arguments, whatever they hold", async () => {
+    const { executor } = harness();
+    await executor.call(REMOTE, {
+      ...PAYLOAD,
+      callId: "call-notify",
+      tool: "plugin.tools",
+      args: { notify: true },
+    });
+
+    // A call that armed one would read as watched until its notice came.
+    await expect(
+      executor.noticeStatus("sender-a", [{ helpSessionId: "help-1", callId: "call-notify" }])
+    ).resolves.toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-notify", status: "unknown" }],
+    });
+  });
+});

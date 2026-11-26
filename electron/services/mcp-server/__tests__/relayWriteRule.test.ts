@@ -3,8 +3,9 @@ import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 import {
   _resetMcpDriveTargetResolverForTesting,
   setMcpDriveTargetResolver,
+  type McpDriveTargetResolver,
 } from "../driveTarget.js";
-import { relayWriteStanding } from "../relayWriteRule.js";
+import { relayWriteStanding, relayWriteStandingNow } from "../relayWriteRule.js";
 
 function view(linkSessionId: string, closed = false): ClientEndpoint {
   return {
@@ -122,5 +123,30 @@ describe("relayWriteStanding (#13501)", () => {
       setMcpDriveTargetResolver(() => ({ state: "unavailable", reason: "reserved" }));
       expect(relayWriteStanding("project-1", "local", true)).toEqual({ kind: "unavailable" });
     });
+  });
+});
+
+describe("relayWriteStandingNow (#18256)", () => {
+  it("reads a Shell's standing without telling the lease a change is coming", () => {
+    const asked: unknown[] = [];
+    let target: McpDriveTargetResolver = () => ({ state: "vacant" });
+    setMcpDriveTargetResolver((projectId, change) => {
+      asked.push([projectId, change]);
+      return target(projectId, change);
+    });
+
+    expect(relayWriteStandingNow("project-1", "link-a")).toEqual({ kind: "vacant" });
+    target = () => ({ state: "live", endpoint: view("link-a") });
+    expect(relayWriteStandingNow("project-1", "link-a")).toEqual({ kind: "own-view" });
+    target = () => ({ state: "live", endpoint: view("link-b"), holderName: "studio-02" });
+    expect(relayWriteStandingNow("project-1", "link-a")).toEqual({
+      kind: "elsewhere",
+      holderName: "studio-02",
+    });
+    expect(asked).toEqual([
+      ["project-1", undefined],
+      ["project-1", undefined],
+      ["project-1", undefined],
+    ]);
   });
 });

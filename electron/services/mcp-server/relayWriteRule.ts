@@ -35,9 +35,31 @@ export function relayWriteStanding(
   linkSessionId: string | null,
   local = false
 ): RelayWriteStanding {
-  const target = resolveMcpDriveTarget(projectId, {
-    linkSessionId: local ? null : linkSessionId,
-  });
+  return standingOf(projectId, linkSessionId, local, true);
+}
+
+/**
+ * The same standing for another machine's Shell, read without telling the
+ * lease a change is coming: for revisiting work admitted earlier once a
+ * project's drive target moves (#18256), rather than for a change about to be made.
+ */
+export function relayWriteStandingNow(
+  projectId: string,
+  linkSessionId: string
+): RelayWriteStanding {
+  return standingOf(projectId, linkSessionId, false, false);
+}
+
+function standingOf(
+  projectId: string,
+  linkSessionId: string | null,
+  local: boolean,
+  forChange: boolean
+): RelayWriteStanding {
+  const target = resolveMcpDriveTarget(
+    projectId,
+    forChange ? { linkSessionId: local ? null : linkSessionId } : undefined
+  );
   if (target === null) {
     return local ? { kind: "own-view" } : { kind: "elsewhere", holderName: null };
   }

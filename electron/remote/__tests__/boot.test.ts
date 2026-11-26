@@ -327,6 +327,7 @@ vi.mock("../../services/mcp-server/driveTarget.js", () => ({
     };
   }),
   notifyMcpDriveTargetChange: vi.fn(),
+  onMcpDriveTargetChange: vi.fn(() => () => {}),
 }));
 vi.mock("../hybrid/index.js", () => ({
   installHybridSplits: m.installHybridSplits,

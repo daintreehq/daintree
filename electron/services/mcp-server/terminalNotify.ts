@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { isGlobalPluginToolOperation } from "../../../shared/config/globalAssistant.js";
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
@@ -3071,6 +3072,8 @@ export const TERMINAL_NOTIFY_WHEN_IDLE_TOOL = "terminal.notifyWhenIdle";
  * it, so a host that has no record of it later is one that lost its notices.
  */
 export function relayCallArmsNotice(tool: string, args: Record<string, unknown>): boolean {
+  // A plugin tool operation's own arguments arm nothing, whatever they hold (#18256).
+  if (isGlobalPluginToolOperation(tool)) return false;
   return tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL || args.notify === true;
 }
 

@@ -917,4 +917,82 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       expect(refused.handleProjectRunCheck).not.toHaveBeenCalled();
     });
   });
+
+  describe("what a host answers beside the session (#18256)", () => {
+    afterEach(() => _resetMcpDriveTargetResolverForTesting());
+
+    function viewOf(linkSessionId: string): ClientEndpoint {
+      return {
+        endpointId: `remote:${linkSessionId}:view-1`,
+        clientId: "client-1",
+        projectId: "project-1",
+        kind: "remote-view",
+        handle: -5,
+        linkSessionId,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: vi.fn(() => ({ dispose: () => {} })),
+        isClosed: () => false,
+      };
+    }
+
+    it("refuses a change by the rule its own tools' changes meet, for its own Shell", async () => {
+      const { lc } = await startedLifecycle();
+      const session = (await lc.openRelaySession({
+        tier: "core",
+        workspaceId: "project-1",
+        caller: { ...CALLER, global: true },
+      }))!;
+
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      expect(session.refuseWrite()).toBeNull();
+      setMcpDriveTargetResolver(() => ({ state: "live", endpoint: viewOf("link-1") }));
+      expect(session.refuseWrite()).toBeNull();
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: viewOf("link-2"),
+        holderName: "studio-02",
+      }));
+      expect(session.refuseWrite()).toContain("studio-02 has control");
+      setMcpDriveTargetResolver(() => ({ state: "unavailable", reason: "reserved" }));
+      expect(session.refuseWrite()).toContain("not reachable");
+      session.close();
+    });
+
+    it("records a call answered beside it as its own: who asked, its callId, no values", async () => {
+      const { lc, appendRecord } = await startedLifecycle();
+      const session = (await lc.openRelaySession({
+        tier: "core",
+        workspaceId: "project-1",
+        caller: { ...CALLER, global: true },
+      }))!;
+
+      session.recordCall({
+        toolId: "plugin.callTool",
+        args: {
+          pluginInstanceId: "acme.ledger",
+          tool: "lookup",
+          arguments: { id: "secret-record" },
+        },
+        startedAt: Date.now(),
+        callId: "call-7",
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+
+      const record = appendRecord.mock.calls
+        .map(([input]) => input as Record<string, unknown>)
+        .find((input) => input.toolId === "plugin.callTool")!;
+      expect(record.relay).toEqual({
+        shellName: "greg-mbp",
+        sender: CALLER.senderId.slice(0, 16),
+        helpSessionId: "help-1",
+        callId: "call-7",
+      });
+      expect(record.sessionId).toBe(session.sessionId);
+      expect(record.argsSummary).toContain("lookup");
+      expect(record.argsSummary).not.toContain("secret-record");
+      expect(record).not.toHaveProperty("resultSummary");
+      session.close();
+    });
+  });
 });

@@ -2327,8 +2327,9 @@ export interface PluginMcpLaunchCaller {
 }
 
 /**
- * A call from the person's global Daintree Assistant on this machine, reaching
- * the project through `host.call` under the same answer the project's own
+ * A call from the person's global Daintree Assistant, on this machine or on
+ * another one this machine lets its assistants work here, reaching the
+ * project through `host.call` under the same answer the project's own
  * Assistant has. It runs in no terminal of the project. As with the project
  * Assistant, it is never proof that a person asked.
  */
