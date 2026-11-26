@@ -1148,15 +1148,19 @@ describe("what an Agent 37 host's keep-awake observed (#17976)", () => {
     expect(env.status().keepAwake).toMatchObject({ lastRequestAt, sleep: { sleptAt } });
   });
 
-  it("takes a sleep read that comes back after a request since as over", async () => {
+  it("keeps a sleep read that comes back after a later request until a request after it", async () => {
     const env = await agent37();
     await env.connect();
     const sleptAt = env.api.now;
-    env.api.advance(60);
     await env.run(60);
     await env.links.tick();
-    expect(env.status().keepAwake!.lastRequestAt).toBeGreaterThan(sleptAt);
+    const heard = env.status().keepAwake!.lastRequestAt!;
+    expect(heard).toBeGreaterThan(sleptAt);
+    // A host clock running fast looks the same: so it is said, beside no time before it.
     env.staleSleep(sleptAt);
+    expect(env.status().keepAwake).toMatchObject({ sleep: { sleptAt, lastRequestAt: heard } });
+    await env.run(60);
+    await env.links.tick();
     expect(env.status().keepAwake).not.toHaveProperty("sleep");
     expect(env.raw()).toContain('"cleared":true');
   });

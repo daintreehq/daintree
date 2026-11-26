@@ -205,10 +205,7 @@ export class KeepAwakeKeeper {
       reachedAt: null,
     };
     let outcome: Outcome | null = null;
-    const busy = this.deps.idle.observation().busy;
-    // Seen idle here: the next busy pass is no gap after the one before.
-    if (!busy) this.lastBusyPass = null;
-    if (busy) {
+    if (this.deps.idle.observation().busy) {
       const check = new AbortController();
       this.verifying = check;
       try {
@@ -216,10 +213,15 @@ export class KeepAwakeKeeper {
         while (this.running) await this.running;
         if (!this.disposed && this.deps.idle.observation().busy) {
           outcome = await this.send(candidate, check.signal);
+        } else {
+          this.lastBusyPass = null;
         }
       } finally {
         if (this.verifying === check) this.verifying = null;
       }
+    } else {
+      // Seen idle here: the next busy pass is no gap after the one before.
+      this.lastBusyPass = null;
     }
     if (this.disposed) throw shuttingDown();
     if (this.listener !== listener) refuse(PORT_CLOSED);
@@ -413,13 +415,8 @@ export class KeepAwakeKeeper {
   private arrived(listener: KeepAwakeListener, nonce: string, held: HeldUrl): boolean {
     const at = listener.take(nonce);
     if (at === null) return false;
-    if (
-      !this.lastRequest ||
-      this.lastRequest.resourceId !== held.resourceId ||
-      at > this.lastRequest.at
-    ) {
-      this.lastRequest = { resourceId: held.resourceId, at };
-    }
+    // The latest to arrive, whatever its time says: a clock stepped back still moves it on.
+    this.lastRequest = { resourceId: held.resourceId, at };
     return true;
   }
 

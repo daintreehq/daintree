@@ -674,3 +674,45 @@ describe("what the keeper observed, in order (#17976)", () => {
     expect(env.keeper.status().gap).toBeUndefined();
   });
 });
+
+describe("what the keeper observed, across clock steps and arms (#17976)", () => {
+  it("says the latest request to arrive after its clock stepped back", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    const before = env.now();
+    env.stepWall(-5 * 60_000);
+    await env.passes(1, 60_000);
+    expect(env.keeper.status().lastRequest?.at).toBe(env.now());
+    expect(env.now()).toBeLessThan(before);
+  });
+
+  it("sees no gap when an arm waiting behind a pass finds the host idle by then", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(1, 10_000);
+    // A pass's request is out; the arm waits for it, and work stops meanwhile.
+    let release!: () => void;
+    env.answer(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ status: 204, reaches: true });
+        })
+    );
+    env.advance(60_000);
+    const pass = env.keeper.tick();
+    const armed = env.arm(URL_B, env.now() + 8 * DAY);
+    // The arm has seen work and waits behind the pass's request.
+    await new Promise((resolve) => setImmediate(resolve));
+    env.setBusy(false);
+    release();
+    await pass;
+    await armed;
+    env.advance(5 * 60_000);
+    env.setBusy(true);
+    env.answer(() => ({ status: 204, reaches: true }));
+    await env.passes(2, 10_000);
+    expect(env.keeper.status().gap).toBeUndefined();
+  });
+});

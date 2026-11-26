@@ -252,14 +252,9 @@ export class CloudKeepAwakeLinks {
     if (stored?.resourceId === resourceId && stored.sleptAt === sleptAt) return;
     const before = viewKey(this.statusFor(bindingId));
     const known = this.lastRequestAt.get(bindingId);
-    // Already heard of a request after it (this read was slow to come back): over before it's said.
-    const over = known !== undefined && known > sleptAt;
-    const sleep: StoredKeepAwakeSleep = {
-      resourceId,
-      sleptAt,
-      lastRequestAt: over ? null : (known ?? null),
-      ...(over ? { cleared: true as const } : {}),
-    };
+    // Recorded beside the request last heard of, whatever its time says: a host's clock can run
+    // fast, so only a request heard of after this ends it.
+    const sleep: StoredKeepAwakeSleep = { resourceId, sleptAt, lastRequestAt: known ?? null };
     this.deps.store.updateBinding(bindingId, (current) =>
       current.resourceId === resourceId ? { ...current, keepAwakeSleep: sleep } : current
     );
