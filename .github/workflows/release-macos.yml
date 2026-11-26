@@ -563,7 +563,7 @@ jobs:
           cp "$RUNNER_TEMP/daintree.rb" Casks/daintree.rb
           if [[ -z "$(git status --porcelain -- Casks/daintree.rb)" ]]; then
             echo "::notice::Homebrew tap already carries daintree $version."
-            echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "commit=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -571,7 +571,7 @@ jobs:
           git add Casks/daintree.rb
           git commit -m "daintree $version"
           git push origin HEAD
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
 
   # Installs the cask from the tap commit just published, on both arches, the
   # way a user would: no credentials, the public tap, the live DMGs. Skipped
@@ -609,7 +609,10 @@ jobs:
           brew --version
           brew tap daintreehq/tap
           tap_dir="$(brew --repository daintreehq/tap)"
-          git -C "$tap_dir" fetch --quiet origin "$TAP_COMMIT"
+          # brew tap clones the whole history, so the commit is normally here.
+          if ! git -C "$tap_dir" cat-file -e "$TAP_COMMIT^{commit}" 2>/dev/null; then
+            git -C "$tap_dir" fetch --quiet origin "$TAP_COMMIT"
+          fi
           git -C "$tap_dir" checkout --quiet --detach "$TAP_COMMIT"
           # Homebrew 7 refuses to load a cask from an untrusted third-party tap.
           if brew trust --help >/dev/null 2>&1; then
@@ -625,7 +628,7 @@ jobs:
         run: |
           set -euo pipefail
           expected_version="${GITHUB_REF_NAME#v}"
-          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+          version="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
           if [[ "$version" != "$expected_version" ]]; then
             echo "::error::installed Daintree $version, expected $expected_version"
             exit 1
@@ -640,7 +643,14 @@ jobs:
             echo "::error::installed binary is $archs, expected $EXPECTED_ARCH"
             exit 1
           fi
-          spctl --assess --type execute --verbose=4 "$APP"
+          # brew keeps the quarantine flag, so this is the first-launch check.
+          assess_status=0
+          assessment="$(spctl --assess --type execute --verbose=4 --ignore-cache --no-cache "$APP" 2>&1)" || assess_status=$?
+          echo "$assessment"
+          if [[ "$assess_status" -ne 0 ]] || ! grep -q '^source=Notarized Developer ID$' <<<"$assessment"; then
+            echo "::error::Gatekeeper did not accept $APP as a notarized Developer ID app"
+            exit 1
+          fi
 
       # Every trash path the cask's zap declares gets something to remove, so
       # the uninstall below proves the stanza matches real paths.

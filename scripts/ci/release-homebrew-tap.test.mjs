@@ -308,6 +308,18 @@ describe("release-macos.yml Homebrew tap commit output (#16420)", () => {
       expect(again.stdout).toMatch(/^::notice::Homebrew tap already carries daintree 1\.2\.3\.$/m);
       expect(git(remote, "rev-parse", "main")).toBe(remoteHead);
       expect(again.output).toBe(`commit=${remoteHead}\n`);
+
+      // Another writer moves the tap: the push is refused and no commit is reported.
+      const other = path.join(dir, "other");
+      git(dir, "clone", "--quiet", remote, other);
+      writeFileSync(path.join(other, "README.md"), "other\n");
+      git(other, "add", ".");
+      git(other, "commit", "--quiet", "-m", "other");
+      git(other, "push", "--quiet", "origin", "HEAD:main");
+      writeFileSync(path.join(runnerTemp, "daintree.rb"), 'version "1.2.4"\n');
+      const rejected = runPush();
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.output).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -330,17 +342,21 @@ function brewInfoJson(trash) {
   });
 }
 
-// Runs an install-job step with a stub `brew` whose `info` prints the given
-// JSON, and HOME, RUNNER_TEMP and APP inside a scratch directory.
-function runInstallStep(dir, name, infoJson = brewInfoJson(fixtureZapTrash)) {
+// Runs an install-job step with stub commands on PATH (a `brew` whose `info`
+// prints the given JSON, plus any others), and HOME, RUNNER_TEMP and APP inside
+// a scratch directory.
+function runInstallStep(dir, name, { infoJson = brewInfoJson(fixtureZapTrash), stubs = {} } = {}) {
   const bin = path.join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(dir, "brew-info.json"), infoJson);
-  writeFileSync(
-    path.join(bin, "brew"),
-    `#!/bin/bash\n[[ "$1" == info ]] && exec cat "${path.join(dir, "brew-info.json")}"\nexit 64\n`
-  );
-  chmodSync(path.join(bin, "brew"), 0o755);
+  const allStubs = {
+    brew: `[[ "$1" == info ]] && exec cat "${path.join(dir, "brew-info.json")}"\nexit 64`,
+    ...stubs,
+  };
+  for (const [command, body] of Object.entries(allStubs)) {
+    writeFileSync(path.join(bin, command), `#!/bin/bash\n${body}\n`);
+    chmodSync(path.join(bin, command), 0o755);
+  }
   const home = path.join(dir, "home");
   const runnerTemp = path.join(dir, "runner-temp");
   mkdirSync(home, { recursive: true });
@@ -350,6 +366,8 @@ function runInstallStep(dir, name, infoJson = brewInfoJson(fixtureZapTrash)) {
     env: {
       ...process.env,
       ...installJob.env,
+      EXPECTED_ARCH: "arm64",
+      GITHUB_REF_NAME: "v1.2.3",
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       HOME: home,
       RUNNER_TEMP: runnerTemp,
@@ -358,6 +376,15 @@ function runInstallStep(dir, name, infoJson = brewInfoJson(fixtureZapTrash)) {
   });
   return { ...result, home, runnerTemp };
 }
+
+const ACCEPTED = 'echo "$4: accepted" >&2; echo "source=Notarized Developer ID" >&2';
+const appStubs = (overrides = {}) => ({
+  plutil: 'echo "1.2.3"',
+  uname: 'echo "arm64"',
+  lipo: 'echo "arm64"',
+  spctl: ACCEPTED,
+  ...overrides,
+});
 
 describe("release-macos.yml Homebrew install check (#16420)", () => {
   it("runs only when the tap job reports a commit", () => {
@@ -412,6 +439,7 @@ describe("release-macos.yml Homebrew install check (#16420)", () => {
     const run = installStep("Tap daintreehq/tap at the published commit").run;
     expect(run).toMatch(/^set -euo pipefail$/m);
     expect(run).toMatch(/^brew tap daintreehq\/tap$/m);
+    expect(run).toContain('cat-file -e "$TAP_COMMIT^{commit}"');
     expect(run).toContain('fetch --quiet origin "$TAP_COMMIT"');
     expect(run).toContain('checkout --quiet --detach "$TAP_COMMIT"');
     expect(run).toMatch(
@@ -431,7 +459,56 @@ describe("release-macos.yml Homebrew install check (#16420)", () => {
     expect(run).toContain('lipo -archs "$APP/Contents/MacOS/Daintree"');
     expect(run).toContain('"$archs" != "$EXPECTED_ARCH"');
     expect(run).toContain('"$host_arch" != "$EXPECTED_ARCH"');
-    expect(run).toMatch(/^spctl --assess --type execute --verbose=4 "\$APP"$/m);
+    expect(run).toContain(
+      'spctl --assess --type execute --verbose=4 --ignore-cache --no-cache "$APP" 2>&1'
+    );
+    expect(run).toContain(
+      `[[ "$assess_status" -ne 0 ]] || ! grep -q '^source=Notarized Developer ID$'`
+    );
+  });
+
+  posixOnly.each([
+    ["the installed app matches", {}, null],
+    [
+      "the version is older",
+      { plutil: 'echo "1.2.2"' },
+      "installed Daintree 1.2.2, expected 1.2.3",
+    ],
+    [
+      "the runner is the wrong arch",
+      { uname: 'echo "x86_64"' },
+      "runner is x86_64, expected arm64",
+    ],
+    [
+      "the binary is universal",
+      { lipo: 'echo "x86_64 arm64"' },
+      "installed binary is x86_64 arm64",
+    ],
+    ["the binary is the other arch", { lipo: 'echo "x86_64"' }, "installed binary is x86_64"],
+    [
+      "Gatekeeper rejects it",
+      { spctl: 'echo "$4: rejected" >&2; echo "source=Unnotarized Developer ID" >&2; exit 3' },
+      "Gatekeeper did not accept",
+    ],
+    [
+      "Gatekeeper accepts it from another source",
+      { spctl: 'echo "$4: accepted" >&2; echo "source=Developer ID" >&2' },
+      "Gatekeeper did not accept",
+    ],
+  ])("app check when %s", (_label, overrides, error) => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tap-app-"));
+    try {
+      const result = runInstallStep(dir, "Check installed app", { stubs: appStubs(overrides) });
+      if (error === null) {
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain("source=Notarized Developer ID");
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toContain(`::error::${error}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   posixOnly("seeds every zap trash path, and fails until zap removes them all", () => {
@@ -480,7 +557,7 @@ describe("release-macos.yml Homebrew install check (#16420)", () => {
   posixOnly("fails when the cask declares nothing to zap", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "tap-zap-"));
     try {
-      const result = runInstallStep(dir, "Seed zap paths", brewInfoJson(undefined));
+      const result = runInstallStep(dir, "Seed zap paths", { infoJson: brewInfoJson(undefined) });
       expect(result.status).toBe(1);
       expect(result.stdout).toMatch(/^::error::the cask declares no zap trash paths$/m);
     } finally {
