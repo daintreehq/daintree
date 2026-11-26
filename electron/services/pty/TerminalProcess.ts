@@ -45,7 +45,11 @@ import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
-import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import {
+  locateClaudeUsageMessages,
+  resolveResetsAt,
+  scanClaudeUsageMessages,
+} from "./ClaudeUsageWarnings.js";
 import { hasClaudeComposer, scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
 import {
   clearUpdateInstalled,
@@ -386,6 +390,13 @@ export class TerminalProcess {
       observedAt: number;
     }
   >();
+  /**
+   * Usage rows a restored process drew before its first prompt (#18166), by
+   * limit and text: history it resumed, never a reading, until it has been off
+   * screen for the cooldown since `hiddenSince`. A row of the same text drawn
+   * while one is held is taken for the same row.
+   */
+  private readonly claudeUsageReplayed = new Map<string, { hiddenSince: number | null }>();
   /**
    * The Codex stop banner on screen (#17906), held from its first sighting,
    * which fixes the day a bare time is read on, for as long as it stays.
@@ -2335,14 +2346,17 @@ export class TerminalProcess {
     const isClaude =
       getLiveAgentId(this.terminalInfo) === "claude" &&
       (this.isAgentLive || this.samplingFinalFrame);
+    const replayed = this.claudeUsageReplayed;
     if (!isClaude) {
       if (seen.size > 0) seen.clear();
+      if (replayed.size > 0) replayed.clear();
       return;
     }
     const visible = new Set<ClaudeUsageWindow>();
     // Read off the PTY itself: it keeps its width after exit, where the
     // geometry read answers null, and the final frame is read after exit.
     const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
+    this.noteReplayedUsage(lines, cols, now);
     for (const message of scanClaudeUsageMessages(lines, cols)) {
       visible.add(message.window);
       const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;
@@ -2357,7 +2371,8 @@ export class TerminalProcess {
         lastSeenAt: now,
         observedAt: fresh || last === undefined ? now : last.observedAt,
       });
-      if (!fresh) continue;
+      // A resumed conversation redraws rows printed before the restart (#18166).
+      if (!fresh || replayed.has(`${message.window}|${key}`)) continue;
       events.emit("agent:claude-usage-observed", {
         terminalId: this.id,
         window: message.window,
@@ -2372,6 +2387,46 @@ export class TerminalProcess {
     }
     for (const [window, last] of seen) {
       if (!visible.has(window)) last.visible = false;
+    }
+  }
+
+  /**
+   * Hold the usage rows a restored process draws before its first prompt
+   * (#18166). Every row, not just each limit's lowest: a resumed row a later
+   * one hides becomes its limit's reading again when that one clears. Nothing
+   * runs once none is held.
+   */
+  private noteReplayedUsage(lines: readonly string[], cols: number | undefined, now: number): void {
+    const replayed = this.claudeUsageReplayed;
+    const replaying = this.isReplaying();
+    if (!replaying && replayed.size === 0) return;
+    const shown = new Set(
+      locateClaudeUsageMessages(lines, cols).map(
+        (row) => `${row.window}|${row.statement}|${row.usedPercent}|${row.resetText}`
+      )
+    );
+    for (const [text, held] of replayed) {
+      if (shown.has(text)) {
+        // Off screen for the cooldown, it is let go: drawn now, it is a
+        // sighting of its own.
+        if (
+          held.hiddenSince !== null &&
+          now - held.hiddenSince >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
+        ) {
+          replayed.delete(text);
+        } else {
+          held.hiddenSince = null;
+        }
+      } else if (held.hiddenSince === null) {
+        held.hiddenSince = now;
+      } else if (now - held.hiddenSince >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS) {
+        replayed.delete(text);
+      }
+    }
+    if (replaying) {
+      for (const text of shown) {
+        if (!replayed.has(text)) replayed.set(text, { hiddenSince: null });
+      }
     }
   }
 

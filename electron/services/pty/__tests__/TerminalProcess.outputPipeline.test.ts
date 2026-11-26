@@ -934,6 +934,119 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     expect(seen.map((payload) => payload.usedPercent)).toEqual([87]);
   });
 
+  describe("in a pane a restore relaunched (#18166)", () => {
+    // Printed before the restart: its reset was yesterday.
+    const HISTORY = "  ⎿  You've hit your weekly limit · resets Nov 1, 10pm (UTC)\r\n";
+
+    function restoredClaude() {
+      const terminal = createTerminal({ launchAgentId: "claude", restore: true });
+      terminal.write("claude --resume abc\r");
+      terminal.markLaunchInputDone();
+      return terminal;
+    }
+
+    const FIVE_HOUR = "  ⎿  You've hit your 5-hour limit · resets 3pm (Australia/Sydney)\r\n";
+    const redraw = (...rows: string[]) => `\x1b[2J\x1b[H⏺ Working.\r\n${rows.join("")}`;
+    const limits = (seen: Array<Record<string, unknown>>) =>
+      seen.map((payload) => [payload.window, payload.statement]);
+
+    it("never counts the resumed conversation's redraw as a reading", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([]);
+
+      // Still on screen once a prompt is sent, it is the same redraw, while a
+      // limit drawn beside it is a reading.
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(redraw(HISTORY, FIVE_HOUR));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(limits(seen)).toEqual([["5-hour limit", "reached"]]);
+
+      terminal.dispose();
+    });
+
+    it("reports what the pane shows once a prompt was sent, never the redraw under it", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(footer(87));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(limits(seen)).toEqual([["weekly limit", "used"]]);
+
+      // Past the cooldown with nothing drawn, the footer clears and the
+      // resumed row, on screen all along, is its limit's lowest again.
+      await vi.advanceTimersByTimeAsync(120_000);
+      ptyOnDataCallback!(redraw(HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(limits(seen)).toEqual([["weekly limit", "used"]]);
+
+      terminal.dispose();
+    });
+
+    it("keeps a redraw resumed history though a draft was typed and erased", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      terminal.write("x");
+      terminal.write("\x7f");
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([]);
+
+      // A prompt sent after it ends the replay.
+      terminal.write("go\r");
+      ptyOnDataCallback!(redraw(HISTORY, FIVE_HOUR));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(limits(seen)).toEqual([["5-hour limit", "reached"]]);
+
+      terminal.dispose();
+    });
+
+    it("holds a resumed row through a look that missed it after a long idle", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(redraw(HISTORY, footer(87)));
+      await vi.advanceTimersByTimeAsync(120_000);
+      // One look without it, then it is back at once.
+      ptyOnDataCallback!(redraw(footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      ptyOnDataCallback!(redraw(HISTORY, footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      ptyOnDataCallback!(redraw(HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(limits(seen)).toEqual([["weekly limit", "used"]]);
+      terminal.dispose();
+    });
+
+    it("lets a resumed row go once it was off screen past the cooldown", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(redraw());
+      await vi.advanceTimersByTimeAsync(60_000);
+      // Drawn again after that, it is a sighting of its own.
+      ptyOnDataCallback!(redraw(HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(limits(seen)).toEqual([["weekly limit", "reached"]]);
+
+      terminal.dispose();
+    });
+  });
+
   it("ignores a Claude pane's prose about a limit", async () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });

@@ -147,7 +147,10 @@ const claudeUsageReadingSchema = z.object({
     .enum(CLAUDE_USAGE_STATEMENTS)
     .describe("used: usedPercent exact. over: past usedPercent. reached: limit hit."),
   usedPercent: z.number().nullable(),
-  resetsAt: z.number().nullable().describe("Epoch ms of the reset it printed, or null."),
+  resetsAt: z
+    .number()
+    .nullable()
+    .describe("Printed reset in epoch ms or null. At or before now, the window is over."),
   terminalId: z.string().describe("The pane that showed it."),
   observedAt: z.number().describe("When it showed, epoch ms."),
 });
@@ -157,9 +160,7 @@ export const AgentReadQuotaResultSchema = z.object({
     source: z
       .literal("seen-in-panes")
       .describe("Claude Code's own messages in this machine's panes, not a live account reading."),
-    readings: z
-      .array(claudeUsageReadingSchema)
-      .describe("Latest per limit since Daintree started. Empty: none seen."),
+    readings: z.array(claudeUsageReadingSchema).describe("Latest per limit, if seen."),
   }),
   codex: z.discriminatedUnion("status", [
     z.object({

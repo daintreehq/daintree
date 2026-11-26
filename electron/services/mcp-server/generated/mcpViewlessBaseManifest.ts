@@ -440,7 +440,8 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: ["number", "null"],
                   },
                   resetsAt: {
-                    description: "Epoch ms of the reset it printed, or null.",
+                    description:
+                      "Printed reset in epoch ms or null. At or before now, the window is over.",
                     type: ["number", "null"],
                   },
                   terminalId: {
@@ -462,7 +463,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 ],
                 additionalProperties: false,
               },
-              description: "Latest per limit since Daintree started. Empty: none seen.",
+              description: "Latest per limit, if seen.",
             },
           },
           required: ["source", "readings"],
