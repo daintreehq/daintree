@@ -10,6 +10,8 @@ import {
   HostListResultSchema,
   HostSettingsArgsSchema,
   HostSettingsResultSchema,
+  HostSshHostKeysArgsSchema,
+  HostSshHostKeysResultSchema,
   HostStartAgentSignInArgsSchema,
   HostStartAgentSignInResultSchema,
   HostStatusArgsSchema,
@@ -40,7 +42,8 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * `host.bringBack` tries to bring back a host whose link is down (#16170), and
  * `host.status` reads agents' status and screens across projects and hosts in
  * one call (#16191), and `host.startAgentSignIn` opens an agent CLI's own
- * sign-in on a host for the person to finish (#18197). `run()` throws if the
+ * sign-in on a host for the person to finish (#18197), and `host.sshHostKeys`
+ * reads a connected host's SSH host keys over the link (#18258). `run()` throws if the
  * renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
@@ -252,5 +255,29 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.startAgentSignIn"),
+  }));
+
+  actions.set("host.sshHostKeys", () => ({
+    id: "host.sshHostKeys",
+    title: "Read a host's SSH host keys",
+    description:
+      "A connected host's SSH host public keys by sshd listener, read there over its link, never by scanning. Says what that link's trust rests on and marks the key Daintree pins.",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "ssh", "host key", "fingerprint", "known_hosts", "pin"],
+    palette: { mode: "hidden" },
+    argsSchema: HostSshHostKeysArgsSchema,
+    resultSchema: HostSshHostKeysResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.sshHostKeys"),
   }));
 }

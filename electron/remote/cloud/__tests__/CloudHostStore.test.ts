@@ -616,6 +616,45 @@ describe("CloudHostStore host keys", () => {
     expect(read.offeredHostKey).toEqual({ key: OTHER, at: 9 });
   });
 
+  it("keeps who vouched for a trusted key and the trust access was resolved under (#18258)", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putBinding(
+      binding({
+        trustedHostKey: { key: KEY, at: 5, origin: "person" },
+        access: {
+          user: "root",
+          host: "203.0.113.10",
+          port: 22,
+          hostKey: KEY,
+          obtainedAt: 7,
+          sshTrust: "api-or-confirm",
+        },
+      })
+    );
+    const read = new CloudHostStore(backend).bindings()[0]!;
+    expect(read.trustedHostKey).toEqual({ key: KEY, at: 5, origin: "person" });
+    expect(read.access?.sshTrust).toBe("api-or-confirm");
+  });
+
+  it("reads an origin or trust it doesn't know, or none, as unrecorded", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [
+        {
+          ...binding(),
+          trustedHostKey: { key: KEY, at: 5, origin: "someone" },
+          access: { user: "root", host: "203.0.113.10", port: 22, hostKey: KEY, sshTrust: "x" },
+        },
+      ],
+    });
+    const read = new CloudHostStore(backend).bindings()[0]!;
+    expect(read.trustedHostKey).toEqual({ key: KEY, at: 5 });
+    expect(read.access).not.toBeNull();
+    expect(read.access?.sshTrust).toBeUndefined();
+  });
+
   it("reads a binding saved before host keys were confirmed as trusting none", () => {
     const backend = disk();
     const { trustedHostKey: _t, offeredHostKey: _o, ...legacy } = binding();

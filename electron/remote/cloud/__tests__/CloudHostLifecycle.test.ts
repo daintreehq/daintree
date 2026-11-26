@@ -861,6 +861,59 @@ describe("CloudHostLifecycle access", () => {
     expect(await fs.readFile(route.configPath, "utf8")).toBe(written);
   });
 
+  it("tells a dial what it rests on only while a route it wrote or checked vouches for the files (#18258)", async () => {
+    const { lifecycle, bindingId, restart } = await imported({ machine: "running" });
+    // Nothing written or checked this run: ssh could read whatever is on disk.
+    expect(lifecycle.dialTrust(bindingId)).toMatchObject({ sshTrust: null, hostKey: null });
+    await lifecycle.ensureAccess(bindingId);
+    const trusted = lifecycle.dialTrust(bindingId);
+    expect(trusted).toMatchObject({ providerId: "boat", hostKey: HOST_KEY });
+    expect(trusted?.sshTrust).not.toBeNull();
+    // A reuse rewrites nothing, so a dial under way keeps its trust.
+    await lifecycle.ensureAccess(bindingId);
+    expect(lifecycle.dialTrust(bindingId)).toEqual(trusted);
+    const next = restart(lifecycle).lifecycle;
+    expect(next.dialTrust(bindingId)).toMatchObject({ sshTrust: null, hostKey: null });
+    await next.ensureAccess(bindingId);
+    expect(next.dialTrust(bindingId)).toMatchObject({
+      providerId: trusted?.providerId,
+      sshTrust: trusted?.sshTrust,
+      hostKey: HOST_KEY,
+    });
+    expect(next.dialTrust("cb_nosuchbinding1")).toBeNull();
+  });
+
+  it("moves a dial's revision when the route is written again, and not when it is reused (#18258)", async () => {
+    const { lifecycle, bindingId, state } = await imported({ machine: "running" });
+    await lifecycle.ensureAccess(bindingId);
+    const first = lifecycle.dialTrust(bindingId)!.revision;
+    await lifecycle.ensureAccess(bindingId);
+    expect(lifecycle.dialTrust(bindingId)!.revision).toBe(first);
+    state.machine = resource({ machine: "stopped", rawState: "archived" });
+    await lifecycle.startMachine("build");
+    await lifecycle.ensureAccess(bindingId);
+    expect(lifecycle.dialTrust(bindingId)!.revision).toBeGreaterThan(first);
+  });
+
+  it("tells no trust for a route resolved under a trust the provider no longer declares (#18258)", async () => {
+    const { lifecycle, provider, bindingId } = await imported({ machine: "running" });
+    await lifecycle.ensureAccess(bindingId);
+    const resolvedUnder = lifecycle.dialTrust(bindingId)?.sshTrust;
+    expect(resolvedUnder).not.toBeNull();
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => {
+      const info = declared(platform);
+      return {
+        ...info,
+        capabilities: {
+          ...info.capabilities,
+          sshTrust: resolvedUnder === "api-or-confirm" ? "pinned-from-api" : "api-or-confirm",
+        },
+      };
+    };
+    expect(lifecycle.dialTrust(bindingId)).toMatchObject({ sshTrust: null, hostKey: null });
+  });
+
   it("reuses fresh access and resolves it again after a start", async () => {
     const { lifecycle, provider, bindingId, state } = await imported({ machine: "running" });
     await lifecycle.ensureAccess(bindingId);
@@ -1134,6 +1187,29 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     await env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
     return env.lifecycle.ensureAccess(env.bindingId);
   }
+
+  it("records the person as vouching for the key they trusted, and never restamps it under another trust (#18258)", async () => {
+    const env = await confirming();
+    await trusted(env);
+    const { lifecycle, provider, bindingId, store, restart } = env;
+    expect(store.binding(bindingId)?.trustedHostKey?.origin).toBe("person");
+    expect(store.binding(bindingId)?.access?.sshTrust).toBe("confirm-on-first-connect");
+    expect(lifecycle.dialTrust(bindingId)).toMatchObject({
+      sshTrust: "confirm-on-first-connect",
+      hostKey: HOST_KEY,
+      pinOrigin: "person",
+    });
+    const asked = vi.mocked(provider.authorizeSsh).mock.calls.length;
+    // The provider now says it pins from its API: the person's key isn't reused as the API's.
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => {
+      const info = declared(platform);
+      return { ...info, capabilities: { ...info.capabilities, sshTrust: "pinned-from-api" } };
+    };
+    const next = restart(lifecycle).lifecycle;
+    await next.ensureAccess(bindingId).catch(() => {});
+    expect(vi.mocked(provider.authorizeSsh).mock.calls.length).toBeGreaterThan(asked);
+  });
 
   it("asks before trusting the first key, then pins exactly the key the person trusted", async () => {
     const env = await confirming();

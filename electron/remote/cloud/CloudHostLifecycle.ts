@@ -73,6 +73,7 @@ import type {
   CloudSshResolvedTunnel,
   CloudSshRoute,
 } from "./CloudSshFiles.js";
+import type { CloudDialSample } from "./cloudTransport.js";
 import {
   formatSshEndpoint,
   hostKeyFingerprint,
@@ -750,6 +751,13 @@ export class CloudHostLifecycle {
   private readonly accessInFlight = new Map<string, Promise<CloudSshRoute>>();
   /** The route last written for each machine this run, so only a changed one retires its master. */
   private readonly writtenRoutes = new Map<string, string>();
+  /**
+   * The provider's declared trust each written route was resolved under, and
+   * a count of every rewrite (#18258): what a dial's pin rested on is only
+   * told while neither moved during it.
+   */
+  private readonly routeTrust = new Map<string, CloudSshTrust>();
+  private readonly routeRevisions = new Map<string, number>();
   /**
    * The account key each machine Daintree created is known to hold, this run:
    * the one its create sent, or one put on it since. A machine holding another
@@ -4221,6 +4229,8 @@ export class CloudHostLifecycle {
       (!confirmed || access.hostKey === binding.trustedHostKey?.key) &&
       // Access resolved under another trust (a provider that changed what it vouches with) is asked for again.
       (access.hostKey === null) === (policy.trust === "provider-tunnel") &&
+      // Nor is a key pinned under a trust the provider no longer declares.
+      (access.sshTrust ?? this.routeTrust.get(bindingId) ?? policy.trust) === policy.trust &&
       (await this.deps.files.exists(bindingId))
     ) {
       const record: CloudSshAccessRecord = {
@@ -4237,7 +4247,7 @@ export class CloudHostLifecycle {
         (written === undefined &&
           (await this.deps.files.isCurrent(bindingId, binding.accountId, record)))
       ) {
-        this.writtenRoutes.set(bindingId, generation);
+        this.noteRoute(bindingId, generation, access.sshTrust ?? policy.trust);
         this.clearAccessErrors(bindingId);
         return this.deps.files.route(bindingId);
       }
@@ -4280,9 +4290,9 @@ export class CloudHostLifecycle {
       await this.deps.files.closeMaster(this.deps.clientDir, bindingId);
     }
     // A write cut short leaves nothing here vouching for whatever reached the disk.
-    this.writtenRoutes.delete(bindingId);
+    this.noteRoute(bindingId, null, null);
     const route = await this.deps.files.write(bindingId, binding.accountId, record);
-    this.writtenRoutes.set(bindingId, generation);
+    this.noteRoute(bindingId, generation, policy.trust);
     this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
       access: {
@@ -4291,6 +4301,7 @@ export class CloudHostLifecycle {
         port: record.endpoint.port,
         hostKey: record.hostKey,
         obtainedAt: this.now(),
+        sshTrust: policy.trust,
       },
     }));
     // Only once its route is written: a dial cut short before that bypasses the cached route again.
@@ -4367,7 +4378,7 @@ export class CloudHostLifecycle {
           ? current
           : {
               ...current,
-              trustedHostKey: { key: vouched, at: this.now() },
+              trustedHostKey: { key: vouched, at: this.now(), origin: "provider" },
               offeredHostKey: null,
             }
       );
@@ -4481,7 +4492,7 @@ export class CloudHostLifecycle {
       current.offeredHostKey?.key === offered.key
         ? {
             ...current,
-            trustedHostKey: { key: offered.key, at: this.now() },
+            trustedHostKey: { key: offered.key, at: this.now(), origin: "person" },
             offeredHostKey: null,
             access: null,
           }
@@ -4648,6 +4659,23 @@ export class CloudHostLifecycle {
     return provider.authorizeSsh!(credentials, binding.resourceId!, publicKey);
   }
 
+  /** Records the route now vouched for, or none while one is rewritten. */
+  private noteRoute(
+    bindingId: string,
+    generation: string | null,
+    trust: CloudSshTrust | null
+  ): void {
+    if (generation === null || trust === null) {
+      // Every rewrite begins here, so the count moves once per write, never on a reuse.
+      this.routeRevisions.set(bindingId, (this.routeRevisions.get(bindingId) ?? 0) + 1);
+      this.writtenRoutes.delete(bindingId);
+      this.routeTrust.delete(bindingId);
+    } else {
+      this.writtenRoutes.set(bindingId, generation);
+      this.routeTrust.set(bindingId, trust);
+    }
+  }
+
   /** A stable key for one resolution of access: a new one means a new transport. */
   accessGeneration(bindingId: string): string | null {
     const access = this.deps.store.binding(bindingId)?.access;
@@ -4661,6 +4689,47 @@ export class CloudHostLifecycle {
         tunnel: null,
       })
     );
+  }
+
+  /**
+   * What a dial to the machine rests on right now (#18258): the trust its
+   * route was resolved under and the key it pins. Unknown while no route
+   * written or checked this run vouches for the files (one is being
+   * rewritten, or a write was cut short, so ssh may read either key), or the
+   * provider now declares another trust than the route was resolved under.
+   * Read beside {@link accessGeneration}; never asks the provider anything.
+   */
+  dialTrust(bindingId: string): CloudDialSample | null {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding) return null;
+    const revision = this.routeRevisions.get(bindingId) ?? 0;
+    const unknown = {
+      providerId: binding.providerId,
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+      revision,
+    };
+    const resolvedUnder = this.routeTrust.get(bindingId);
+    if (resolvedUnder === undefined) return unknown;
+    let declared: CloudSshTrust | null;
+    try {
+      declared = this.deps.accounts.provider(binding.providerId).info(process.platform)
+        .capabilities.sshTrust;
+    } catch {
+      declared = null;
+    }
+    if (declared !== resolvedUnder) return unknown;
+    const hostKey = binding.access?.hostKey ?? null;
+    const trusted = binding.trustedHostKey;
+    return {
+      providerId: binding.providerId,
+      sshTrust: resolvedUnder,
+      hostKey,
+      // Who vouched for the pinned key, when it is the binding's trusted one.
+      pinOrigin: hostKey !== null && trusted?.key === hostKey ? (trusted.origin ?? null) : null,
+      revision,
+    };
   }
 
   // --- Operations and observation ----------------------------------------

@@ -5,7 +5,11 @@ import {
   type LinkTransport,
   type LinkTransportConnection,
 } from "../../client/transport.js";
-import { createCloudTransports, type CloudTransportAccess } from "../cloudTransport.js";
+import {
+  createCloudTransports,
+  type CloudDialSample,
+  type CloudTransportAccess,
+} from "../cloudTransport.js";
 import type { CloudSshRoute } from "../CloudSshFiles.js";
 
 const ROUTE: CloudSshRoute = {
@@ -16,10 +20,18 @@ const ROUTE: CloudSshRoute = {
 
 function harness(open: LinkTransport["open"]) {
   let generation = "203.0.113.10:22:ssh-ed25519 AAAA";
+  let trust: CloudDialSample | null = {
+    providerId: "gce",
+    sshTrust: "pinned-from-api",
+    hostKey: "ssh-ed25519 AAAA",
+    pinOrigin: null,
+    revision: 1,
+  };
   const access: CloudTransportAccess = {
     ensureAccess: vi.fn(async () => ROUTE),
     accessGeneration: vi.fn(() => generation),
     recheckHostKey: vi.fn(async () => {}),
+    dialTrust: vi.fn(() => trust),
   };
   const ssh = vi.fn((): LinkTransport => ({ open }));
   const transports = createCloudTransports({ access: () => access, ssh });
@@ -28,10 +40,15 @@ function harness(open: LinkTransport["open"]) {
     access,
     ssh,
     ensureRunning,
-    transport: transports.transportFor("cb_abcdefgh12", ensureRunning),
+    transports,
+    transport: transports.transportFor("cb_abcdefgh12", ensureRunning, "h1"),
     forget: () => transports.forget("cb_abcdefgh12"),
+    dialledWith: (hostId = "h1") => transports.dialledWith(hostId, "cb_abcdefgh12"),
     setGeneration: (next: string) => {
       generation = next;
+    },
+    setTrust: (next: CloudDialSample | null) => {
+      trust = next;
     },
   };
 }
@@ -94,5 +111,127 @@ describe("createCloudTransports", () => {
     });
     await expect(env.transport.open(signal())).rejects.toBe(refusal);
     expect(env.access.recheckHostKey).not.toHaveBeenCalled();
+  });
+
+  it("records what a dial that opened rested on, and nothing for one that failed", async () => {
+    const env = harness(async () => {
+      throw new SshAccessError("user@203.0.113.10: Permission denied (publickey).");
+    });
+    await expect(env.transport.open(signal())).rejects.toThrow();
+    expect(env.dialledWith()).toBeUndefined();
+
+    const ok = harness(async () => ({}) as LinkTransportConnection);
+    await ok.transport.open(signal());
+    expect(ok.dialledWith()).toEqual({
+      providerId: "gce",
+      sshTrust: "pinned-from-api",
+      hostKey: "ssh-ed25519 AAAA",
+      pinOrigin: null,
+    });
+    ok.forget();
+    expect(ok.dialledWith()).toBeUndefined();
+  });
+
+  it("leaves the trust unknown when the route was rewritten while ssh opened", async () => {
+    const env: ReturnType<typeof harness> = harness(async () => {
+      // A setup probe resolved access again meanwhile, onto another key.
+      env.setGeneration("203.0.113.10:22:ssh-ed25519 BBBB");
+      env.setTrust({
+        providerId: "gce",
+        sshTrust: "pinned-from-api",
+        hostKey: "ssh-ed25519 BBBB",
+        pinOrigin: null,
+        revision: 2,
+      });
+      return {} as LinkTransportConnection;
+    });
+    await env.transport.open(signal());
+    expect(env.dialledWith()).toEqual({
+      providerId: "gce",
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+    });
+  });
+
+  it("takes the trust the route had once access resolved, unknown as it was before (#18258)", async () => {
+    // A first dial after a restart: nothing vouched for the files until access resolved them.
+    const env = harness(async () => ({}) as LinkTransportConnection);
+    env.setTrust({
+      providerId: "gce",
+      sshTrust: null,
+      hostKey: null,
+      pinOrigin: null,
+      revision: 0,
+    });
+    vi.mocked(env.access.ensureAccess).mockImplementationOnce(async () => {
+      env.setTrust({
+        providerId: "gce",
+        sshTrust: "pinned-from-api",
+        hostKey: "ssh-ed25519 AAAA",
+        pinOrigin: null,
+        revision: 2,
+      });
+      return ROUTE;
+    });
+    await env.transport.open(signal());
+    expect(env.dialledWith()).toEqual({
+      providerId: "gce",
+      sshTrust: "pinned-from-api",
+      hostKey: "ssh-ed25519 AAAA",
+      pinOrigin: null,
+    });
+  });
+
+  it("leaves the trust unknown when the route was rewritten and back while ssh opened", async () => {
+    const env: ReturnType<typeof harness> = harness(async () => {
+      // Rewritten to another key and back: the same key and generation, a later revision.
+      env.setTrust({
+        providerId: "gce",
+        sshTrust: "pinned-from-api",
+        hostKey: "ssh-ed25519 AAAA",
+        pinOrigin: null,
+        revision: 5,
+      });
+      return {} as LinkTransportConnection;
+    });
+    await env.transport.open(signal());
+    expect(env.dialledWith()?.sshTrust).toBeNull();
+  });
+
+  it("keeps each host's dial apart, even two hosts naming one machine", async () => {
+    const env = harness(async () => ({}) as LinkTransportConnection);
+    await env.transport.open(signal());
+    env.setGeneration("203.0.113.10:22:ssh-ed25519 BBBB");
+    env.setTrust({
+      providerId: "gce",
+      sshTrust: "pinned-from-api",
+      hostKey: "ssh-ed25519 BBBB",
+      pinOrigin: null,
+      revision: 2,
+    });
+    await env.transports.transportFor("cb_abcdefgh12", undefined, "h2").open(signal());
+    expect(env.dialledWith("h1")?.hostKey).toBe("ssh-ed25519 AAAA");
+    expect(env.dialledWith("h2")?.hostKey).toBe("ssh-ed25519 BBBB");
+    // A host re-pointed at another machine has no dial on record for it.
+    expect(env.transports.dialledWith("h1", "cb_otherbinding9")).toBeUndefined();
+    env.forget();
+    expect(env.dialledWith("h1")).toBeUndefined();
+    expect(env.dialledWith("h2")).toBeUndefined();
+  });
+
+  it("leaves the trust unknown when the provider's trust changed mid-dial on the same route", async () => {
+    const env: ReturnType<typeof harness> = harness(async () => {
+      env.setTrust({
+        providerId: "gce",
+        sshTrust: "provider-tunnel",
+        hostKey: null,
+        pinOrigin: null,
+        revision: 1,
+      });
+      return {} as LinkTransportConnection;
+    });
+    await env.transport.open(signal());
+    expect(env.dialledWith()?.sshTrust).toBeNull();
   });
 });

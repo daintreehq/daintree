@@ -7,6 +7,7 @@ import {
 } from "./hostSettings.js";
 import { HostThrowawayCallSchema } from "./hostThrowaway.js";
 import { HostBringBackAnswerSchema } from "./hostWake.js";
+import { SshHostKeyGapSchema, SshListenerGapSchema } from "./hostSshHostKeys.js";
 import { TerminalStatusEntrySchema, TerminalStatusResultSchema } from "./terminalStatusSchemas.js";
 
 /**
@@ -90,6 +91,14 @@ export const HOST_STATUS_TOOL = "host.status";
  */
 export const HOST_START_AGENT_SIGN_IN_TOOL = "host.startAgentSignIn";
 
+/**
+ * Reads one connected host's SSH host public keys over the link (#18258), as
+ * the Host sees them on its machine, never by scanning the network. Each
+ * answer names the trust the link's own ssh connection rests on, since the
+ * reading is worth no more than that, and marks the key Daintree pins for it.
+ */
+export const HOST_SSH_HOST_KEYS_TOOL = "host.sshHostKeys";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
@@ -99,6 +108,7 @@ export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_BRING_BACK_TOOL,
   HOST_STATUS_TOOL,
   HOST_START_AGENT_SIGN_IN_TOOL,
+  HOST_SSH_HOST_KEYS_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -840,6 +850,99 @@ export type HostStartAgentSignInArgs = z.infer<typeof HostStartAgentSignInArgsSc
 export const HostStartAgentSignInResultSchema = z.object({ ...outcomeFields });
 export type HostStartAgentSignInResult = z.infer<typeof HostStartAgentSignInResultSchema>;
 
+export const HostSshHostKeysArgsSchema = z.object({ hostId: hostIdSchema });
+export type HostSshHostKeysArgs = z.infer<typeof HostSshHostKeysArgsSchema>;
+
+/**
+ * What the link's own ssh connection to the host rests on (#18188): the
+ * person's ssh config and known_hosts for a host added by hand, a pin
+ * Daintree keeps for a cloud machine (the provider's key, the one the person
+ * confirmed, or either where the provider may give one), the provider's
+ * tunnel, or `wsl.exe` on this machine. `unknown` when it can't be told.
+ */
+export const HOST_SSH_TRUST_BASES = [
+  "own-ssh-config",
+  "provider-pin",
+  "person-confirmed-pin",
+  "provider-or-person-pin",
+  "provider-tunnel",
+  "local-wsl",
+  "unknown",
+] as const;
+export type HostSshTrustBasis = (typeof HOST_SSH_TRUST_BASES)[number];
+
+export const HostSshTrustSchema = z.object({
+  basis: z.enum(HOST_SSH_TRUST_BASES),
+  /** The cloud provider's id; null for a host added by hand or a WSL distro. */
+  providerId: z.string().nullable(),
+  /** `SHA256:…`, the key Daintree pins for the link; null when it pins none. */
+  pinnedFingerprint: z.string().nullable(),
+});
+export type HostSshTrust = z.infer<typeof HostSshTrustSchema>;
+
+export const HostSshHostKeySchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("read"),
+    type: z.string(),
+    /** `type base64`, as a known_hosts line takes it. */
+    publicKey: z.string(),
+    /** `SHA256:…`, as `ssh-keygen -lf` prints it. */
+    fingerprint: z.string(),
+    /** Null when Daintree pins no key for the link. */
+    matchesPin: z.boolean().nullable(),
+  }),
+  z.object({
+    outcome: SshHostKeyGapSchema,
+    publicKeyPath: z.string(),
+  }),
+]);
+export type HostSshHostKey = z.infer<typeof HostSshHostKeySchema>;
+
+export const HostSshListenerSchema = z.object({
+  /** Stable across restarts; null when it can't be told apart. */
+  listenerId: z.string().nullable(),
+  complete: z.boolean(),
+  gaps: z.array(SshListenerGapSchema),
+  listenAddresses: z.array(z.string()),
+  keys: z.array(HostSshHostKeySchema),
+});
+export type HostSshListener = z.infer<typeof HostSshListenerSchema>;
+
+/**
+ * The Host's own answer, with each key it read held against Daintree's pin;
+ * any other status is the Host saying why it read none.
+ */
+/** Why the Host read no keys, in its own answer's words. */
+export const HOST_SSH_UNREAD_STATUSES = [
+  "no-sshd-visible",
+  "discovery-failed",
+  "timed-out",
+  "unsupported-platform",
+] as const;
+export const HOST_SSH_READING_STATUSES = ["reading", ...HOST_SSH_UNREAD_STATUSES] as const;
+
+export const HostSshReadingSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("reading"),
+    complete: z.boolean(),
+    /** Listeners or keys were left out, by the Host or to fit this answer. */
+    truncated: z.boolean(),
+    listeners: z.array(HostSshListenerSchema),
+  }),
+  z.object({
+    status: z.enum(HOST_SSH_UNREAD_STATUSES),
+  }),
+]);
+export type HostSshReading = z.infer<typeof HostSshReadingSchema>;
+
+/** `ok` carries the Host's reading and the link's trust; every other outcome carries neither. */
+export const HostSshHostKeysResultSchema = z.object({
+  ...outcomeFields,
+  trust: HostSshTrustSchema.nullable(),
+  reading: HostSshReadingSchema.nullable(),
+});
+export type HostSshHostKeysResult = z.infer<typeof HostSshHostKeysResultSchema>;
+
 /** Most projects one `host.status` reads, across every host. */
 export const HOST_STATUS_TARGETS_MAX = 64;
 /** Most terminals one project's read names: `terminal.getStatus`'s own bound. */
@@ -970,7 +1073,8 @@ export type HostControlToolResult =
   | HostWatchResult
   | HostBringBackResult
   | HostStatusResult
-  | HostStartAgentSignInResult;
+  | HostStartAgentSignInResult
+  | HostSshHostKeysResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

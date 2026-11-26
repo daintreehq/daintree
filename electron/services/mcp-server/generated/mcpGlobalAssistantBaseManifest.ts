@@ -1278,6 +1278,244 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
+      "A connected host's SSH host public keys by sshd listener, read there over its link, never by scanning. Says what that link's trust rests on and marks the key Daintree pins.",
+    enabled: true,
+    id: "host.sshHostKeys",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hostId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description: "A host id from the host list.",
+        },
+      },
+      required: ["hostId"],
+    },
+    keywords: ["host", "ssh", "host key", "fingerprint", "known_hosts", "pin"],
+    kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.sshHostKeys",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: [
+            "ok",
+            "ambiguous",
+            "opted_out",
+            "disconnected",
+            "unsupported",
+            "policy_rejected",
+            "expired",
+            "not_found",
+            "rate_limited",
+            "too_large",
+            "conflict",
+            "confirmation_timeout",
+          ],
+        },
+        detail: {
+          type: ["string", "null"],
+        },
+        retryAfterMs: {
+          type: ["number", "null"],
+        },
+        trust: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                basis: {
+                  type: "string",
+                  enum: [
+                    "own-ssh-config",
+                    "provider-pin",
+                    "person-confirmed-pin",
+                    "provider-or-person-pin",
+                    "provider-tunnel",
+                    "local-wsl",
+                    "unknown",
+                  ],
+                },
+                providerId: {
+                  type: ["string", "null"],
+                },
+                pinnedFingerprint: {
+                  type: ["string", "null"],
+                },
+              },
+              required: ["basis", "providerId", "pinnedFingerprint"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+        reading: {
+          anyOf: [
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    status: {
+                      type: "string",
+                      const: "reading",
+                    },
+                    complete: {
+                      type: "boolean",
+                    },
+                    truncated: {
+                      type: "boolean",
+                    },
+                    listeners: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          listenerId: {
+                            type: ["string", "null"],
+                          },
+                          complete: {
+                            type: "boolean",
+                          },
+                          gaps: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              enum: [
+                                "command-line-unreadable",
+                                "other-namespace",
+                                "namespace-unknown",
+                                "untrusted-binary",
+                                "relative-path",
+                                "config-unreadable",
+                                "config-dump-unavailable",
+                                "config-dump-failed",
+                                "timed-out",
+                                "exited",
+                                "truncated",
+                              ],
+                            },
+                          },
+                          listenAddresses: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          keys: {
+                            type: "array",
+                            items: {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    outcome: {
+                                      type: "string",
+                                      const: "read",
+                                    },
+                                    type: {
+                                      type: "string",
+                                    },
+                                    publicKey: {
+                                      type: "string",
+                                    },
+                                    fingerprint: {
+                                      type: "string",
+                                    },
+                                    matchesPin: {
+                                      type: ["boolean", "null"],
+                                    },
+                                  },
+                                  required: [
+                                    "outcome",
+                                    "type",
+                                    "publicKey",
+                                    "fingerprint",
+                                    "matchesPin",
+                                  ],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    outcome: {
+                                      type: "string",
+                                      enum: [
+                                        "missing",
+                                        "permission-denied",
+                                        "not-a-public-file",
+                                        "invalid",
+                                        "relative-path",
+                                        "unreadable",
+                                      ],
+                                    },
+                                    publicKeyPath: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["outcome", "publicKeyPath"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          },
+                        },
+                        required: ["listenerId", "complete", "gaps", "listenAddresses", "keys"],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ["status", "complete", "truncated", "listeners"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    status: {
+                      type: "string",
+                      enum: [
+                        "no-sshd-visible",
+                        "discovery-failed",
+                        "timed-out",
+                        "unsupported-platform",
+                      ],
+                    },
+                  },
+                  required: ["status"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["outcome", "detail", "retryAfterMs", "trust", "reading"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Read a host's SSH host keys",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
       "Open a host agent CLI's sign-in in a terminal in the window showing you. Only the person can type in, read or finish it. ok means it opened, not that it worked.",
     enabled: true,
     id: "host.startAgentSignIn",

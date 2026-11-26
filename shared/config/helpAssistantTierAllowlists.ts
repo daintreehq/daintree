@@ -230,6 +230,9 @@ export const CORE_TIER_TOOLS = [
   // An agent CLI's own sign-in on a host, opened in the window showing the
   // assistant for the person to finish (#18197): it types and reads nothing there.
   "host.startAgentSignIn",
+  // A connected host's SSH host public keys, read on the host over the link
+  // with the trust that link rests on (#18258): a read.
+  "host.sshHostKeys",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -394,6 +397,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.bringBack",
   "host.status",
   "host.startAgentSignIn",
+  "host.sshHostKeys",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
   // A project's own links are the assistant's to keep (#17091).

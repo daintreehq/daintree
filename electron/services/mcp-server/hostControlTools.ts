@@ -10,6 +10,7 @@ import {
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_SSH_HOST_KEYS_TOOL,
   HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
@@ -18,6 +19,7 @@ import {
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
+  HostSshHostKeysArgsSchema,
   HostStartAgentSignInArgsSchema,
   HostStatusArgsSchema,
   HostWatchArgsSchema,
@@ -34,6 +36,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostSshHostKeysArgs,
+  type HostSshHostKeysResult,
   type HostStartAgentSignInArgs,
   type HostStartAgentSignInResult,
   type HostStatusArgs,
@@ -97,6 +101,12 @@ export interface HostControlRuntimeHandle {
     args: HostStartAgentSignInArgs,
     signal?: AbortSignal
   ): Promise<HostControlOutcome<HostStartAgentSignInResult>>;
+  /** A connected host's SSH host public keys, read there over the link (#18258); never dials. */
+  sshHostKeys(
+    helpSessionId: string,
+    args: HostSshHostKeysArgs,
+    signal?: AbortSignal
+  ): Promise<HostControlOutcome<HostSshHostKeysResult>>;
   /** `terminal.getStatus` in many projects on many hosts, in one answer (#16191). */
   status(
     helpSessionId: string,
@@ -393,6 +403,12 @@ async function dispatch(
       return parsed.success
         ? runtime.startAgentSignIn(helpSessionId, parsed.data, context?.signal)
         : invalidArgs();
+    }
+    case HOST_SSH_HOST_KEYS_TOOL: {
+      const parsed = HostSshHostKeysArgsSchema.safeParse(raw);
+      return parsed.success
+        ? runtime.sshHostKeys(helpSessionId, parsed.data, context?.signal)
+        : parseRefusal(HostSshHostKeysArgsSchema, raw, parsed.error);
     }
     case HOST_STATUS_TOOL: {
       // Each project is read at the tier the call was admitted at here, as `host.call` is.

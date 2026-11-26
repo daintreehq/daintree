@@ -42,6 +42,8 @@ import {
   HOST_SETTINGS_TOOL,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostSshHostKeysArgs,
+  type HostSshHostKeysResult,
   type HostStartAgentSignInArgs,
   type HostStartAgentSignInResult,
   type HostStatusArgs,
@@ -70,6 +72,8 @@ import type { AssistantPluginNotifications } from "../../services/assistantPlugi
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
 import { runHostAgentSignIn } from "./hostAgentSignIn.js";
+import { runHostSshHostKeys } from "./hostSshHostKeys.js";
+import type { HostSshHostKeysService } from "../client/HostSshHostKeysService.js";
 import type { SignInOfferAnswer } from "../canopy/client.js";
 import { runHostStatus } from "./hostStatus.js";
 import { STATUS_READ_TOOL } from "./projectStatusRead.js";
@@ -334,6 +338,11 @@ export interface HostCallRuntimeDeps {
     agentId: string;
     signal?: AbortSignal;
   }): Promise<SignInOfferAnswer>;
+  /**
+   * The Shell's reader of a connected host's SSH host keys (#18258), the one
+   * Settings → Hosts reads through; null or absent, `host.sshHostKeys` is unsupported.
+   */
+  sshHostKeys?(): Pick<HostSshHostKeysService, "read"> | null;
   /**
    * Puts a host's question about one of this Shell's relayed calls to the
    * person, in the window of the assistant that made it (#13501), showing the
@@ -2765,6 +2774,34 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         },
         args,
         withdrawn
+      );
+    });
+  }
+
+  /**
+   * A connected host's SSH host public keys, read there over the link with the
+   * trust that link rests on (#18258). A read: a standby assistant may make it too.
+   */
+  sshHostKeys(
+    helpSessionId: string,
+    args: HostSshHostKeysArgs,
+    signal?: AbortSignal
+  ): Promise<HostControlOutcome<HostSshHostKeysResult>> {
+    return this.settle(helpSessionId, async () => {
+      const reader = this.deps.sshHostKeys?.() ?? null;
+      return runHostSshHostKeys(
+        {
+          hostIds: () => this.deps.hosts().map((host) => host.hostId),
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          versionMismatch: (hostId) =>
+            this.deps.hosts().find((host) => host.hostId === hostId)?.connection.status ===
+            "version-mismatch",
+          ...(reader
+            ? { read: (hostId: HostId, abort?: AbortSignal) => reader.read(hostId, abort) }
+            : {}),
+        },
+        args,
+        signal
       );
     });
   }

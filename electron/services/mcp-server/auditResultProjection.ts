@@ -1,6 +1,8 @@
 import {
   HOST_CONTROL_OUTCOMES,
   HOST_ENSURE_ACCEPTABLE,
+  HOST_SSH_READING_STATUSES,
+  HOST_SSH_TRUST_BASES,
   HOST_STATUS_COVERAGE,
   HOST_WATCH_DELIVERIES,
   HOST_WATCH_LOST_REASONS,
@@ -166,6 +168,8 @@ const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
 const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
 const HOST_BRING_BACK_STATUS_SET: ReadonlySet<string> = new Set(HOST_BRING_BACK_STATUSES);
 const HOST_WAKE_RESULT_SET: ReadonlySet<string> = new Set(HOST_WAKE_RESULTS);
+const HOST_SSH_TRUST_BASIS_SET: ReadonlySet<string> = new Set(HOST_SSH_TRUST_BASES);
+const HOST_SSH_READING_STATUS_SET: ReadonlySet<string> = new Set(HOST_SSH_READING_STATUSES);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
@@ -442,6 +446,34 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       return { outcome: fromSet(record.outcome, HOST_OUTCOMES) };
     },
   ],
+  [
+    "host.sshHostKeys",
+    // The outcome, the trust and counts, never a key, a fingerprint or a path (#18258).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const trust = asRecord(record.trust);
+      const reading = asRecord(record.reading);
+      const listeners = Array.isArray(reading?.listeners) ? reading.listeners : [];
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        trust: fromSet(trust?.basis, HOST_SSH_TRUST_BASIS_SET),
+        reading: fromSet(reading?.status, HOST_SSH_READING_STATUS_SET),
+        listeners: listeners.length,
+        keysRead: listeners.reduce<number>((sum, listener) => {
+          const keys = asRecord(listener)?.keys;
+          return (
+            sum +
+            (Array.isArray(keys)
+              ? keys.filter((key) => asRecord(key)?.outcome === "read").length
+              : 0)
+          );
+        }, 0),
+        complete: reading?.complete === true,
+        truncated: reading?.truncated === true,
+      };
+    },
+  ],
   // Never a screen, a handback or a check's words (#16191): outcomes and counts.
   ["host.status", projectHostStatus],
   ["plugin.capturePanel", projectPanelCapture],
@@ -500,6 +532,7 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
     },
   ],
   ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  ["host.sshHostKeys", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
     "host.startAgentSignIn",
     // The host when it is id-shaped, and the agent only by an id the registry
