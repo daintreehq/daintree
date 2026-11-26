@@ -1008,6 +1008,69 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
       terminal.dispose();
     });
 
+    it("holds a resumed row through a look that missed it after a long idle", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(redraw(HISTORY, footer(87)));
+      await vi.advanceTimersByTimeAsync(120_000);
+      // One look without it, then it is back at once.
+      ptyOnDataCallback!(redraw(footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      ptyOnDataCallback!(redraw(HISTORY, footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      ptyOnDataCallback!(redraw(HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(limits(seen)).toEqual([["weekly limit", "used"]]);
+      terminal.dispose();
+    });
+
+    it("reports another row with the resumed row's text", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(redraw(HISTORY, footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      // The limit hit again, printing what the resumed row says.
+      ptyOnDataCallback!(redraw(HISTORY, "⏺ Done.\r\n", HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(limits(seen)).toEqual([
+        ["weekly limit", "used"],
+        ["weekly limit", "reached"],
+      ]);
+      terminal.dispose();
+    });
+
+    it("holds nothing from the resumed run once Claude runs again in the pane", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      (
+        terminal as unknown as { terminalInfo: { agentIncarnation: number } }
+      ).terminalInfo.agentIncarnation = 1;
+      ptyOnDataCallback!(redraw(footer(87)));
+      await vi.advanceTimersByTimeAsync(250);
+      ptyOnDataCallback!(redraw(HISTORY));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(limits(seen)).toEqual([
+        ["weekly limit", "used"],
+        ["weekly limit", "reached"],
+      ]);
+      terminal.dispose();
+    });
+
     it("lets a resumed row go once it was off screen past the cooldown", async () => {
       const seen = collect();
       const terminal = restoredClaude();
