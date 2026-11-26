@@ -2088,10 +2088,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // another one as that host's registry says, which only it can (#18255).
       // On this machine it also reaches the project's plugin agent tools
       // through their own two operations (#18254), which the local relay
-      // answers.
+      // answers; their names fit a plugin action's shape, so another host
+      // never receives them as one.
       const pluginAction =
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
+        !isGlobalPluginToolOperation(args.tool) &&
         (local ? isPluginAssistantReachAction(args.tool) : mayNameHostPluginAction(args.tool));
       if (
         isGlobalAssistantId(caller.projectId) &&
