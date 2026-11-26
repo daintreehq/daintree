@@ -895,25 +895,6 @@ describe("CloudHostLifecycle access", () => {
     expect(lifecycle.dialTrust(bindingId)!.revision).toBeGreaterThan(first);
   });
 
-  it("keeps the trust access was resolved under, and asks again after a restart once it changed (#18258)", async () => {
-    const { lifecycle, provider, bindingId, restart, store } = await imported({ machine: "running" });
-    await lifecycle.ensureAccess(bindingId);
-    const resolvedUnder = store.binding(bindingId)?.access?.sshTrust;
-    expect(resolvedUnder).toBe(provider.info(process.platform).capabilities.sshTrust);
-    const declared = provider.info.bind(provider);
-    provider.info = (platform) => {
-      const info = declared(platform);
-      return {
-        ...info,
-        capabilities: { ...info.capabilities, sshTrust: "confirm-on-first-connect" },
-      };
-    };
-    // Within the access TTL and with the same files: a key chosen under the old trust isn't reused.
-    const next = restart(lifecycle).lifecycle;
-    await next.ensureAccess(bindingId).catch(() => {});
-    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
-  });
-
   it("tells no trust for a route resolved under a trust the provider no longer declares (#18258)", async () => {
     const { lifecycle, provider, bindingId } = await imported({ machine: "running" });
     await lifecycle.ensureAccess(bindingId);
@@ -1206,6 +1187,29 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     await env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
     return env.lifecycle.ensureAccess(env.bindingId);
   }
+
+  it("records the person as vouching for the key they trusted, and never restamps it under another trust (#18258)", async () => {
+    const env = await confirming();
+    await trusted(env);
+    const { lifecycle, provider, bindingId, store, restart } = env;
+    expect(store.binding(bindingId)?.trustedHostKey?.origin).toBe("person");
+    expect(store.binding(bindingId)?.access?.sshTrust).toBe("confirm-on-first-connect");
+    expect(lifecycle.dialTrust(bindingId)).toMatchObject({
+      sshTrust: "confirm-on-first-connect",
+      hostKey: HOST_KEY,
+      pinOrigin: "person",
+    });
+    const asked = vi.mocked(provider.authorizeSsh).mock.calls.length;
+    // The provider now says it pins from its API: the person's key isn't reused as the API's.
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => {
+      const info = declared(platform);
+      return { ...info, capabilities: { ...info.capabilities, sshTrust: "pinned-from-api" } };
+    };
+    const next = restart(lifecycle).lifecycle;
+    await next.ensureAccess(bindingId).catch(() => {});
+    expect(vi.mocked(provider.authorizeSsh).mock.calls.length).toBeGreaterThan(asked);
+  });
 
   it("asks before trusting the first key, then pins exactly the key the person trusted", async () => {
     const env = await confirming();
