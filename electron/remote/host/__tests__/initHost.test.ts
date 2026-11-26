@@ -30,7 +30,7 @@ import { ControlKind } from "../../link/messages.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext } from "../HostServer.js";
 import { ASSISTANT_SWEEP_MS, initRemoteHostsHost } from "../initHost.js";
-import { LinkMethod } from "../linkMethods.js";
+import { LinkMethod, SshHostKeysAnswerSchema } from "../linkMethods.js";
 import { events } from "../../../services/events.js";
 import {
   publishHelpSessionService,
@@ -555,5 +555,26 @@ describe("initRemoteHostsHost inventory reads (#15907)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(pty.inventoryReads).toBe(1);
     expect(agentAnswers(link)).toHaveLength(1);
+  });
+});
+
+describe("initRemoteHostsHost SSH host keys (#18257)", () => {
+  it("answers host.ssh-host-keys on every Shell's link with this machine's reader", async () => {
+    start();
+    const handlers = new Map<string, (payload: unknown) => unknown>();
+    const link = {
+      ...fakeLink(),
+      registerCallHandler: (method: string, _schema: unknown, handler: (p: unknown) => unknown) => {
+        handlers.set(method, handler);
+        return () => handlers.delete(method);
+      },
+    };
+    server.attach(link as unknown as ReturnType<typeof fakeLink>);
+    const handler = handlers.get("host.ssh-host-keys");
+    expect(handler).toBeDefined();
+    const answer = SshHostKeysAnswerSchema.parse(await handler!(null));
+    if (process.platform !== "linux") {
+      expect(answer).toEqual({ status: "unsupported-platform", platform: process.platform });
+    }
   });
 });
