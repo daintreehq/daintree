@@ -604,7 +604,33 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       };
     },
   ],
+  [
+    // A plugin's agent tool through the global Assistant's `host.call`
+    // (#18254): which tool and the names of its arguments, as a pane's call
+    // on the plugin's own server is seen, never their values.
+    "plugin.callTool",
+    (args) => {
+      const record = asRecord(args);
+      const toolArgs = asRecord(record?.arguments);
+      return {
+        pluginInstanceId:
+          typeof record?.pluginInstanceId === "string" &&
+          PLUGIN_INSTANCE_ID_PATTERN.test(record.pluginInstanceId)
+            ? record.pluginInstanceId
+            : null,
+        tool:
+          typeof record?.tool === "string" && AGENT_MCP_TOOL_NAME_PATTERN.test(record.tool)
+            ? record.tool
+            : null,
+        argumentNames: toolArgs === null ? null : Object.keys(toolArgs).join(", "),
+      };
+    },
+  ],
 ]);
+
+/** A plugin instance key as the host mints them: a manifest id, maybe behind a project's prefix. */
+const PLUGIN_INSTANCE_ID_PATTERN = /^[\w.:@/-]{1,256}$/;
+const AGENT_MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /** A tool id as the manifest spells them: never a few words of a message. */
 const RELAYED_TOOL_ID_PATTERN = /^[a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+){1,4}$/;

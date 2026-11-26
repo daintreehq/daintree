@@ -92,6 +92,13 @@ void ([true, true, true] satisfies [
  * bearer) cannot ride along into plugin code.
  */
 function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
+  if (caller.consumer === "global-assistant") {
+    return {
+      credentialId: caller.credentialId,
+      projectId: caller.projectId,
+      consumer: caller.consumer,
+    };
+  }
   return {
     credentialId: caller.credentialId,
     projectId: caller.projectId,

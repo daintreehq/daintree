@@ -237,6 +237,20 @@ export function globalAssistantMayRelay(tool: string): boolean {
 }
 
 /**
+ * `host.call`'s own operations on a project's plugin agent tools (#18254):
+ * `plugin.tools` lists what the project's plugins offer its Assistant, and
+ * `plugin.callTool` calls one. Only this machine's global Assistant has them,
+ * only for `hostId: "local"`, and only while it coordinates; they are no
+ * Daintree tool, so no host and no other session can be sent one.
+ */
+export const GLOBAL_PLUGIN_TOOLS_LIST = "plugin.tools";
+export const GLOBAL_PLUGIN_TOOL_CALL = "plugin.callTool";
+
+export function isGlobalPluginToolOperation(tool: string): boolean {
+  return tool === GLOBAL_PLUGIN_TOOLS_LIST || tool === GLOBAL_PLUGIN_TOOL_CALL;
+}
+
+/**
  * What a global assistant session that isn't coordinating may still run
  * through `host.call` (#18143): reads that start, address, type to and wait
  * on nothing, so it can see the work another session now leads without

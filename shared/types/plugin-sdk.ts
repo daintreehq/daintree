@@ -232,6 +232,8 @@ export type {
   PluginMcpToolDefinition,
   PluginMcpToolAnnotations,
   PluginMcpCaller,
+  PluginMcpGlobalAssistantCaller,
+  PluginMcpLaunchCaller,
   PluginMcpJsonSchema,
 } from "./plugin.js";
 

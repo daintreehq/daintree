@@ -751,11 +751,7 @@ export class McpServerService {
       createPluginMcpRoute({
         isPluginLoaded: async (pluginInstanceId) =>
           (await loadPluginService()).hasPlugin(pluginInstanceId),
-        activatePlugin: async (pluginInstanceId) => {
-          const pluginService = await loadPluginService();
-          await pluginService.activatePlugin(pluginInstanceId);
-          await ensureContributedServerEndpoint(pluginService, pluginInstanceId);
-        },
+        activatePlugin: (pluginInstanceId) => this.activateAgentMcpPlugin(pluginInstanceId),
         observeToolCall: (grant, toolName, argNames) =>
           observeAssistantPluginToolCall(
             {
@@ -1864,6 +1860,17 @@ export class McpServerService {
     phase: McpDispatchHoldPhase
   ): McpDispatchHoldResult {
     return this.bridge.holdDispatch(webContentsId, requestId, phase);
+  }
+
+  /**
+   * Starts a plugin and its contributed MCP server endpoint for a list or call
+   * of its agent tools, the same way for a pane's session on the plugin route
+   * and for the global Assistant's `host.call` (#18254). Idempotent.
+   */
+  async activateAgentMcpPlugin(pluginInstanceId: string): Promise<void> {
+    const pluginService = await loadPluginService();
+    await pluginService.activatePlugin(pluginInstanceId);
+    await ensureContributedServerEndpoint(pluginService, pluginInstanceId);
   }
 
   /**

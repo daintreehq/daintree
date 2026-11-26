@@ -466,10 +466,11 @@ export function isAssistantAgentMcpScopeAllowed(
 /**
  * Whether a grant's scope is still allowed: by the project's access, and for
  * an Assistant grant by the Assistant's answer as well, so lowering either one
- * revokes it.
+ * revokes it. The global Assistant reaches a project under that same answer
+ * (#18254).
  */
 export function isPluginMcpGrantAllowed(grant: PluginMcpGrant): boolean {
-  return grant.consumer === "assistant"
+  return grant.consumer === "assistant" || grant.consumer === "global-assistant"
     ? isAssistantAgentMcpScopeAllowed(grant.projectId, grant.pluginInstanceId, grant.scope)
     : isAgentMcpScopeAllowed(grant.projectId, grant.pluginInstanceId, grant.scope);
 }

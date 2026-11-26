@@ -6,6 +6,7 @@ import {
   globalStandbyMayRelay,
   isGlobalAssistantId,
   isGlobalAssistantSlot,
+  isGlobalPluginToolOperation,
 } from "../../../shared/config/globalAssistant.js";
 import {
   ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
@@ -2085,14 +2086,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // reaches the plugin actions that opted into `assistantReach`: on this
       // machine as live as the project's own gate reads them (#18153), and on
       // another one as that host's registry says, which only it can (#18255).
+      // On this machine it also reaches the project's plugin agent tools
+      // through their own two operations (#18254), which the local relay
+      // answers; their names fit a plugin action's shape, so another host
+      // never receives them as one.
       const pluginAction =
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
+        !isGlobalPluginToolOperation(args.tool) &&
         (local ? isPluginAssistantReachAction(args.tool) : mayNameHostPluginAction(args.tool));
       if (
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
-        !pluginAction
+        !pluginAction &&
+        !(local && isGlobalPluginToolOperation(args.tool))
       ) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }

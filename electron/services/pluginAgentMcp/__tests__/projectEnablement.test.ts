@@ -943,6 +943,27 @@ describe("projectEnablement", () => {
       expect(isPluginMcpGrantAllowed(terminal)).toBe(true);
     });
 
+    it("holds the global Assistant's grant to the project Assistant's answer (#18254)", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      const global = (scope: AgentMcpToolScope) =>
+        pluginMcpGrantRegistry.issueForGlobalAssistant({
+          pluginInstanceId: LEDGER,
+          scope,
+          serverName: "daintree-ledger",
+          projectId: PROJECT_A,
+          helpSessionId: "help-g",
+        });
+      const reads = global({ databases: true });
+      const both = global(BOTH);
+
+      expect(isPluginMcpGrantAllowed(reads)).toBe(true);
+      expect(isPluginMcpGrantAllowed(both)).toBe(false);
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(pluginMcpGrantRegistry.isLive(reads.credentialId)).toBe(false);
+    });
+
     it("revokes the Assistant's grants it no longer covers, and leaves agents' alone", () => {
       setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
       setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
