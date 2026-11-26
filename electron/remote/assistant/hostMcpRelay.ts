@@ -52,6 +52,13 @@ export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNot
   throwawayRuns?(): HostThrowawayExecutor | null;
   /** A Shell's assistant session ended: the messages it held for workers here go (#16187). */
   endHeldSends?(senderId: string, helpSessionId: string): void;
+  /** A Shell's assistant session ended: the plugin grants it held here go, and it gets no more (#18256). */
+  endPluginGrants?(senderId: string, helpSessionId: string): void;
+  /**
+   * A Shell's link can't resume: the plugin grants its sessions held go at
+   * once (#18256), so no plugin work starts on it while its other calls drain.
+   */
+  expirePluginGrants?(linkSessionId: string): void;
   /**
    * This host's own agent directory (#14455), the one its own `host.list`
    * reads; absent, a Shell asking for it is told this host can't say.
@@ -274,6 +281,11 @@ export function installHostMcpRelay(
         } catch (error) {
           logger.warn("Couldn't drop an ended session's held messages", { error });
         }
+        try {
+          deps.endPluginGrants?.(senderId, payload.helpSessionId);
+        } catch (error) {
+          logger.warn("Couldn't drop an ended session's plugin grants", { error });
+        }
         return {};
       }
     );
@@ -382,6 +394,11 @@ export function installHostMcpRelay(
       shellGoneTimers.set(senderId, timer);
     }) ?? (() => {});
   const offExpired = server.onSessionExpired(({ sessionId }) => {
+    try {
+      deps.expirePluginGrants?.(sessionId);
+    } catch (error) {
+      logger.warn("Couldn't drop an expired link's plugin grants", { error });
+    }
     runner.expireLink(sessionId);
     const senderId = senderOfLink(sessionId);
     linkSessions.delete(sessionId);

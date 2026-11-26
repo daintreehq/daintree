@@ -12,8 +12,10 @@ import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import {
   notifyMcpDriveTargetChange,
+  onMcpDriveTargetChange,
   setMcpDriveTargetResolver,
 } from "../../services/mcp-server/driveTarget.js";
+import { relayWriteStandingNow } from "../../services/mcp-server/relayWriteRule.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
@@ -56,8 +58,12 @@ import { installDecisionsHost } from "../decisions/hostInstall.js";
 import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
+import { createHostPluginTools } from "../assistant/hostPluginTools.js";
 import { installHostPluginControlHost } from "../pluginControl/hostInstall.js";
-import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
+import {
+  getHelpAssistantSettings,
+  onHelpAssistantSettingsChanged,
+} from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
@@ -211,6 +217,37 @@ async function buildHostListener(
   // The sender each Shell proves, for the tools this host runs for its
   // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
   teardowns.push(await installAssistantSenderHost(server));
+  // A Shell's global Assistant reaching the plugin agent tools this host's
+  // projects allow their Assistant (#18256), built on its first list or call.
+  const pluginTools = createHostPluginTools({
+    mayStillChange: (projectId, linkSessionId) => {
+      const standing = relayWriteStandingNow(projectId, linkSessionId);
+      return standing.kind === "vacant" || standing.kind === "own-view";
+    },
+    createTools: async (policy) => {
+      const [{ createGlobalAssistantPluginTools }, { mcpServerService }] = await Promise.all([
+        import("../../services/pluginAgentMcp/globalAssistantTools.js"),
+        import("../../services/McpServerService.js"),
+      ]);
+      return createGlobalAssistantPluginTools({
+        activatePlugin: (pluginInstanceId) =>
+          mcpServerService.activateAgentMcpPlugin(pluginInstanceId),
+        isSessionLive: policy.isSessionLive,
+        refuseWrite: policy.refuseWrite,
+      });
+    },
+  });
+  teardowns.push(() => pluginTools.dispose());
+  // Withdrawn consent, or a project driven from elsewhere, ends what relayed
+  // grants hold, queued work included.
+  teardowns.push(
+    onHelpAssistantSettingsChanged(() => {
+      if (!getHelpAssistantSettings().acceptRemoteControl) pluginTools.consentWithdrawn();
+    })
+  );
+  teardowns.push(onMcpDriveTargetChange(() => pluginTools.driveTargetChanged()));
+  // A driving view closing on a live link reserves the lease with no holder change to say so.
+  teardowns.push(getEndpointRegistry().onChange(() => pluginTools.driveTargetChanged()));
   // This host's own tools, run for a Shell's assistant through this host's MCP gates (#13493).
   const relay = installHostMcpRelay(server, {
     senders: () => getRemoteService("assistantSenderSessions"),
@@ -224,6 +261,9 @@ async function buildHostListener(
           logger.warn("Couldn't drop an ended session's held messages", { error });
         });
     },
+    endPluginGrants: (senderId, helpSessionId) =>
+      pluginTools.endHelpSession(senderId, helpSessionId),
+    expirePluginGrants: (linkSessionId) => pluginTools.expireLink(linkSessionId),
     // Loaded on the first read: a host no Shell's assistant lists reads none.
     readAgents: async (options) => {
       const { getLocalAgentDirectory } =
@@ -238,11 +278,12 @@ async function buildHostListener(
       // A host that hasn't run an assistant of its own still lists and starts
       // its assistants for another machine's (#13496).
       await helpSessionService.ensureAssistantControl();
-      return mcpServerService.openRelaySession({
+      const session = await mcpServerService.openRelaySession({
         tier: spec.tier,
         workspaceId: spec.projectId,
         caller: relayCallerOf(spec),
       });
+      return session === null ? null : pluginTools.decorate(session, spec);
     },
     retirePrincipal: (senderId, helpSessionId, keepConversation) => {
       void import("../../services/McpServerService.js")

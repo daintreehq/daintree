@@ -21,6 +21,7 @@ import type { ViewlessApprovalDecision } from "../../services/viewless/index.js"
 import type { RelayApprovalAsk } from "./relayApprovals.js";
 import { createLogger } from "../../utils/logger.js";
 import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
+import { isGlobalPluginToolOperation } from "../../../shared/config/globalAssistant.js";
 
 const logger = createLogger("main:mcpRelayExecutor");
 
@@ -856,6 +857,11 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         projectId: payload.projectId,
         tier: payload.tier,
         args: payload.args,
+        // Answered only for a global caller (#18256): the same callId from
+        // another lane is another call, and never reads that answer.
+        ...(spec.global === true && isGlobalPluginToolOperation(payload.tool)
+          ? { global: true }
+          : {}),
       });
       const answer = await ledger.run(
         spec.senderId,

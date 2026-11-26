@@ -243,9 +243,11 @@ export function globalAssistantMayRelay(tool: string): boolean {
 /**
  * `host.call`'s own operations on a project's plugin agent tools (#18254):
  * `plugin.tools` lists what the project's plugins offer its Assistant, and
- * `plugin.callTool` calls one. Only this machine's global Assistant has them,
- * only for `hostId: "local"`, and only while it coordinates; they are no
- * Daintree tool, so no host and no other session can be sent one.
+ * `plugin.callTool` calls one. Only a global Assistant that coordinates has
+ * them: on this machine's projects, answered by its in-process relay, or on
+ * a host's, answered by that host's relay under its own consent and Agent
+ * tools answer (#18256). They are no Daintree tool, so no other session
+ * reaches them.
  */
 export const GLOBAL_PLUGIN_TOOLS_LIST = "plugin.tools";
 export const GLOBAL_PLUGIN_TOOL_CALL = "plugin.callTool";

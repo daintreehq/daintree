@@ -274,12 +274,87 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses them on another machine and from a session that isn't coordinating", async () => {
+  it("sends them to another machine as the global Assistant's, for that host to answer (#18256)", async () => {
+    relayCall.mockResolvedValue({
+      status: "done",
+      result: { isError: false, structured: { tools: [] }, text: null },
+    });
+    for (const op of [LIST, CALL]) {
+      const settled = await runtime.call(
+        "g",
+        { ...op, hostId: "studio", projectId: "host-p" },
+        { tier: "core" }
+      );
+      expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
+    }
+    expect(relayCall.mock.calls.map(([hostId, payload]) => [hostId, payload])).toEqual([
+      ["studio", expect.objectContaining({ tool: "plugin.tools", global: true })],
+      ["studio", expect.objectContaining({ tool: "plugin.callTool", global: true })],
+    ]);
+    // Neither goes as a plugin action, which the host would run as nothing else.
+    for (const [, payload] of relayCall.mock.calls)
+      expect(payload).not.toHaveProperty("pluginAction");
+    // Nothing is answered or minted here for a project on another machine.
+    expect(invoke).not.toHaveBeenCalled();
+    expect(pluginMcpGrantRegistry.listForHelpSession("g")).toEqual([]);
+  });
+
+  it("tells a host the session reached plugin tools on when that session ends", async () => {
+    const throwawayRelease = vi.fn(async () => {});
+    relayCall.mockResolvedValue({
+      status: "done",
+      result: { isError: false, structured: { tools: [] }, text: null },
+    });
+    runtime.dispose();
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => {
+        const run = runs.get(id);
+        return run ? { projectId: run.projectId, slot: run.slot } : null;
+      },
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall, throwawayRelease }) as never,
+      hosts: () => [STUDIO],
+      inLocalView: () => true,
+      controlEnabled: (hostId) => hostId === "studio",
+      local: {
+        name: () => "greg-mbp",
+        projects: async () => [{ id: PROJECT, name: "ledger", path: "/nonexistent/project" }],
+        relayCall: (payload) => local.relayCall(payload),
+        cancelCall: (helpSessionId, callId) => local.cancelCall(helpSessionId, callId),
+      },
+      now: () => 1000,
+      newId: () => `00000000-0000-4000-8000-0000000000${String(++ids).padStart(2, "0")}`,
+    });
+    // A call alone notes the host, as a list does in the two-host test.
+    await runtime.call("g", { ...CALL, hostId: "studio", projectId: "host-p" }, { tier: "core" });
+    // This machine's own projects hear it in process, so no host is told of a local one.
+    const ownList = await runtime.call("g", LIST, { tier: "core" });
+    const ownCall = await runtime.call("g", CALL, { tier: "core" });
+    expect([ownList, ownCall]).toMatchObject([
+      { ok: true, value: { outcome: "ok" } },
+      { ok: true, value: { outcome: "ok", result: { isError: false } } },
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    runtime.endHelpSession("g");
+
+    expect(throwawayRelease.mock.calls).toEqual([["studio", { helpSessionId: "g" }]]);
+  });
+
+  it("refuses them from a session that isn't coordinating", async () => {
     for (const settled of [
-      await runtime.call("g", { ...LIST, hostId: "studio", projectId: "host-p" }, { tier: "core" }),
-      await runtime.call("g", { ...CALL, hostId: "studio", projectId: "host-p" }, { tier: "core" }),
       await runtime.call("standby", LIST, { tier: "core" }),
       await runtime.call("standby", CALL, { tier: "core" }),
+      await runtime.call(
+        "standby",
+        { ...LIST, hostId: "studio", projectId: "host-p" },
+        { tier: "core" }
+      ),
+      await runtime.call(
+        "standby",
+        { ...CALL, hostId: "studio", projectId: "host-p" },
+        { tier: "core" }
+      ),
     ]) {
       expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
     }

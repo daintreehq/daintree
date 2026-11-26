@@ -1155,10 +1155,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Each host's latest read of the agents it lists, for those launches: when it started, and its end while out. */
   private readonly launchedAgentReads = new Map<HostId, { at: number; end: (() => void) | null }>();
   /**
-   * Hosts each help session asked to hold a message for a worker (#16187), so
-   * its end reaches them: a held message is never typed after it.
+   * Hosts each help session asked to hold a message for a worker (#16187), or
+   * reached a project's plugin agent tools on (#18256), so its end reaches
+   * them: a held message is never typed after it, and a plugin grant there
+   * goes with it.
    */
-  private readonly heldSendHosts = new Map<string, Set<HostId>>();
+  private readonly sessionEndHosts = new Map<string, Set<HostId>>();
   /**
    * Each global session's acting calls in flight, stopped together when
    * coordination leaves it (#18143). Made at its first such call and dropped
@@ -1957,11 +1959,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.standDowns.delete(helpSessionId);
     const session = this.throwawaySessions.get(helpSessionId);
     this.throwawaySessions.delete(helpSessionId);
-    const held = this.heldSendHosts.get(helpSessionId);
-    this.heldSendHosts.delete(helpSessionId);
+    const held = this.sessionEndHosts.get(helpSessionId);
+    this.sessionEndHosts.delete(helpSessionId);
     const client = this.deps.client();
     if ((session === undefined && held === undefined) || !client?.throwawayRelease) return;
-    // The release says the session ended; a host drops its held messages on it too.
+    // The release says the session ended; a host drops its held messages and plugin grants on it too.
     for (const hostId of new Set([...(session?.hosts ?? []), ...(held ?? [])])) {
       void client.throwawayRelease(hostId, { helpSessionId }).catch((error: unknown) => {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
@@ -2009,7 +2011,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.launchedAgents.clear();
     for (const read of this.launchedAgentReads.values()) read.end?.();
     this.launchedAgentReads.clear();
-    this.heldSendHosts.clear();
+    this.sessionEndHosts.clear();
     this.standDowns.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
@@ -2095,10 +2097,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // reaches the plugin actions that opted into `assistantReach`: on this
       // machine as live as the project's own gate reads them (#18153), and on
       // another one as that host's registry says, which only it can (#18255).
-      // On this machine it also reaches the project's plugin agent tools
-      // through their own two operations (#18254), which the local relay
-      // answers; their names fit a plugin action's shape, so another host
-      // never receives them as one.
+      // It also reaches the project's plugin agent tools through their own two
+      // operations, which the relay on the project's machine answers: this
+      // one's (#18254), or a host's under its own consent and Agent tools
+      // answer (#18256). Their names fit a plugin action's shape, so no host
+      // receives them as one.
       const pluginAction =
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
@@ -2108,7 +2111,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         isGlobalAssistantId(caller.projectId) &&
         !globalAssistantMayRelay(args.tool) &&
         !pluginAction &&
-        !(local && isGlobalPluginToolOperation(args.tool))
+        !isGlobalPluginToolOperation(args.tool)
       ) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
@@ -2161,12 +2164,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      // This machine's own projects hear the session end in process.
-      if (!local && args.tool === "terminal.sendCommandOwned" && toolArgs.whenBusy === "queue") {
-        let hosts = this.heldSendHosts.get(helpSessionId);
+      // This machine's own projects hear the session end in process. A host
+      // is noted before the send, so an answer lost on the way still leaves it told.
+      if (
+        !local &&
+        ((args.tool === "terminal.sendCommandOwned" && toolArgs.whenBusy === "queue") ||
+          isGlobalPluginToolOperation(args.tool))
+      ) {
+        let hosts = this.sessionEndHosts.get(helpSessionId);
         if (hosts === undefined) {
           hosts = new Set();
-          this.heldSendHosts.set(helpSessionId, hosts);
+          this.sessionEndHosts.set(helpSessionId, hosts);
         }
         hosts.add(args.hostId);
       }

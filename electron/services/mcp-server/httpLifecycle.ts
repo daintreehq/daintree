@@ -68,6 +68,7 @@ import {
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer } from "./sessionServer.js";
+import type { AuditOutcome } from "./auditLog.js";
 import {
   createSessionServerDeps,
   sendToPinnedView,
@@ -200,6 +201,22 @@ export interface McpRelaySessionHandle {
     options: { timeoutMs: number; callId: string; signal?: AbortSignal }
   ): Promise<CallToolResult>;
   close(): void;
+  /** Aborts once the session closes, whichever side or teardown closed it. */
+  readonly closed: AbortSignal;
+  /**
+   * Why a change in its project can't be made for its caller now, by the rule
+   * its own tools' changes meet; null when it can. For what a host answers
+   * beside the session (#18256).
+   */
+  refuseWrite(): string | null;
+  /** Records a call answered beside the session (#18256) as its own calls are recorded. */
+  recordCall(call: {
+    toolId: string;
+    args: unknown;
+    startedAt: number;
+    callId: string;
+    outcome: AuditOutcome;
+  }): void;
 }
 
 export function sessionCredentialDigest(authHeader: string): string {
@@ -2004,15 +2021,22 @@ export class HttpLifecycle {
       sessionId,
       sessionCredentialDigest(`Relay ${randomBytes(32).toString("base64url")}`)
     );
-    const server = createSessionServer(
+    const sessionDeps = this.buildSessionServerDeps(
       sessionId,
-      this.buildSessionServerDeps(sessionId, "relay", workspaceBinding, undefined, null, caller)
+      "relay",
+      workspaceBinding,
+      undefined,
+      null,
+      caller
     );
+    const server = createSessionServer(sessionId, sessionDeps);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     store.relaySessions.set(sessionId, { transport: serverTransport, server });
     // Whichever side closes first, every map written above goes with it.
+    const closed = new AbortController();
     serverTransport.onclose = () => {
       store.revokeSession(sessionId);
+      closed.abort();
     };
     const client = new Client({ name: "daintree-host-call", version: app.getVersion() });
     try {
@@ -2042,8 +2066,22 @@ export class HttpLifecycle {
       },
       close: () => {
         store.revokeSession(sessionId);
+        closed.abort();
         void client.close().catch(() => {});
       },
+      closed: closed.signal,
+      refuseWrite: () => sessionDeps.relay?.refuseWrite(undefined)?.message ?? null,
+      recordCall: ({ toolId, args, startedAt, callId, outcome }) =>
+        sessionDeps.appendAuditRecord({
+          toolId,
+          sessionId,
+          tier: spec.tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          startedAt,
+          outcome,
+          relayCallId: callId,
+        }),
     };
   }
 

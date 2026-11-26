@@ -609,7 +609,8 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     const result = await pending;
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("studio-01");
-    expect(refuseWrite).toHaveBeenCalledWith(PROJECT_A);
+    // Judged for the session that called, which on a host names its Shell's link.
+    expect(refuseWrite).toHaveBeenCalledWith(PROJECT_A, SESSION);
     expect(invoke).not.toHaveBeenCalled();
   });
 

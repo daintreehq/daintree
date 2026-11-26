@@ -485,6 +485,53 @@ describe("host.call audit projection (#13493)", () => {
     });
   });
 
+  it("keeps a plugin tool list to its plugin, page and argument names, however malformed (#18256)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "plugin.tools",
+      args: { pluginInstanceId: "acme.ledger", cursor: "12" },
+    }) as Record<string, unknown>;
+    expect(projected).toMatchObject({
+      "args.pluginInstanceId": "acme.ledger",
+      "args.cursor": "12",
+      "args.argumentNames": "pluginInstanceId, cursor",
+    });
+
+    const malformed = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "plugin.tools",
+      args: { cursor: "VALUE-SENTINEL", customer: "OTHER-SENTINEL" },
+    }) as Record<string, unknown>;
+    expect(malformed).toMatchObject({
+      "args.cursor": null,
+      "args.argumentNames": "cursor, customer",
+    });
+    expect(JSON.stringify(malformed)).not.toContain("SENTINEL");
+    // Only a plugin instance key's shape is kept, a project's own included.
+    for (const [given, kept] of [
+      ["jane@example.com", null],
+      ["jdoe", null],
+      [
+        `project__${"a".repeat(64)}__installed__acme.ledger`,
+        `project__${"a".repeat(64)}__installed__acme.ledger`,
+      ],
+    ]) {
+      expect(
+        projectAuditArgs("host.call", {
+          hostId: "studio-01",
+          tool: "plugin.tools",
+          args: { pluginInstanceId: given },
+        })
+      ).toMatchObject({ "args.pluginInstanceId": kept });
+    }
+    // The host's own record of the list reads the same projection.
+    expect(
+      JSON.stringify(
+        projectAuditArgs("plugin.tools", { cursor: "VALUE-SENTINEL", customer: "OTHER-SENTINEL" })
+      )
+    ).not.toContain("SENTINEL");
+  });
+
   it("drops a tool name that isn't one, and never projects a relay of a relay", () => {
     expect(
       projectAuditArgs("host.call", {

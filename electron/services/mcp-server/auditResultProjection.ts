@@ -659,10 +659,35 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       };
     },
   ],
+  [
+    // Its list (#18256): which plugin and which page, and the names of
+    // anything else sent, never a value a caller put there.
+    "plugin.tools",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        pluginInstanceId:
+          typeof record?.pluginInstanceId === "string" &&
+          PLUGIN_INSTANCE_ID_PATTERN.test(record.pluginInstanceId)
+            ? record.pluginInstanceId
+            : null,
+        cursor:
+          typeof record?.cursor === "string" && /^\d{1,9}$/.test(record.cursor)
+            ? record.cursor
+            : null,
+        argumentNames: record === null ? null : Object.keys(record).join(", "),
+      };
+    },
+  ],
 ]);
 
-/** A plugin instance key as the host mints them: a manifest id, maybe behind a project's prefix. */
-const PLUGIN_INSTANCE_ID_PATTERN = /^[\w.:@/-]{1,256}$/;
+/**
+ * A plugin instance key as the host mints them: a `publisher.name` manifest
+ * id, maybe behind a project's prefix. Nothing else is kept, so a caller's
+ * words in that field never reach a record.
+ */
+const PLUGIN_INSTANCE_ID_PATTERN =
+  /^(?:project__[0-9a-f]{64}__(?:installed__)?)?[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const AGENT_MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /** A tool id as the manifest spells them: never a few words of a message. */

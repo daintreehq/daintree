@@ -53,13 +53,17 @@ export interface GlobalAssistantPluginToolsDeps {
   /** The plugin's declaration as loaded right now; null once it no longer serves the project. */
   declaredPlugin(projectId: string, pluginInstanceId: string): DeclaredAgentMcpPlugin | null;
   activatePlugin(pluginInstanceId: string): Promise<void>;
-  /** Whether a help session is still this machine's running, coordinating global Assistant. */
+  /**
+   * Whether a help session is still this machine's running, coordinating
+   * global Assistant; on a host, whether the relayed session holding grants
+   * under that key may still reach plugins (#18256).
+   */
   isSessionLive(helpSessionId: string): boolean;
   /**
-   * Why a call that may change the project can't run there now, or null when
-   * it can. Read in the same turn as the tool's dispatch.
+   * Why a call that may change the project can't run there now for that
+   * session, or null when it can. Read in the same turn as the tool's dispatch.
    */
-  refuseWrite?(projectId: string): string | null;
+  refuseWrite?(projectId: string, helpSessionId: string): string | null;
   grants?: PluginMcpGrantRegistry;
   endpointRegistry?: AgentMcpEndpointRegistry;
   callTimeoutMs?: number;
@@ -192,11 +196,12 @@ function rowOf(launch: LaunchPlugin, tool: Tool): GlobalAssistantPluginToolRow {
 /**
  * The plugin agent tools a project's Assistant is allowed, reached by this
  * machine's global Assistant through `host.call` with no launch in that
- * project (#18254). Each (session, project, plugin) holds one grant from the
- * registry, so unloading the plugin, a reload that changes it, the person
- * narrowing the Assistant's answer, and the session ending all revoke it as
- * they would a pane's. The answer is read again at every list and call, and
- * once more just before the plugin's code runs.
+ * project (#18254), or by another machine's through the relay session this
+ * host admitted for it (#18256). Each (session, project, plugin) holds one
+ * grant from the registry, so unloading the plugin, a reload that changes
+ * it, the person narrowing the Assistant's answer, and the session ending
+ * all revoke it as they would a pane's. The answer is read again at every
+ * list and call, and once more just before the plugin's code runs.
  */
 export class GlobalAssistantPluginTools {
   private readonly grants: PluginMcpGrantRegistry;
@@ -369,7 +374,7 @@ export class GlobalAssistantPluginTools {
     // Refused before the plugin is started for it, and again as it dispatches,
     // since another machine can take the project meanwhile.
     if (!this.isHostRead(pluginInstanceId, tool)) {
-      const refused = this.deps.refuseWrite?.(projectId) ?? null;
+      const refused = this.deps.refuseWrite?.(projectId, helpSessionId) ?? null;
       if (refused !== null) return failure(refused);
     }
     const held = this.heldFor(helpSessionId, projectId, launch);
@@ -486,7 +491,7 @@ export class GlobalAssistantPluginTools {
       // A host-owned read can't change the project; anything else may, and
       // runs only while no other machine drives it, judged as it dispatches.
       refuseDispatch: (tool) =>
-        tool.readOnly === true ? null : (this.deps.refuseWrite?.(projectId) ?? null),
+        tool.readOnly === true ? null : (this.deps.refuseWrite?.(projectId, helpSessionId) ?? null),
       activatePlugin: this.deps.activatePlugin,
       endpointRegistry: this.endpoints,
       ...(this.deps.callTimeoutMs !== undefined ? { callTimeoutMs: this.deps.callTimeoutMs } : {}),
