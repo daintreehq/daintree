@@ -719,7 +719,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           ok: true,
           value: { outcome: "unsupported", callId: null },
         });
-        expect(JSON.stringify(settled)).toContain("Nothing was run");
+        expect(JSON.stringify(settled)).toContain("refused this send before running it");
       });
 
       it("never sends a built-in or host tool to another machine as a plugin action", async () => {

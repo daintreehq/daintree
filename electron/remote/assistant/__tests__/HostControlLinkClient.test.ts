@@ -164,6 +164,23 @@ describe("HostControlLinkClient.relayCall for a plugin action (#18255)", () => {
     ]);
   });
 
+  it("leaves a refusal of anything else as the host's own word", async () => {
+    const { relay } = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) return null;
+      throw new AppError({ code: "VALIDATION", message: "Invalid payload" });
+    });
+
+    // An ordinary call, and a marked one this Shell's own schema refuses too.
+    for (const request of [
+      { ...PAYLOAD, global: true as const },
+      { ...SENT, callId: "call-3", runMs: 1_000.5 },
+    ]) {
+      await expect(relay.relayCall("studio", request, 105_000)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+  });
+
   it("carries it when a host without the global method takes the call as any assistant's", async () => {
     const { relay, calls } = client((method) => {
       if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {

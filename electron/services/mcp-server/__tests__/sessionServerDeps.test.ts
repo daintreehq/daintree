@@ -503,7 +503,9 @@ describe("createSessionServerDeps", () => {
         global: true,
         stillAccepted: accepts,
         requestApproval: askShell,
-        callDeadline: () => Date.now() + 60_000,
+        // Read by the relayed call's own id, never the help session's.
+        callDeadline: (callId: string) =>
+          callId.startsWith("call-") ? Date.now() + 60_000 : undefined,
       });
       await remote.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
       await remote.sessionDeps.dispatchAction("terminal.list", {}, false, undefined, "call-4");

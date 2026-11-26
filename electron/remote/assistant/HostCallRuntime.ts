@@ -161,14 +161,12 @@ const HOST_PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$
 
 /**
  * Whether a tool id could be one of another host's plugin actions (#18255):
- * a plugin's `{pluginId}.{actionId}`, which a built-in id or a `host.*` tool
- * never is. Only a hint: the host's own registry decides, since only it knows
- * what its plugins offer, and a call sent this way runs nowhere as anything else.
+ * a plugin's `{pluginId}.{actionId}`, which a built-in id never is. Only a
+ * hint: the host's own registry decides, since only it knows what its plugins
+ * offer, and a call sent this way runs nowhere as anything else.
  */
 function mayNameHostPluginAction(tool: string): boolean {
-  return (
-    HOST_PLUGIN_ACTION_ID_RE.test(tool) && !isBuiltInActionId(tool) && !tool.startsWith("host.")
-  );
+  return HOST_PLUGIN_ACTION_ID_RE.test(tool) && !isBuiltInActionId(tool);
 }
 
 /** A summary as `host.list` holds it until every read settles. */
@@ -3267,7 +3265,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 
 /** A host that can't run relayed calls, named with the version it said it runs. */
 function pluginActionUnsupportedDetail(host: ObservedHost): string {
-  return `${host.name} runs a Daintree that can't run its plugin actions for another machine's global Assistant. Nothing was run. It needs a newer Daintree.`;
+  return `${host.name} runs a Daintree that can't run its plugin actions for another machine's global Assistant, so it refused this send before running it. It needs a newer Daintree.`;
 }
 
 function unsupportedCallDetail(host: ObservedHost): string {

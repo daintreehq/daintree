@@ -2056,20 +2056,30 @@ describe("rendererBridge — another machine's global Assistant's plugin action 
     expect((err as Error).message).toContain("This call ended before the dialog was answered");
   });
 
-  it("runs nothing on an approval that lands after another machine took the project over", async () => {
-    const view = localView(7);
-    const pending = dispatch();
-    await vi.waitFor(() => expect(view.requests).toHaveLength(1));
+  it.each([
+    ["the requesting Shell's own view", "link-1"],
+    ["another machine's view", "link-2"],
+  ])(
+    "runs nothing on an approval that lands after %s took the project over",
+    async (_label, linkSessionId) => {
+      const view = localView(7);
+      const pending = dispatch();
+      await vi.waitFor(() => expect(view.requests).toHaveLength(1));
 
-    // Not the requesting Shell's link: any other machine driving stops it.
-    const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId: "link-2" };
-    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
-    expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
+      // Its dialog is answered here, so no remote driver may hold the project when it is.
+      const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId };
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: remote,
+        holderName: "studio-02",
+      }));
+      expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
 
-    const err = await pending.catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
-    expect(remote.request).not.toHaveBeenCalled();
-  });
+      const err = await pending.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+      expect(remote.request).not.toHaveBeenCalled();
+    }
+  );
 
   it("leaves an ordinary relayed change to the Shell's own view, as before", async () => {
     const view = localView(7);
