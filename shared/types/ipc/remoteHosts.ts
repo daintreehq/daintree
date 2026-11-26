@@ -160,6 +160,78 @@ export interface ListHostProjectsPayload {
   hostId: HostId;
 }
 
+/** One SSH host public key as the host read it from its `.pub` file. */
+export interface HostSshKey {
+  /** The key's algorithm as its public file names it: `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ssh-rsa`. */
+  type: string;
+  /** `SHA256:…`, as `ssh-keygen -E sha256 -lf` prints it. */
+  fingerprint: string;
+  /** `type base64`, as the public file holds it. */
+  publicKey: string;
+}
+
+/** A configured host key whose public file gave no key, and why. */
+export interface HostSshKeyGap {
+  publicKeyPath: string;
+  reason:
+    | "missing"
+    | "permission-denied"
+    | "not-a-public-file"
+    | "invalid"
+    | "relative-path"
+    | "unreadable";
+}
+
+/** One sshd listener, as this reading found it. */
+export interface HostSshListenerReading {
+  /** Stable across restarts on the host; null when it can't be told apart, so it is never compared. */
+  listenerId: string | null;
+  /** `-f` as given, or null for the daemon's built-in default. */
+  configFile: string | null;
+  listenAddresses: string[];
+  /** Every configured key was read, and nothing else is missing. */
+  complete: boolean;
+  /** Why the listener's reading is incomplete, beyond its own key files. */
+  gaps: string[];
+  keys: HostSshKey[];
+  keyGaps: HostSshKeyGap[];
+}
+
+/** A listener's last complete reading, kept by this device. */
+export interface HostSshListenerBaseline {
+  listenerId: string;
+  configFile: string | null;
+  listenAddresses: string[];
+  /** Sorted by fingerprint: order is never a change. */
+  keys: HostSshKey[];
+  /** When this device last read exactly these keys. */
+  readAt: number;
+  /** The last time a complete reading differed from the one before it; null when none has. */
+  change: { previous: HostSshKey[]; changedAt: number } | null;
+}
+
+/** What asking the host for its SSH host keys came to just now. */
+export type HostSshReadOutcome =
+  | { status: "reading"; complete: boolean; truncated: boolean; listeners: HostSshListenerReading[] }
+  | { status: "no-sshd-visible" }
+  | { status: "discovery-failed" }
+  | { status: "timed-out" }
+  | { status: "unsupported-platform"; platform: string }
+  /** The host's Daintree is from before it could read them. */
+  | { status: "host-outdated" }
+  /** Not connected: nothing was asked, and only what this device kept is shown. */
+  | { status: "not-connected" }
+  | { status: "failed"; message: string };
+
+/**
+ * A host's SSH host keys: what it said now, and the last complete reading this
+ * device keeps per listener. Reading never changes any pin.
+ */
+export interface HostSshHostKeys {
+  outcome: HostSshReadOutcome;
+  baselines: HostSshListenerBaseline[];
+}
+
 /** This machine's answer about one host plugin reaching its clipboard. */
 export interface HostPluginClipboardGrant {
   /** The plugin's instance id on that host. */

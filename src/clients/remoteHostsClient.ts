@@ -19,6 +19,7 @@ import type {
   InstallHostPayload,
   InstallHostResult,
   HostPluginClipboardGrant,
+  HostSshHostKeys,
   PluginViewConsentEntry,
   PlanInstallPayload,
   RemoteHostsEvent,
@@ -103,6 +104,9 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.cancelInstall({ opId }),
   startHostMode: (connection: HostConnection): Promise<StartHostModeResult> =>
     window.electron.remoteHosts.startHostMode({ connection }),
+  /** The host's SSH host keys, read now when connected, and the baselines this device keeps. */
+  readSshHostKeys: (hostId: string): Promise<HostSshHostKeys> =>
+    window.electron.remoteHosts.readSshHostKeys({ hostId }),
   listClipboardGrants: (hostId: string): Promise<HostPluginClipboardGrant[]> =>
     window.electron.remoteHosts.listClipboardGrants({ hostId }),
   checkAgentForwarding: (hostId: string): Promise<HostAgentForwardingCheck> =>

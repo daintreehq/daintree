@@ -14,10 +14,15 @@ import {
   type HostRecentUse,
   LOCAL_HOST_ID,
 } from "../../../shared/types/remoteHosts.js";
-import type { AddHostPayload, UpdateHostPayload } from "../../../shared/types/ipc/remoteHosts.js";
+import type {
+  AddHostPayload,
+  HostSshListenerBaseline,
+  UpdateHostPayload,
+} from "../../../shared/types/ipc/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { normalizeHostWake, type HostWakeSetup } from "../../../shared/types/hostWake.js";
 import { parseHostConnection, requireSupportedConnection } from "./connection.js";
+import { readBaselines } from "./sshHostKeyReadings.js";
 
 /**
  * The hosts this client can attach to, in the device-owned `remoteHosts`
@@ -34,6 +39,16 @@ export interface RemoteHostsValue {
   retiredIds?: string[];
   /** Host id → when a window last landed there; "local" is this machine. */
   lastUsed?: Record<string, number>;
+  /**
+   * Host id → the last complete SSH host-key reading per listener, and the
+   * connection it was read over: a host pointed at another machine since has none.
+   */
+  sshHostKeys?: Record<string, SavedSshHostKeys>;
+}
+
+export interface SavedSshHostKeys {
+  connection: HostConnection;
+  listeners: HostSshListenerBaseline[];
 }
 
 export interface RemoteHostsStore {
@@ -138,6 +153,24 @@ function readLastUsed(raw: unknown, hosts: HostDescriptor[]): Map<string, number
   for (const [hostId, at] of Object.entries(stamps as Record<string, unknown>)) {
     if (typeof at !== "number" || !Number.isFinite(at)) continue;
     if (hostId === LOCAL_HOST_ID || listed.has(hostId)) out.set(hostId, at);
+  }
+  return out;
+}
+
+/** SSH host-key readings for hosts still listed, each still over the connection it was read on. */
+function readSshHostKeys(raw: unknown, hosts: HostDescriptor[]): Map<string, SavedSshHostKeys> {
+  const out = new Map<string, SavedSshHostKeys>();
+  if (!raw || typeof raw !== "object") return out;
+  const saved = (raw as { sshHostKeys?: unknown }).sshHostKeys;
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return out;
+  for (const host of hosts) {
+    if (!Object.hasOwn(saved, host.id)) continue;
+    const entry = (saved as Record<string, unknown>)[host.id];
+    if (!entry || typeof entry !== "object") continue;
+    const connection = parseHostConnection((entry as { connection?: unknown }).connection);
+    if (!connection || !sameHostConnection(connection, host.connection)) continue;
+    const listeners = readBaselines((entry as { listeners?: unknown }).listeners);
+    if (listeners.length > 0) out.set(host.id, { connection, listeners });
   }
   return out;
 }
@@ -416,7 +449,39 @@ export class HostRegistry {
     if (hostId !== LOCAL_HOST_ID && !hosts.some((host) => host.id === hostId)) return;
     const stamps = readLastUsed(raw, hosts);
     stamps.set(hostId, this.now());
-    this.store.set("remoteHosts", this.value(hosts, this.retiredIds(), stamps));
+    this.store.set(
+      "remoteHosts",
+      this.value(hosts, this.retiredIds(), stamps, readSshHostKeys(raw, hosts))
+    );
+  }
+
+  /** The last complete SSH host-key reading per listener this device keeps for the host. */
+  sshHostKeyBaselines(hostId: HostId): HostSshListenerBaseline[] {
+    const raw = this.store.get("remoteHosts");
+    return readSshHostKeys(raw, sanitize(raw)).get(hostId)?.listeners ?? [];
+  }
+
+  /**
+   * Keep these baselines for the host, read over `connection`. Not an edit to
+   * the host, so nothing that follows the list hears about it; a host removed
+   * or pointed elsewhere since the read keeps nothing.
+   */
+  recordSshHostKeyBaselines(
+    hostId: HostId,
+    connection: HostConnection,
+    listeners: HostSshListenerBaseline[]
+  ): void {
+    const raw = this.store.get("remoteHosts");
+    const hosts = sanitize(raw);
+    const host = hosts.find((entry) => entry.id === hostId);
+    if (!host || !sameHostConnection(host.connection, connection)) return;
+    const saved = readSshHostKeys(raw, hosts);
+    if (listeners.length > 0) saved.set(hostId, { connection, listeners });
+    else saved.delete(hostId);
+    this.store.set(
+      "remoteHosts",
+      this.value(hosts, this.retiredIds(), readLastUsed(raw, hosts), saved)
+    );
   }
 
   forget(hostId: HostId): boolean {
@@ -445,20 +510,23 @@ export class HostRegistry {
   private value(
     hosts: HostDescriptor[],
     retired: Set<string>,
-    stamps: Map<string, number>
+    stamps: Map<string, number>,
+    sshHostKeys: Map<string, SavedSshHostKeys>
   ): RemoteHostsValue {
     const value: RemoteHostsValue = { hosts };
     if (retired.size > 0) value.retiredIds = [...retired];
     if (stamps.size > 0) value.lastUsed = Object.fromEntries(stamps);
+    if (sshHostKeys.size > 0) value.sshHostKeys = Object.fromEntries(sshHostKeys);
     return value;
   }
 
   private write(hosts: HostDescriptor[], retire?: HostId): void {
     const retired = this.retiredIds();
     if (retire !== undefined) retired.add(retire);
-    // A removed host's stamp goes with it; readLastUsed drops unlisted ids.
-    const stamps = readLastUsed(this.store.get("remoteHosts"), hosts);
-    this.store.set("remoteHosts", this.value(hosts, retired, stamps));
+    const raw = this.store.get("remoteHosts");
+    // A removed host's stamp and readings go with it, and a retargeted host's readings too.
+    const stamps = readLastUsed(raw, hosts);
+    this.store.set("remoteHosts", this.value(hosts, retired, stamps, readSshHostKeys(raw, hosts)));
     for (const listener of [...this.listeners]) {
       try {
         listener();

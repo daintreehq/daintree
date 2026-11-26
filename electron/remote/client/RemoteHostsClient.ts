@@ -18,6 +18,8 @@ import type {
   CancelPendingSwitchPayload,
   PendingHostSwitch,
   HostProjectSummary,
+  HostSshHostKeys,
+  HostSshReadOutcome,
   RemoteHostsEvent,
   SwitchWindowHostPayload,
   SwitchWindowHostResult,
@@ -43,6 +45,7 @@ import { discardFromAllProjectHistories } from "../../services/ProjectHistorySer
 import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import { parseHostConnection } from "./connection.js";
+import { applyReading, readOutcome } from "./sshHostKeyReadings.js";
 import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
@@ -841,6 +844,40 @@ export class RemoteHostsClient {
       ),
     });
     return projects;
+  }
+
+  /**
+   * The host's SSH host keys, read now when it is connected (never dialled),
+   * beside the last complete reading this device keeps per listener. A
+   * complete reading becomes the baseline; nothing here touches a pin.
+   */
+  async readSshHostKeys(payload: { hostId: string }): Promise<HostSshHostKeys> {
+    const hostId = hostIdOf(payload);
+    if (isLocalHostId(hostId)) throw invalid("Only another host's SSH keys are read here");
+    const registry = this.options.registry;
+    const before = registry.require(hostId);
+    const connection = this.options.manager.get(hostId);
+    if (!connection || this.options.manager.connectionState(hostId).status !== "connected") {
+      return { outcome: { status: "not-connected" }, baselines: registry.sshHostKeyBaselines(hostId) };
+    }
+    let outcome: HostSshReadOutcome;
+    try {
+      const answer = await connection.readSshHostKeys();
+      outcome = answer === null ? { status: "host-outdated" } : readOutcome(answer);
+    } catch (error) {
+      const message =
+        error instanceof AppError && error.userMessage
+          ? error.userMessage
+          : "Couldn't read this host's SSH keys. Try again.";
+      outcome = { status: "failed", message };
+    }
+    // Recorded only against the connection it was read over: a host removed
+    // or pointed at another machine meanwhile keeps nothing of this answer.
+    const baselines = applyReading(registry.sshHostKeyBaselines(hostId), outcome, Date.now());
+    if (outcome.status === "reading") {
+      registry.recordSshHostKeyBaselines(hostId, before.connection, baselines);
+    }
+    return { outcome, baselines: registry.sshHostKeyBaselines(hostId) };
   }
 
   /** A project in the host's listing of moments ago, in the host's current epoch; else null. */
