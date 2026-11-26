@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
-import { MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS, PluginMcpGrantRegistry } from "../grantRegistry.js";
+import {
+  isPluginMcpLaunchGrant,
+  MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS,
+  PluginMcpGrantRegistry,
+} from "../grantRegistry.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -158,7 +162,7 @@ describe("PluginMcpGrantRegistry", () => {
 
     const revoked = registry.revokeDisallowedForPlugin(
       "acme.ledger",
-      (grant) => grant.terminalId === "term-keep"
+      (grant) => isPluginMcpLaunchGrant(grant) && grant.terminalId === "term-keep"
     );
 
     expect(revoked.map((g) => g.credentialId).sort()).toEqual(
@@ -488,12 +492,14 @@ describe("PluginMcpGrantRegistry tool groups", () => {
 
       expect(registry.listForTerminal("term-1")).toEqual([pane.grant]);
       registry.revokeTerminal("term-1");
+      expect(registry.authenticate(pane.token)).toBeNull();
       expect(registry.listForHelpSession("help-g")).toHaveLength(1);
     });
 
     it("revokes one session's grants as session-ended, leaving another's and the panes'", () => {
       const registry = new PluginMcpGrantRegistry();
       const mine = issueGlobal(registry);
+      const mineElsewhere = issueGlobal(registry, { projectId: PROJECT_B });
       const theirs = issueGlobal(registry, { helpSessionId: "help-h" });
       const pane = issue(registry);
       const listener = vi.fn();
@@ -502,9 +508,10 @@ describe("PluginMcpGrantRegistry tool groups", () => {
       registry.revokeHelpSession("help-g");
 
       expect(registry.isLive(mine.credentialId)).toBe(false);
+      expect(registry.isLive(mineElsewhere.credentialId)).toBe(false);
       expect(registry.isLive(theirs.credentialId)).toBe(true);
       expect(registry.authenticate(pane.token)).toBe(pane.grant);
-      expect(listener).toHaveBeenCalledWith([mine], "session-ended");
+      expect(listener).toHaveBeenCalledWith([mine, mineElsewhere], "session-ended");
     });
 
     it("goes with its plugin, a narrowed answer and a regroup, as a pane's does", () => {
@@ -560,6 +567,7 @@ describe("PluginMcpGrantRegistry tool groups", () => {
       const second = issueGlobal(registry, { pluginInstanceId: "acme.crm" });
 
       expect(registry.revokeCredential(first.credentialId, "rescoped")).toEqual([first]);
+      expect(registry.isLive(first.credentialId)).toBe(false);
       expect(registry.isLive(second.credentialId)).toBe(true);
     });
   });

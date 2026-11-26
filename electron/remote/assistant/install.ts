@@ -319,25 +319,27 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     (pluginTools ??= Promise.all([
       import("../../services/pluginAgentMcp/globalAssistantTools.js"),
       mcpServer(),
+      import("../../services/mcp-server/relayWriteRule.js"),
+      import("../../services/mcp-server/rendererBridge.js"),
     ]).then(
-      ([{ createGlobalAssistantPluginTools }, { mcpServerService }]) =>
+      ([
+        { createGlobalAssistantPluginTools },
+        { mcpServerService },
+        { relayWriteStanding },
+        { DriveHolderUnavailableError, RelayDrivenElsewhereError },
+      ]) =>
         createGlobalAssistantPluginTools({
           activatePlugin: (pluginInstanceId) =>
             mcpServerService.activateAgentMcpPlugin(pluginInstanceId),
+          // Its acting calls stop when coordination leaves it (#18143), so a
+          // session in standby starts nothing here either.
           isSessionLive: (helpSessionId) => {
             const run = localRunOf(helpSessionId);
-            return run !== null && isGlobalAssistantId(run.projectId);
+            return run !== null && isGlobalAssistantId(run.projectId) && run.standby !== true;
           },
           // A plugin's tool may change the project, so it runs only while
           // another machine doesn't drive it, as any other relayed change.
-          refuseWrite: async (projectId) => {
-            const [
-              { relayWriteStanding },
-              { DriveHolderUnavailableError, RelayDrivenElsewhereError },
-            ] = await Promise.all([
-              import("../../services/mcp-server/relayWriteRule.js"),
-              import("../../services/mcp-server/rendererBridge.js"),
-            ]);
+          refuseWrite: (projectId) => {
             const standing = relayWriteStanding(projectId, LOCAL_RELAY_LINK_SESSION_ID, true);
             if (standing.kind === "vacant" || standing.kind === "own-view") return null;
             return standing.kind === "unavailable"

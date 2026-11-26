@@ -472,6 +472,17 @@ describe("host.call audit projection (#13493)", () => {
       "args.argumentNames": "id, note",
     });
     expect(JSON.stringify(projected)).not.toContain("VALUE-SENTINEL");
+
+    const unnamed = projectAuditArgs("host.call", {
+      hostId: "local",
+      tool: "plugin.callTool",
+      args: { pluginInstanceId: "say hello to the team", tool: "two words", arguments: "x" },
+    }) as Record<string, unknown>;
+    expect(unnamed).toMatchObject({
+      "args.pluginInstanceId": null,
+      "args.tool": null,
+      "args.argumentNames": null,
+    });
   });
 
   it("drops a tool name that isn't one, and never projects a relay of a relay", () => {

@@ -32,7 +32,11 @@ import {
   setProjectAgentMcpAccess,
   setProjectAssistantAgentMcpAccess,
 } from "../projectEnablement.js";
-import type { AgentMcpToolGroupRef, AgentMcpToolInvoker } from "../types.js";
+import {
+  DATABASE_ENDPOINT_ID,
+  type AgentMcpToolGroupRef,
+  type AgentMcpToolInvoker,
+} from "../types.js";
 import { compileAgentMcpTool } from "../validateTools.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -68,6 +72,7 @@ function record(
     origin?: "global" | "project";
     projectId?: string;
     groups?: boolean;
+    databases?: boolean;
   } = {}
 ): LoadedPluginInfo {
   return {
@@ -92,7 +97,10 @@ function record(
               : {}),
           },
         ],
-        databases: [],
+        databases:
+          overrides.databases === true
+            ? [{ id: "ledger", location: "local", journalMode: "delete" }]
+            : [],
       },
     } as unknown as PluginManifest,
     instanceId: overrides.instanceId ?? name,
@@ -249,6 +257,7 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
       signal()
     );
     expect(called.isError).toBe(true);
+    expect(text(called)).toContain("aren't on for the Assistant");
     expect(getPluginService).not.toHaveBeenCalled();
     expect(activatePlugin).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
@@ -271,9 +280,11 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     loaded = new Set([ledgerB]);
     endpoints.register({ pluginInstanceId: ledgerB, endpointId: "data", tools: [LOOKUP], invoke });
     allowLedger(PROJECT_B, ledgerB);
-    setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+    // Even an answer on record for it in project A doesn't reach B's instance.
+    allowLedger(PROJECT_A, ledgerB);
 
     const listed = structured(await tools.list(SESSION, PROJECT_A, {}, signal()));
+    expect(getPluginService).toHaveBeenCalled();
     expect(listed.tools).toEqual([]);
     const result = await tools.call(
       SESSION,
@@ -437,9 +448,11 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     const gate = new Promise<void>((resolve) => {
       resume = resolve;
     });
+    let entered = false;
     tools.dispose();
     tools = makeTools({
       resolvePlugins: async (projectId, root) => {
+        entered = true;
         await gate;
         return resolveLaunchPluginsReport(projectId, root, "assistant", getPluginService as never);
       },
@@ -450,6 +463,7 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
       { pluginInstanceId: LEDGER, tool: "lookup", arguments: { id: "r-1" } },
       signal()
     );
+    await vi.waitFor(() => expect(entered).toBe(true));
     live.delete(SESSION);
     tools.endSession(SESSION);
     resume();
@@ -495,11 +509,21 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
 
   it("pages a roster too long for one answer, never cutting a row", async () => {
     allowLedger();
-    const wide = Array.from({ length: 40 }, (_, index) =>
+    // As large as a legal roster gets: the most tools an endpoint takes, each
+    // with an input schema near the size limit.
+    const wide = Array.from({ length: 16 }, (_, index) =>
       compileAgentMcpTool({
         name: `tool_${index}`,
-        description: "x".repeat(4000),
-        inputSchema: { type: "object" },
+        description: "d".repeat(380),
+        inputSchema: {
+          type: "object",
+          properties: Object.fromEntries(
+            Array.from({ length: 40 }, (_, field) => [
+              `field_${field}`,
+              { type: "string", description: "x".repeat(150) },
+            ])
+          ),
+        },
       })
     );
     endpoints.register({ pluginInstanceId: LEDGER, endpointId: "data", tools: wide, invoke });
@@ -517,7 +541,7 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
       names.push(...page.tools.map((row) => row.name));
       cursor = page.nextCursor;
       pages += 1;
-    } while (cursor !== null && pages < 10);
+    } while (cursor !== null && pages < 20);
 
     expect(pages).toBeGreaterThan(1);
     expect(names).toEqual(wide.map((tool) => tool.name));
@@ -537,19 +561,157 @@ describe("GlobalAssistantPluginTools (#18254)", () => {
     expect(getPluginService).not.toHaveBeenCalled();
   });
 
-  it("refuses a call while another machine drives the project", async () => {
+  it("refuses a call while another machine drives the project, judged as it dispatches", async () => {
     allowLedger();
+    let driven: string | null = null;
+    let release!: () => void;
+    activatePlugin.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    const refuseWrite = vi.fn((_projectId: string) => driven);
     tools.dispose();
-    tools = makeTools({ refuseWrite: () => "studio-01 has control of this project." });
-    const result = await tools.call(
+    tools = makeTools({ refuseWrite });
+    const pending = tools.call(
       SESSION,
       PROJECT_A,
       { pluginInstanceId: LEDGER, tool: "lookup", arguments: { id: "r-1" } },
       signal()
     );
+    await vi.waitFor(() => expect(activatePlugin).toHaveBeenCalled());
+    // Another machine takes the project while the plugin starts.
+    driven = "studio-01 has control of this project.";
+    release();
+
+    const result = await pending;
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("studio-01");
+    expect(refuseWrite).toHaveBeenCalledWith(PROJECT_A);
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("still answers the host's own reads while another machine drives the project", async () => {
+    records = [record(LEDGER, { databases: true })];
+    setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+    setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+    const readInvoke = vi.fn<AgentMcpToolInvoker>(async () => ({ rows: [] }));
+    endpoints.register({
+      pluginInstanceId: LEDGER,
+      endpointId: DATABASE_ENDPOINT_ID,
+      tools: [
+        compileAgentMcpTool({
+          name: "database_query",
+          description: "Run a read-only query.",
+          inputSchema: { type: "object" },
+          readOnly: true,
+        }),
+      ],
+      invoke: readInvoke,
+    });
+    const refuseWrite = vi.fn(() => "studio-01 has control of this project.");
+    tools.dispose();
+    tools = makeTools({ refuseWrite });
+
+    const read = await tools.call(
+      SESSION,
+      PROJECT_A,
+      { pluginInstanceId: LEDGER, tool: "database_query" },
+      signal()
+    );
+
+    expect(read.isError).not.toBe(true);
+    expect(readInvoke).toHaveBeenCalledTimes(1);
+    expect(refuseWrite).not.toHaveBeenCalled();
+  });
+
+  it("mints nothing and runs nothing once disposed mid-call", async () => {
+    allowLedger();
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let entered = false;
+    tools.dispose();
+    tools = makeTools({
+      resolvePlugins: async (projectId, root) => {
+        entered = true;
+        await gate;
+        return resolveLaunchPluginsReport(projectId, root, "assistant", getPluginService as never);
+      },
+    });
+    const pending = tools.call(
+      SESSION,
+      PROJECT_A,
+      { pluginInstanceId: LEDGER, tool: "lookup", arguments: { id: "r-1" } },
+      signal()
+    );
+    await vi.waitFor(() => expect(entered).toBe(true));
+    tools.dispose();
+    resume();
+
+    expect((await pending).isError).toBe(true);
+    expect(grantIds().size).toBe(0);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("leaves out a plugin whose tools were taken away while another was still listing", async () => {
+    allowLedger();
+    records = [record(LEDGER), record(CRM)];
+    loaded.add(CRM);
+    setProjectAgentMcpAccess(PROJECT_A, CRM, "read-write");
+    setProjectAssistantAgentMcpAccess(PROJECT_A, CRM, "read-write");
+    endpoints.register({ pluginInstanceId: CRM, endpointId: "data", tools: [LOOKUP], invoke });
+    let release!: () => void;
+    activatePlugin.mockImplementation(async (id) => {
+      if (id !== CRM) return;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const pending = tools.list(SESSION, PROJECT_A, {}, signal());
+    await vi.waitFor(() => expect(activatePlugin).toHaveBeenCalledWith(CRM));
+    setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+    release();
+
+    const listed = structured(await pending);
+    expect(listed.tools.map((row) => row.pluginInstanceId)).toEqual([CRM]);
+  });
+
+  it("mints at the scope the answer gives now, not the one a slow resolution read", async () => {
+    records = [record(CRM, { groups: true })];
+    loaded = new Set([CRM]);
+    endpoints.register({ pluginInstanceId: CRM, endpointId: "data", tools: [FIND, EDIT], invoke });
+    setProjectAgentMcpAccess(PROJECT_A, CRM, "read-only", undefined, [SEARCH, CHANGES]);
+    setProjectAssistantAgentMcpAccess(PROJECT_A, CRM, "read-only", undefined, [SEARCH, CHANGES]);
+    tools.dispose();
+    tools = makeTools({
+      resolvePlugins: async (projectId, root) => {
+        const report = await resolveLaunchPluginsReport(
+          projectId,
+          root,
+          "assistant",
+          getPluginService as never
+        );
+        // The person narrows the answer after this call read it.
+        setProjectAssistantAgentMcpAccess(PROJECT_A, CRM, "read-only", undefined, [SEARCH]);
+        return report;
+      },
+    });
+
+    const refused = await tools.call(
+      SESSION,
+      PROJECT_A,
+      { pluginInstanceId: CRM, tool: "edit" },
+      signal()
+    );
+
+    expect(refused.isError).toBe(true);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(
+      pluginMcpGrantRegistry.listForHelpSession(SESSION).map((g) => g.scope.pluginGroups)
+    ).toEqual([[SEARCH]]);
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
-import type { PluginMcpGrant } from "../../pluginAgentMcp/grantRegistry.js";
+import type { PluginMcpLaunchGrant } from "../../pluginAgentMcp/grantRegistry.js";
 import {
   observeAssistantPluginToolCall,
   type AssistantPluginActivityDeps,
@@ -9,7 +9,7 @@ import {
 
 const PROJECT = "a".repeat(64);
 
-function grant(overrides: Partial<PluginMcpGrant> = {}): PluginMcpGrant {
+function grant(overrides: Partial<PluginMcpLaunchGrant> = {}): PluginMcpLaunchGrant {
   return {
     credentialId: "cred-1",
     bearerSha256: "digest",

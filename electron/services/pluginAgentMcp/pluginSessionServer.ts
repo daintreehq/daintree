@@ -67,6 +67,11 @@ export interface PluginSessionServerOptions {
    */
   isCallerServable?: () => boolean;
   /**
+   * Why the tool about to run can't run now, read in the same turn as its
+   * dispatch, or null when it can. The route passes none.
+   */
+  refuseDispatch?: (tool: AgentMcpRegisteredTool) => string | null;
+  /**
    * Told when a tool call starts, by name; the function it returns, if any, is
    * told once how the call ended. Only ever sees the tool's name and the
    * argument names, never their values or the result.
@@ -312,6 +317,7 @@ export function createPluginToolSession(
     maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
     rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
     isCallerServable = () => true,
+    refuseDispatch,
     observeToolCall,
   } = options;
 
@@ -596,6 +602,8 @@ export function createPluginToolSession(
       }
       if (controller.signal.aborted) return abortedResult();
       if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
+      const refused = refuseDispatch?.(descriptor) ?? null;
+      if (refused !== null) return toolError(refused);
 
       state.writeStarted =
         descriptor.databaseWrite === true || descriptor.group?.access === "write";

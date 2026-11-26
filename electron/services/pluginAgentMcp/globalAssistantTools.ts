@@ -24,10 +24,15 @@ import { assistantAgentMcpScopeFor } from "./projectEnablement.js";
 import type { AgentMcpToolScope, DeclaredAgentMcpPlugin } from "./types.js";
 
 /**
- * Structured `plugin.tools` replies are kept to this, well inside what one
- * relayed answer carries, so a long roster pages rather than being cut.
+ * Structured `plugin.tools` replies are kept to this, inside the 50 KiB a
+ * `host.call` answer carries whole (`MCP_RESPONSE_TEXT_MAX_BYTES`) with room
+ * for its envelope, so a long roster pages rather than being cut. One row of
+ * the largest legal tool still fits on a page of its own.
  */
-export const DEFAULT_PLUGIN_TOOLS_PAGE_BYTES = 64 * 1024;
+export const DEFAULT_PLUGIN_TOOLS_PAGE_BYTES = 32 * 1024;
+
+/** How much of why a plugin's tools couldn't be listed is passed on. */
+const MAX_UNAVAILABLE_REASON_CHARS = 300;
 
 export interface GlobalAssistantPluginToolsDeps {
   /** The project's folder on this machine; null when it has no such project. */
@@ -37,10 +42,13 @@ export interface GlobalAssistantPluginToolsDeps {
   /** The plugin's declaration as loaded right now; null once it no longer serves the project. */
   declaredPlugin(projectId: string, pluginInstanceId: string): DeclaredAgentMcpPlugin | null;
   activatePlugin(pluginInstanceId: string): Promise<void>;
-  /** Whether a help session is still this machine's running global Assistant. */
+  /** Whether a help session is still this machine's running, coordinating global Assistant. */
   isSessionLive(helpSessionId: string): boolean;
-  /** Why a call that may change the project can't run there now, or null when it can. */
-  refuseWrite?(projectId: string): string | null | Promise<string | null>;
+  /**
+   * Why a call that may change the project can't run there now, or null when
+   * it can. Read in the same turn as the tool's dispatch.
+   */
+  refuseWrite?(projectId: string): string | null;
   grants?: PluginMcpGrantRegistry;
   endpointRegistry?: AgentMcpEndpointRegistry;
   callTimeoutMs?: number;
@@ -134,6 +142,7 @@ export class GlobalAssistantPluginTools {
   private readonly endpoints: AgentMcpEndpointRegistry;
   private readonly held = new Map<string, HeldTools>();
   private readonly offRevoked: () => void;
+  private disposed = false;
 
   constructor(private readonly deps: GlobalAssistantPluginToolsDeps) {
     this.grants = deps.grants ?? pluginMcpGrantRegistry;
@@ -169,6 +178,8 @@ export class GlobalAssistantPluginTools {
     }
     const resolved = await this.resolve(helpSessionId, projectId);
     if (typeof resolved === "string") return failure(resolved);
+    // Before any grant is minted or plugin started for a call already gone.
+    if (signal.aborted) return failure("The call was cancelled.");
     const only = args.pluginInstanceId;
     const launches = resolved.plugins.filter(
       (launch) => only === undefined || launch.plugin.pluginInstanceId === only
@@ -176,23 +187,35 @@ export class GlobalAssistantPluginTools {
     const listed = await Promise.all(
       launches.map(async (launch) => {
         const held = this.heldFor(helpSessionId, projectId, launch);
-        if (held === null) return { launch, error: SESSION_ENDED };
+        if (typeof held === "string") return { launch, error: held };
         try {
-          return { launch, tools: await held.tools.listTools(signal) };
+          return { launch, held, tools: await held.tools.listTools(signal) };
         } catch (err) {
           return { launch, error: formatErrorMessage(err, "Its tools couldn't be listed.") };
         }
       })
     );
     if (signal.aborted) return failure("The call was cancelled.");
-    if (!this.deps.isSessionLive(helpSessionId)) return failure(SESSION_ENDED);
-    const rows = listed.flatMap(({ launch, tools }) =>
-      (tools ?? []).map((tool) => rowOf(launch, tool))
+    if (this.disposed || !this.deps.isSessionLive(helpSessionId)) return failure(SESSION_ENDED);
+    // A plugin whose tools were taken away while another was still listing
+    // leaves no row behind.
+    const rows = listed.flatMap(({ launch, held, tools }) =>
+      held !== undefined && this.isServable(held.grant)
+        ? (tools ?? []).map((tool) => rowOf(launch, tool))
+        : []
     );
     const unavailable = listed.flatMap(({ launch, error }) =>
       error === undefined
         ? []
-        : [{ pluginInstanceId: launch.plugin.pluginInstanceId, reason: error }]
+        : [
+            {
+              pluginInstanceId: launch.plugin.pluginInstanceId,
+              reason:
+                error.length > MAX_UNAVAILABLE_REASON_CHARS
+                  ? `${error.slice(0, MAX_UNAVAILABLE_REASON_CHARS)}…`
+                  : error,
+            },
+          ]
     );
     const off = resolved.declared
       .filter(
@@ -266,11 +289,9 @@ export class GlobalAssistantPluginTools {
         "No plugin with that pluginInstanceId offers tools in this project. Nothing was run. List them with plugin.tools."
       );
     }
-    const refused = await this.deps.refuseWrite?.(projectId);
-    if (refused) return failure(refused);
     if (signal.aborted) return failure("The call was cancelled. Nothing was run.");
     const held = this.heldFor(helpSessionId, projectId, launch);
-    if (held === null) return failure(SESSION_ENDED);
+    if (typeof held === "string") return failure(held);
     try {
       return await held.tools.callTool(tool, toolArgs, signal);
     } catch (err) {
@@ -286,6 +307,7 @@ export class GlobalAssistantPluginTools {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.offRevoked();
     const sessions = new Set([...this.held.values()].map(({ grant }) => grant.helpSessionId));
     for (const entry of this.held.values()) entry.lifetime.abort();
@@ -297,7 +319,7 @@ export class GlobalAssistantPluginTools {
     helpSessionId: string,
     projectId: string
   ): Promise<LaunchPluginsReport | string> {
-    if (!this.deps.isSessionLive(helpSessionId)) return SESSION_ENDED;
+    if (this.disposed || !this.deps.isSessionLive(helpSessionId)) return SESSION_ENDED;
     if (!isProjectWorkspaceId(projectId)) return "That isn't one of this machine's projects.";
     const root = await this.deps.projectRoot(projectId);
     if (root === null) return "That isn't one of this machine's projects.";
@@ -305,23 +327,31 @@ export class GlobalAssistantPluginTools {
   }
 
   /**
-   * The grant this session holds for the plugin at the scope it may have now,
-   * minted on first use and replaced when the scope changed. Null once the
-   * session has ended: checked in the same turn as the mint, so a session
-   * that ended while this call resolved plugins never gets one.
+   * The grant this session holds for the plugin at the scope the answer gives
+   * it now, read in this turn from the plugin as loaded rather than from what
+   * the call resolved earlier, so a call that resolved before a settings change
+   * never replaces a fresher grant with a stale one. Minted on first use and
+   * replaced when the scope changed. Refused once the session has ended:
+   * checked in the same turn as the mint, so a session that ended while this
+   * call resolved plugins never gets one.
    */
   private heldFor(
     helpSessionId: string,
     projectId: string,
     launch: LaunchPlugin
-  ): HeldTools | null {
+  ): HeldTools | string {
+    if (this.disposed || !this.deps.isSessionLive(helpSessionId)) return SESSION_ENDED;
     const pluginInstanceId = launch.plugin.pluginInstanceId;
+    const scope = this.currentScope(projectId, pluginInstanceId);
+    if (scope === null) {
+      return "That plugin's agent tools changed while the call started. Nothing was run. List them again with plugin.tools.";
+    }
     const key = keyOf(helpSessionId, projectId, pluginInstanceId);
     const existing = this.held.get(key);
     if (
       existing !== undefined &&
       this.grants.isLive(existing.grant.credentialId) &&
-      sameScope(existing.grant.scope, launch.scope)
+      sameScope(existing.grant.scope, scope)
     ) {
       return existing;
     }
@@ -330,10 +360,9 @@ export class GlobalAssistantPluginTools {
       existing.lifetime.abort();
       this.grants.revokeCredential(existing.grant.credentialId, "rescoped");
     }
-    if (!this.deps.isSessionLive(helpSessionId)) return null;
     const grant = this.grants.issueForGlobalAssistant({
       pluginInstanceId,
-      scope: launch.scope,
+      scope,
       serverName: launch.serverKey,
       projectId,
       helpSessionId,
@@ -350,6 +379,10 @@ export class GlobalAssistantPluginTools {
       caller,
       sessionSignal: lifetime.signal,
       isCallerServable: () => this.isServable(grant),
+      // A host-owned read can't change the project; anything else may, and
+      // runs only while no other machine drives it, judged as it dispatches.
+      refuseDispatch: (tool) =>
+        tool.readOnly === true ? null : (this.deps.refuseWrite?.(projectId) ?? null),
       activatePlugin: this.deps.activatePlugin,
       endpointRegistry: this.endpoints,
       ...(this.deps.callTimeoutMs !== undefined ? { callTimeoutMs: this.deps.callTimeoutMs } : {}),
@@ -368,14 +401,18 @@ export class GlobalAssistantPluginTools {
    * answer no longer allows, even where no revocation has fired yet.
    */
   private isServable(grant: PluginMcpGlobalAssistantGrant): boolean {
+    if (this.disposed) return false;
     if (!this.grants.isLive(grant.credentialId) || this.grants.isHeld(grant.credentialId)) {
       return false;
     }
     if (!this.deps.isSessionLive(grant.helpSessionId)) return false;
-    const declared = this.deps.declaredPlugin(grant.projectId, grant.pluginInstanceId);
-    if (declared === null) return false;
-    const scope = assistantAgentMcpScopeFor(grant.projectId, declared);
+    const scope = this.currentScope(grant.projectId, grant.pluginInstanceId);
     return scope !== null && sameScope(scope, grant.scope);
+  }
+
+  private currentScope(projectId: string, pluginInstanceId: string): AgentMcpToolScope | null {
+    const declared = this.deps.declaredPlugin(projectId, pluginInstanceId);
+    return declared === null ? null : assistantAgentMcpScopeFor(projectId, declared);
   }
 }
 

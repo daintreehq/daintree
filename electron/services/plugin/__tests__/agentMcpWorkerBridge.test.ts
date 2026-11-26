@@ -193,11 +193,12 @@ describe("agent MCP over the worker bridge", () => {
     await host.rosters[0].tools.list_rows.execute({}, globalCaller, new AbortController().signal);
 
     const caller = (execute.mock.calls[0] as unknown[])[1];
-    expect(caller).toEqual({
+    expect(caller).toStrictEqual({
       credentialId: CALLER.credentialId,
       projectId: CALLER.projectId,
       consumer: "global-assistant",
     });
+    expect(Object.keys(caller as object).sort()).toEqual(["consumer", "credentialId", "projectId"]);
     expect(Object.isFrozen(caller)).toBe(true);
   });
 

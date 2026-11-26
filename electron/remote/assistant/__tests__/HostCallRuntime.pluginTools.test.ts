@@ -218,6 +218,53 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
     }
   );
 
+  it("ends the relay's wait on a cancel while plugins are still resolving", async () => {
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    tools.dispose();
+    const pluginService = {
+      waitForCatalog: async () => {},
+      waitForProjectPlugins: async () => true,
+      listPlugins: () => [ledger],
+      hasPlugin: (id: string) => id === LEDGER,
+    };
+    let entered = false;
+    tools = new GlobalAssistantPluginTools({
+      projectRoot: async () => "/nonexistent/project",
+      resolvePlugins: async (projectId, root) => {
+        entered = true;
+        await gate;
+        return resolveLaunchPluginsReport(
+          projectId,
+          root,
+          "assistant",
+          async () => pluginService as never
+        );
+      },
+      declaredPlugin: (projectId, id) =>
+        listDeclaredAgentMcpPlugins([ledger], projectId, () => true).find(
+          (plugin) => plugin.pluginInstanceId === id
+        ) ?? null,
+      activatePlugin: async () => {},
+      isSessionLive: (id) => runs.get(id)?.projectId === GLOBAL_ASSISTANT_ID,
+      endpointRegistry: endpoints,
+    });
+    const controller = new AbortController();
+    const pending = runtime.call("g", CALL, { tier: "core", signal: controller.signal });
+    await vi.waitFor(() => expect(entered).toBe(true));
+    controller.abort();
+
+    // Answered while the resolution is still held: the wait didn't sit on it.
+    const settled = await pending;
+    expect(settled.ok).toBe(true);
+    resume();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(pluginMcpGrantRegistry.listForHelpSession("g")).toEqual([]);
+  });
+
   it("runs a resend of the same call once", async () => {
     const callId = "11111111-1111-4111-8111-111111111111";
     await runtime.call("g", { ...CALL, newCallId: callId }, { tier: "core" });
@@ -242,13 +289,17 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
   });
 
   it("leaves another assistant's relayed call to the project's own tools, which have none by that name", async () => {
-    const settled = await runtime.call("a", CALL, { tier: "full" });
-
-    expect(settled).toMatchObject({
-      ok: true,
-      value: { outcome: "ok", result: { isError: true } },
-    });
-    expect(innerCalls).toEqual([{ helpSessionId: "a", tool: "plugin.callTool" }]);
+    for (const args of [LIST, CALL]) {
+      const settled = await runtime.call("a", args, { tier: "full" });
+      expect(settled).toMatchObject({
+        ok: true,
+        value: { outcome: "ok", result: { isError: true } },
+      });
+    }
+    expect(innerCalls).toEqual([
+      { helpSessionId: "a", tool: "plugin.tools" },
+      { helpSessionId: "a", tool: "plugin.callTool" },
+    ]);
     expect(invoke).not.toHaveBeenCalled();
     expect(pluginMcpGrantRegistry.listForHelpSession("a")).toEqual([]);
   });
@@ -268,10 +319,11 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("decorates only a session this machine's relay opened for its global Assistant", () => {
+  it("decorates only a session this machine's relay opened for its global Assistant", async () => {
+    const inner = vi.fn(async () => ({ content: [] }));
     const session: RelayMcpSession = {
       isOpen: () => true,
-      callTool: async () => ({ content: [] }),
+      callTool: inner,
       close: () => {},
     };
     const spec = { helpSessionId: "g", projectId: PROJECT } as RelayMcpSessionSpec;
@@ -279,8 +331,19 @@ describe("HostCallRuntime reaching a local project's plugin agent tools (#18254)
 
     expect(withLocalPluginTools(session, { ...spec, global: true }, pluginTools)).toBe(session);
     expect(withLocalPluginTools(session, { ...spec, local: true }, pluginTools)).toBe(session);
-    expect(
-      withLocalPluginTools(session, { ...spec, local: true, global: true }, pluginTools)
-    ).not.toBe(session);
+    const decorated = withLocalPluginTools(
+      session,
+      { ...spec, local: true, global: true },
+      pluginTools
+    );
+    expect(decorated).not.toBe(session);
+    // Every other tool still reaches the project's own session, as sent.
+    await decorated.callTool("terminal.list", { owned: true }, { timeoutMs: 1000, callId: "c-1" });
+    expect(inner).toHaveBeenCalledWith(
+      "terminal.list",
+      { owned: true },
+      { timeoutMs: 1000, callId: "c-1" }
+    );
+    expect(pluginTools).not.toHaveBeenCalled();
   });
 });
