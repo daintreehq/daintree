@@ -95,10 +95,32 @@ export type GuestPowerOffCheck =
  * leased, with that machine and the rate its lease runs at in dollars per
  * running hour. The rate is the provider's own word, never the rate Daintree
  * asked for: a close may find a lease made elsewhere, at another rate. Null
- * when it can't say, and the machine then shows no price.
+ * when it can't say, and the machine then shows no price. `leaseProblem`
+ * says why the lease isn't on the terms of the offer Daintree sent, when it
+ * isn't (see `closeOrder`'s `sentOfferId`).
  */
 export type CloseOrderOutcome =
-  { kind: "closed" } | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
+  | { kind: "closed" }
+  | {
+      kind: "leased";
+      resource: ProviderResource;
+      hourlyDollars: number | null;
+      leaseProblem?: string | null;
+    };
+
+/**
+ * The machine a lease made. `leaseHourlyDollars` is the rate its lease runs
+ * at in dollars per running hour, as the provider reports it: a bidder can
+ * swap its offer as it is leased, so it can differ from the rate chosen.
+ * Null when the provider can't price it; left out when the lease always runs
+ * at the rate chosen. `leaseProblem` says what is wrong with a lease that
+ * stands (not on the chosen offer's terms, or its machine refused by the
+ * provider): the machine then stops for the person to keep or delete.
+ */
+export type LeasedOffer = ProviderResource & {
+  leaseHourlyDollars?: number | null;
+  leaseProblem?: string | null;
+};
 
 /**
  * A create that goes through offers (`createMode: "offers"`): an order is
@@ -141,14 +163,21 @@ export interface OfferCreate {
     orderId: string,
     offerId: string,
     expected?: { hourlyDollars: number }
-  ): Promise<ProviderResource>;
+  ): Promise<LeasedOffer>;
   /**
    * Closes an order nobody chose from: `closed` once it is, and when it
    * already was. Never ends a lease: when one of its offers was leased it
    * leaves the order and answers `leased` with that machine and its rate,
    * which only `delete` ends, so a lease whose answer was lost is still bound.
+   * `sentOfferId` is the offer whose lease Daintree sent on this order, when
+   * it did: a lease found on other terms than that offer's comes back with
+   * `leaseProblem` saying so, for the person to keep or delete.
    */
-  closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
+  closeOrder(
+    credentials: ProviderCredentials,
+    orderId: string,
+    sentOfferId?: string
+  ): Promise<CloseOrderOutcome>;
 }
 
 /**

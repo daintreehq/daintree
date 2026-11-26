@@ -91,6 +91,7 @@ import {
   type IdleSleepingCloudProvider,
   sshKeyTiming,
   type CloudProvider,
+  type LeasedOffer,
   type OfferCreate,
   type ProviderCreateRequest,
   type ProviderCredentials,
@@ -668,8 +669,26 @@ function machineOf(binding: StoredCloudBinding): CloudMachineState {
  * lost placement found `open` again, waiting on a choice; or one still
  * `pending`, unseen but inside its settle window.
  */
+/** `failed`: the lease it bound is on terms nobody chose, and its host says so. */
 type OrderSettlement =
-  { kind: "closed" } | { kind: "leased"; bound: boolean } | { kind: "open" } | { kind: "pending" };
+  | { kind: "closed" }
+  | { kind: "leased"; bound: boolean; failed?: boolean }
+  | { kind: "open" }
+  | { kind: "pending" };
+
+/**
+ * A lease on other terms than the offer chosen, as its provider said, to be
+ * kept on the host it binds to until someone keeps or deletes the machine;
+ * null for a lease on the terms chosen.
+ */
+function leaseFailure(problem: string | null | undefined, at: number): CloudHostError | null {
+  return problem ? { code: "lease-problem", message: problem, at } : null;
+}
+
+/** A machine bound with what went wrong with it: setup stops here, and says why. */
+function stoppedOnFailure(message: string): AppError {
+  return new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+}
 
 const ORDER_GONE = "That order isn't waiting on a choice any more. Check the host and try again.";
 
@@ -1609,17 +1628,23 @@ export class CloudHostLifecycle {
   private bindCreated(
     bindingId: string,
     resource: ProviderResource,
-    leaseHourly: number | null = null
+    leaseHourly: number | null = null,
+    failure: CloudHostError | null = null
   ): "bound" | "held" | "settled" {
     const current = this.deps.store.binding(bindingId);
     const leaseRate =
       leaseHourly === null ? null : { resourceId: resource.resourceId, hourlyDollars: leaseHourly };
     if (current?.resourceId === resource.resourceId) {
-      // Bound by an answer that couldn't say the rate: a later one about the same lease can.
-      if (leaseRate && !current.leaseRate) {
+      // Bound by an answer that couldn't say the rate, or what went wrong: a later one about
+      // the same lease can.
+      if ((leaseRate && !current.leaseRate) || failure) {
         this.deps.store.updateBinding(bindingId, (latest) =>
-          latest.resourceId === resource.resourceId && !latest.leaseRate
-            ? { ...latest, leaseRate }
+          latest.resourceId === resource.resourceId
+            ? {
+                ...latest,
+                ...(leaseRate && !latest.leaseRate ? { leaseRate } : {}),
+                ...(failure ? { lastError: failure } : {}),
+              }
             : latest
         );
       }
@@ -1632,7 +1657,8 @@ export class CloudHostLifecycle {
       resourceId: resource.resourceId,
       creation: null,
       observation: observationOf(resource, this.now()),
-      lastError: null,
+      // Written with the machine, so a restart between the two can't drop what went wrong.
+      lastError: failure,
       ...(leaseRate ? { leaseRate } : {}),
     }));
     return "bound";
@@ -1822,12 +1848,26 @@ export class CloudHostLifecycle {
     return choices;
   }
 
-  /** Nothing may be leased from it any more; a lease that already landed is found by its close. */
+  /**
+   * Nothing may be leased from it any more; a lease that already landed is
+   * found by its close, which is told the offer whose lease went out, so a
+   * lease on other terms is said to be one.
+   */
   private markClosing(orderRecordId: string): void {
     this.deps.store.updateCreateOrder(orderRecordId, (order) =>
-      order.state === "close" ? order : { ...order, state: "close", offerId: null }
+      order.state === "close"
+        ? order
+        : { ...order, state: "close", offerId: order.state === "leasing" ? order.offerId : null }
     );
     this.offerReads.delete(orderRecordId);
+  }
+
+  /** The error a lease bound with, which stops its setup. */
+  private boundFailure(bindingId: string): AppError {
+    return stoppedOnFailure(
+      this.deps.store.binding(bindingId)?.lastError?.message ??
+        "The machine failed as it was leased."
+    );
   }
 
   private retireOrder(orderRecordId: string): void {
@@ -1973,13 +2013,19 @@ export class CloudHostLifecycle {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
       if (outcome.kind === "open") return true;
       if (outcome.kind === "leased" && outcome.bound) {
+        if (outcome.failed) throw this.boundFailure(bindingId);
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
         return true;
       }
       // Unseen so far: the keeper keeps looking for it, to close it, while a new one is placed.
       if (outcome.kind === "pending") this.markClosing(order.id);
     }
-    return this.deps.store.binding(bindingId)?.resourceId != null;
+    const bound = this.deps.store.binding(bindingId);
+    // Bound meanwhile by the keeper's close, failed: the create stops on that, never past it.
+    if (bound?.resourceId && bound.lastError?.code === "lease-problem") {
+      throw stoppedOnFailure(bound.lastError.message);
+    }
+    return bound?.resourceId != null;
   }
 
   /**
@@ -2072,16 +2118,27 @@ export class CloudHostLifecycle {
     if (order.state !== "close") return { kind: "pending" };
     let leased = false;
     let bound = false;
+    let failed = false;
+    // The offer whose lease went out, kept from `leasing`: only then did the record hold one order.
+    const sent = order.offerId && order.orderIds?.length === 1 ? order.offerId : undefined;
     for (const orderId of order.orderIds ?? []) {
       if (this.disposed) throw new AppError({ code: "CANCELLED", message: "Stopping" });
-      const outcome = await offers.closeOrder(credentials, orderId);
+      const outcome = await offers.closeOrder(credentials, orderId, sent);
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
+        const failure = leaseFailure(outcome.leaseProblem, this.now());
         if (
-          this.adoptLease(order, provider, outcome.resource, reportedRate(outcome.hourlyDollars))
+          this.adoptLease(
+            order,
+            provider,
+            outcome.resource,
+            reportedRate(outcome.hourlyDollars),
+            failure
+          )
         ) {
           bound = true;
+          if (failure) failed = true;
         }
       }
       this.deps.store.updateCreateOrder(order.id, (current) => ({
@@ -2090,7 +2147,7 @@ export class CloudHostLifecycle {
       }));
     }
     this.retireOrder(order.id);
-    return leased ? { kind: "leased", bound } : { kind: "closed" };
+    return leased ? { kind: "leased", bound, failed } : { kind: "closed" };
   }
 
   /**
@@ -2098,19 +2155,21 @@ export class CloudHostLifecycle {
    * bound to it while the host is still here and holds no other machine.
    * Otherwise it stays in the provider account, as every machine of a host
    * removed from this device does. True when it is the host's machine now.
-   * `hourlyDollars` is the rate the lease runs at, null when nobody said.
+   * `hourlyDollars` is the rate the lease runs at, null when nobody said;
+   * `failure`, what went wrong with the lease, kept on the host it binds to.
    */
   private adoptLease(
     order: StoredCreateOrder,
     provider: CloudProvider,
     resource: ProviderResource,
-    hourlyDollars: number | null
+    hourlyDollars: number | null,
+    failure: CloudHostError | null = null
   ): boolean {
     const binding = this.deps.store.binding(order.bindingId);
     // The host as it is now: one rewritten for another account meanwhile is never given it.
     const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
     const bound =
-      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars) : "settled";
+      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars, failure) : "settled";
     if (bound === "bound") {
       const key = this.placedKeys.get(order.id);
       if (key) this.heldKeys.set(order.bindingId, key);
@@ -2443,7 +2502,7 @@ export class CloudHostLifecycle {
     );
     if (marked?.state !== "leasing" || marked.offerId !== offerId) throw invalid(ORDER_GONE);
     this.stage(bindingId, `Leasing the offer you chose from ${nameOf(provider)}`);
-    let resource: ProviderResource;
+    let resource: LeasedOffer;
     try {
       resource = await offers.leaseOffer({ ...credentials, signal }, orderId, offerId, {
         hourlyDollars: chosen.hourlyDollars,
@@ -2499,6 +2558,7 @@ export class CloudHostLifecycle {
       }
       if (outcome.kind === "leased" && outcome.bound) {
         accepted();
+        if (outcome.failed) throw this.boundFailure(bindingId);
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
         return;
       }
@@ -2509,15 +2569,24 @@ export class CloudHostLifecycle {
       }
       throw this.deps.accounts.asAppError(provider, error);
     }
-    // Leased: the order is done, whatever becomes of the machine. The provider accepted it at
-    // the rate the person saw, since a lease is refused at any other.
-    const bound = this.adoptLease(marked, provider, resource, chosen.hourlyDollars);
+    // Leased: the order is done, whatever becomes of the machine. It runs at the rate the
+    // provider says its lease does (a bidder can swap its offer as it is leased), else at the
+    // rate the person saw, since a lease is refused at any other.
+    const rate =
+      resource.leaseHourlyDollars === undefined
+        ? chosen.hourlyDollars
+        : reportedRate(resource.leaseHourlyDollars);
+    // A machine the provider says failed as it was leased stops here, and says why, until the
+    // person deals with it: a later look that finds it running doesn't take that back.
+    const failure = leaseFailure(resource.leaseProblem, this.now());
+    const bound = this.adoptLease(marked, provider, resource, rate, failure);
     this.retireOrder(orderRecordId);
     if (!bound) {
       const message = this.deps.store.binding(bindingId)?.lastError?.message ?? ORDER_GONE;
       throw invalid(message);
     }
     accepted();
+    if (failure) throw this.boundFailure(bindingId);
     await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
   }
 
@@ -2552,6 +2621,8 @@ export class CloudHostLifecycle {
       throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
     }
     if (outcome.kind === "leased" && outcome.bound) {
+      // Leased on terms nobody chose: it stays as it is, saying so, for the person to decide.
+      if (outcome.failed) return;
       // The lease won: the create carries on once the aborted lease's operation has let go.
       void (async () => {
         await running?.promise.catch(() => {});

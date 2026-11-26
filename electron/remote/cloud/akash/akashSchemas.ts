@@ -106,3 +106,181 @@ export interface AkashScreeningRequest {
   }>;
   timezone: string;
 }
+
+/** A deployment sequence number, as the chain writes it: decimal, never zero. */
+export const AKASH_DSEQ = /^0*[1-9]\d{0,19}$/;
+
+/** A DecCoin: an amount in the denom's smallest unit, as decimal text that may carry a fraction. */
+export const akashCoinSchema = z
+  .object({ denom: z.string(), amount: z.string().regex(/^\d+(\.\d+)?$/) })
+  .loose();
+
+export type AkashCoin = z.infer<typeof akashCoinSchema>;
+
+const akashDeploymentIdSchema = z
+  .object({ owner: z.string().min(1), dseq: z.string().regex(AKASH_DSEQ) })
+  .loose();
+
+const akashLeaseIdSchema = z
+  .object({
+    owner: z.string().min(1),
+    dseq: z.string().regex(AKASH_DSEQ),
+    gseq: z.number().int().nonnegative(),
+    oseq: z.number().int().nonnegative(),
+    provider: z.string().min(1),
+  })
+  .loose();
+
+/** Where a service's port is reached from outside: the provider's host, and the port it forwards there. */
+export const akashForwardedPortSchema = z
+  .object({
+    port: z.number(),
+    externalPort: z.number(),
+    host: z.string().nullable().optional(),
+    /** How many of the service's replicas answer there; absent when the provider doesn't say. */
+    available: z.number().optional(),
+  })
+  .loose();
+
+export const akashLeaseSchema = z
+  .object({
+    id: akashLeaseIdSchema,
+    state: z.string(),
+    price: akashCoinSchema,
+    /** A block height, not a time. */
+    created_at: z.string().optional(),
+    /** Present only while the provider is reclaiming the lease. */
+    reclamation: z.object({}).loose().optional(),
+    /** The provider's own report, read only by a deployment's own route; null when it couldn't be asked. */
+    status: z
+      .object({
+        forwarded_ports: z.record(z.string(), z.array(z.unknown())).nullable().optional(),
+      })
+      .loose()
+      .nullable()
+      .optional(),
+  })
+  .loose();
+
+export type AkashLease = z.infer<typeof akashLeaseSchema>;
+
+export const akashGroupSchema = z
+  .object({
+    id: z.object({ gseq: z.number().int().nonnegative() }).loose(),
+    state: z.string(),
+  })
+  .loose();
+
+export type AkashGroup = z.infer<typeof akashGroupSchema>;
+
+/** One deployment, as the list and a deployment's own route both spell it. */
+export const akashDeploymentSchema = z
+  .object({
+    deployment: z
+      .object({
+        id: akashDeploymentIdSchema,
+        state: z.string(),
+        /** A block height, not a time. */
+        created_at: z.string().optional(),
+      })
+      .loose(),
+    leases: z.array(z.unknown()),
+    groups: z.array(z.unknown()).optional(),
+    name: z.string().nullable().optional(),
+  })
+  .loose();
+
+export type AkashDeployment = z.infer<typeof akashDeploymentSchema>;
+
+export const akashDeploymentPageSchema = z
+  .object({
+    data: z
+      .object({
+        deployments: z.array(z.unknown()),
+        pagination: z.object({ hasMore: z.boolean() }).loose(),
+      })
+      .loose(),
+  })
+  .loose();
+
+export const akashDeploymentEnvelopeSchema = z.object({ data: z.unknown() }).loose();
+
+export const akashCreatedDeploymentSchema = z
+  .object({ data: z.object({ dseq: z.string().regex(AKASH_DSEQ) }).loose() })
+  .loose();
+
+export const akashBidSchema = z
+  .object({
+    bid: z
+      .object({
+        id: akashLeaseIdSchema.extend({ bseq: z.number().int().nonnegative().optional() }),
+        state: z.string(),
+        price: akashCoinSchema,
+      })
+      .loose(),
+  })
+  .loose();
+
+export type AkashBid = z.infer<typeof akashBidSchema>["bid"];
+
+export const akashBidListSchema = z.object({ data: z.array(z.unknown()) }).loose();
+
+export const akashLeasesCreatedSchema = z
+  .object({
+    data: z.object({ leases: z.array(z.unknown()) }).loose(),
+  })
+  .loose();
+
+export const akashAnySchema = z.unknown();
+
+/** A close's answer: a close that finished says so. */
+export const akashClosedSchema = z
+  .object({ data: z.object({ success: z.boolean() }).loose() })
+  .loose();
+
+const akashQuantitySchema = z.object({ val: z.string() }).loose();
+
+/** What a group asks for, read only where Daintree reports it: none of it is required. */
+export const akashGroupSpecSchema = z
+  .object({
+    group_spec: z
+      .object({
+        requirements: z
+          .object({
+            attributes: z
+              .array(z.object({ key: z.string(), value: z.string() }).loose())
+              .optional(),
+          })
+          .loose()
+          .optional(),
+        resources: z
+          .array(
+            z
+              .object({
+                resource: z
+                  .object({
+                    cpu: z.object({ units: akashQuantitySchema.optional() }).loose().optional(),
+                    memory: z
+                      .object({ quantity: akashQuantitySchema.optional() })
+                      .loose()
+                      .optional(),
+                    storage: z
+                      .array(z.object({ quantity: akashQuantitySchema.optional() }).loose())
+                      .optional(),
+                  })
+                  .loose(),
+                count: z.number(),
+              })
+              .loose()
+          )
+          .optional(),
+      })
+      .loose()
+      .optional(),
+  })
+  .loose();
+
+/** A block, as the Console's public route answers: when it was made. */
+export const akashBlockSchema = z
+  .object({ height: z.number().int().positive(), datetime: z.string() })
+  .loose();

@@ -1,7 +1,16 @@
 import type { z } from "zod";
 import {
   AKASH_CONSOLE_UUID,
+  AKASH_DSEQ,
+  akashAnySchema,
+  akashBidListSchema,
+  akashBlockSchema,
+  akashClosedSchema,
+  akashCreatedDeploymentSchema,
+  akashDeploymentEnvelopeSchema,
+  akashDeploymentPageSchema,
   akashErrorSchema,
+  akashLeasesCreatedSchema,
   akashOrganizationListSchema,
   akashOrganizationSchema,
   akashPlacementOptionsSchema,
@@ -72,7 +81,15 @@ export type AkashErrorKind =
   /** The key no longer reaches the project the account was connected for. */
   | "wrong-scope"
   /** Something Daintree can't do through Akash yet, or ever (a create outside an offer). */
-  | "unsupported";
+  | "unsupported"
+  /** The chosen offer can't be leased any more; nothing was leased and the order stays open. */
+  | "offer-gone"
+  /** The Console turned a change down before making it, for a reason it named: nothing changed. */
+  | "declined"
+  /** A request that changes something was sent and its answer lost: it may or may not have happened. */
+  | "outcome-unknown"
+  /** The machine is leased but its provider doesn't say yet where its SSH port is. */
+  | "not-ready";
 
 export class AkashApiError extends Error {
   constructor(
@@ -167,11 +184,22 @@ function requireUuid(id: string, what: string): string {
   return id;
 }
 
+function requireDseq(dseq: string): string {
+  if (!AKASH_DSEQ.test(dseq)) {
+    throw new AkashApiError("invalid-request", "Not a deployment sequence number", null, null);
+  }
+  // As the Console writes them back: no leading zeros.
+  return dseq.replace(/^0+/, "");
+}
+
 interface RequestOptions {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   body?: unknown;
-  /** Safe to send again after a lost response or a 5xx/429: it reads, or screens, and changes nothing. */
+  /**
+   * Safe to send again after a lost response or a 5xx/429: it reads, or
+   * screens, or asks for an outcome a second send can't change.
+   */
   retry: boolean;
 }
 
@@ -251,6 +279,153 @@ export class AkashConsoleClient {
       akashScreeningSchema
     );
     return parseItems(result.providers, akashScreenedProviderSchema);
+  }
+
+  /**
+   * Places an order: a deployment with no lease yet, which providers bid on.
+   * Sent once: a second send would place a second order.
+   */
+  async createDeployment(ctx: AkashRequestContext, data: object): Promise<{ dseq: string }> {
+    const result = await this.call(
+      ctx,
+      { method: "POST", path: "/deployments", body: { data }, retry: false },
+      akashCreatedDeploymentSchema
+    );
+    return { dseq: result.data.dseq.replace(/^0+/, "") };
+  }
+
+  /** One page of the account's deployments in `state`, oldest first; `search` matches names and dseqs. */
+  async deployments(
+    ctx: AkashRequestContext,
+    query: { state: "active" | "closed"; skip: number; limit: number; search?: string }
+  ): Promise<{ deployments: unknown[]; hasMore: boolean }> {
+    const params = new URLSearchParams({
+      state: query.state,
+      skip: String(query.skip),
+      limit: String(query.limit),
+    });
+    if (query.search !== undefined) params.set("search", query.search);
+    if (ctx.projectId !== undefined) params.set("projectId", requireUuid(ctx.projectId, "project"));
+    const page = await this.call(
+      ctx,
+      { method: "GET", path: `/deployments?${params}`, retry: true },
+      akashDeploymentPageSchema
+    );
+    return { deployments: page.data.deployments, hasMore: page.data.pagination.hasMore };
+  }
+
+  /** One deployment with its leases, each with what its provider reports of it now. */
+  async deployment(ctx: AkashRequestContext, dseq: string): Promise<unknown> {
+    const result = await this.call(
+      ctx,
+      { method: "GET", path: `/deployments/${requireDseq(dseq)}`, retry: true },
+      akashDeploymentEnvelopeSchema
+    );
+    return result.data;
+  }
+
+  /**
+   * Closes a deployment, ending its leases. One already closed closes again as
+   * a success, so a machine's close is sent again after a lost answer; an
+   * order's isn't (`retry: false`), since a lease may land while it waits.
+   */
+  async closeDeployment(
+    ctx: AkashRequestContext,
+    dseq: string,
+    options: { retry: boolean }
+  ): Promise<void> {
+    const result = await this.call(
+      ctx,
+      { method: "DELETE", path: `/deployments/${requireDseq(dseq)}`, retry: options.retry },
+      akashClosedSchema
+    );
+    if (!result.data.success) {
+      throw new AkashApiError(
+        "bad-response",
+        "The Akash Console didn't say the deployment closed",
+        null,
+        null
+      );
+    }
+  }
+
+  /**
+   * Renames a deployment, touching nothing it runs. Sent once: sent again
+   * after a lost answer, it could undo a rename made since.
+   */
+  async renameDeployment(ctx: AkashRequestContext, dseq: string, name: string): Promise<void> {
+    await this.call(
+      ctx,
+      {
+        method: "PATCH",
+        path: `/deployments/${requireDseq(dseq)}`,
+        body: { data: { name } },
+        retry: false,
+      },
+      akashAnySchema
+    );
+  }
+
+  /** The bids on a deployment's orders, in every state. */
+  async bids(ctx: AkashRequestContext, dseq: string): Promise<unknown[]> {
+    const params = new URLSearchParams({ dseq: requireDseq(dseq) });
+    const result = await this.call(
+      ctx,
+      { method: "GET", path: `/bids?${params}`, retry: true },
+      akashBidListSchema
+    );
+    return result.data;
+  }
+
+  /**
+   * Accepts one bid, creating its lease and sending the provider its
+   * manifest. Sent once: whether a lost answer leased is read back from the
+   * deployment.
+   */
+  async createLease(
+    ctx: AkashRequestContext,
+    lease: { dseq: string; gseq: number; oseq: number; provider: string }
+  ): Promise<unknown[]> {
+    const result = await this.call(
+      ctx,
+      {
+        method: "POST",
+        path: "/leases",
+        body: { leases: [{ ...lease, dseq: requireDseq(lease.dseq) }] },
+        retry: false,
+      },
+      akashLeasesCreatedSchema
+    );
+    return result.data.leases;
+  }
+
+  /**
+   * When the block at `height` was made; null when the Console has no such
+   * block. Public: no key is sent.
+   */
+  async blockTime(height: number, signal?: AbortSignal): Promise<string | null> {
+    if (!Number.isSafeInteger(height) || height < 1) {
+      throw new AkashApiError("invalid-request", "Not a block height", null, null);
+    }
+    try {
+      const block = await this.call(
+        { signal },
+        { method: "GET", path: `/blocks/${height}`, retry: true },
+        akashBlockSchema
+      );
+      if (block.height !== height || !Number.isFinite(Date.parse(block.datetime))) {
+        throw new AkashApiError(
+          "bad-response",
+          "The Akash Console answered with another block, or no time for it",
+          null,
+          null
+        );
+      }
+      return new Date(block.datetime).toISOString();
+    } catch (error) {
+      if (error instanceof AkashApiError && error.kind === "not-found") return null;
+      throw error;
+    }
   }
 
   private async call<S extends z.ZodType>(
@@ -378,7 +553,7 @@ export class AkashConsoleClient {
  * Every entry, or a `bad-response`: scopes and availability are decided from
  * these lists, so one Daintree can't read is never passed off as absent.
  */
-function parseItems<I extends z.ZodType>(raw: unknown[], schema: I): Array<z.infer<I>> {
+export function parseItems<I extends z.ZodType>(raw: unknown[], schema: I): Array<z.infer<I>> {
   return raw.map((entry) => {
     const parsed = schema.safeParse(entry);
     if (!parsed.success) {

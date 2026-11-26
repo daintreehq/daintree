@@ -1338,12 +1338,38 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
 
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "starting" })]);
     expect(onReady).not.toHaveBeenCalled();
-    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
+    // Any other error a running machine has got past (a missed poll, a slow start, a failed
+    // look) holds nothing back.
+    show([
+      hostStatus({
+        pendingCreate: null,
+        resourceId: "dseq-1",
+        machine: "running",
+        lastError: { code: "failed", message: "It didn't answer.", at: 1 },
+      }),
+    ]);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith({ hostId: "h-123", name: "build-host" });
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "stopped" })]);
     show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
     expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("never hands over a machine whose lease needs a person, even once that error is replaced", async () => {
+    client.chooseOffer.mockResolvedValue(undefined);
+    const { show, onReady } = await ordered();
+    const running = { pendingCreate: null, resourceId: "dseq-1", machine: "running" as const };
+    // Running, but leased on terms nobody chose: the problem stays in view, and setup waits.
+    const swapped = "The provider replaced its offer as it was leased.";
+    show([
+      hostStatus({ ...running, lastError: { code: "lease-problem", message: swapped, at: 1 } }),
+    ]);
+    expect(screen.getByText(swapped)).toBeTruthy();
+    expect(onReady).not.toHaveBeenCalled();
+    // A delete refused from elsewhere takes its place while the machine still bills.
+    show([hostStatus({ ...running, lastError: { code: "refused", message: "No.", at: 2 } })]);
+    show([hostStatus(running)]);
+    expect(onReady).not.toHaveBeenCalled();
   });
 });
 

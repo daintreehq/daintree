@@ -1070,16 +1070,17 @@ describe("CloudHostStore create orders (#18230)", () => {
     expect(backend.saved.get("cloudCreateOrders")).toHaveLength(3);
   });
 
-  it("reads a placement whose answer is unknown, and drops an offer on any state but leasing", () => {
+  it("reads a placement whose answer is unknown, and keeps an offer only while leasing or closing", () => {
     const backend = keyedDisk();
     backend.set("cloudCreateOrders", [
-      order({ state: "placing", orderIds: null, waitingSince: null }),
+      order({ state: "placing", orderIds: null, waitingSince: null, offerId: "bid-0" }),
+      // Closing after its lease went out: the close checks a lease it finds against the offer.
       order({ id: "co_2", state: "close", orderIds: null, offerId: "bid-1" }),
       order({ id: "co_3", offerId: "bid-2" }),
     ]);
     expect(new CloudHostStore(backend).createOrders()).toEqual([
-      order({ state: "placing", orderIds: null, waitingSince: null }),
-      order({ id: "co_2", state: "close", orderIds: null, offerId: null }),
+      order({ state: "placing", orderIds: null, waitingSince: null, offerId: null }),
+      order({ id: "co_2", state: "close", orderIds: null, offerId: "bid-1" }),
       order({ id: "co_3", offerId: null }),
     ]);
   });
