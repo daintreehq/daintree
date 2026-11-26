@@ -2357,7 +2357,9 @@ export class TerminalProcess {
         lastSeenAt: now,
         observedAt: fresh || last === undefined ? now : last.observedAt,
       });
-      if (!fresh) continue;
+      // A resumed conversation redraws rows printed before the restart (#18166):
+      // held as seen, so the same row after the first prompt is no new reading.
+      if (!fresh || this.isReplaying()) continue;
       events.emit("agent:claude-usage-observed", {
         terminalId: this.id,
         window: message.window,

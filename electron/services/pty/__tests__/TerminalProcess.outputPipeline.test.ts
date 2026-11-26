@@ -934,6 +934,64 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     expect(seen.map((payload) => payload.usedPercent)).toEqual([87]);
   });
 
+  describe("in a pane a restore relaunched (#18166)", () => {
+    // Printed before the restart: its reset was yesterday.
+    const HISTORY = "  ⎿  You've hit your weekly limit · resets Nov 1, 10pm (UTC)\r\n";
+
+    function restoredClaude() {
+      const terminal = createTerminal({ launchAgentId: "claude", restore: true });
+      terminal.write("claude --resume abc\r");
+      terminal.markLaunchInputDone();
+      return terminal;
+    }
+
+    it("never counts the resumed conversation's redraw as a reading", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([]);
+
+      // Still on screen once a prompt is sent, it is the same redraw.
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(`⏺ Working.\r\n${HISTORY}`);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([]);
+
+      terminal.dispose();
+    });
+
+    it("reports what the pane shows once a prompt was sent", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      ptyOnDataCallback!(HISTORY);
+      await vi.advanceTimersByTimeAsync(250);
+      terminal.write("keep going\r");
+      ptyOnDataCallback!(footer(87));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(seen.map((payload) => [payload.window, payload.statement])).toEqual([
+        ["weekly limit", "used"],
+      ]);
+      terminal.dispose();
+    });
+
+    it("keeps a redraw resumed history though a draft was typed and erased", async () => {
+      const seen = collect();
+      const terminal = restoredClaude();
+
+      terminal.write("x");
+      terminal.write("\x7f");
+      ptyOnDataCallback!(footer(87));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([]);
+
+      terminal.dispose();
+    });
+  });
+
   it("ignores a Claude pane's prose about a limit", async () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });
