@@ -465,6 +465,10 @@ jobs:
     # brew audit loads the cask the way a Mac does: both arches, the live feed.
     runs-on: macos-15
     timeout-minutes: 30
+    # The tap push goes through the deploy key, so the job token needs no
+    # more than the source checkout.
+    permissions:
+      contents: read
     # One tap writer across every tag, so two releases never race on its branch.
     # queue: max keeps every waiting job; the default keeps only the newest
     # arrival, so re-running an old tag could cancel a newer release's update.
@@ -477,18 +481,20 @@ jobs:
       HOMEBREW_NO_ANALYTICS: "1"
       HOMEBREW_NO_ENV_HINTS: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    outputs:
+      tap-commit: ${{ steps.push.outputs.commit }}
     steps:
-      - name: Check Homebrew tap token
+      - name: Check Homebrew tap deploy key
         id: tap-secret
         shell: bash
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [[ -n "$HOMEBREW_TAP_TOKEN" ]]; then
+          if [[ -n "$HOMEBREW_TAP_DEPLOY_KEY" ]]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Homebrew tap update skipped — HOMEBREW_TAP_TOKEN secret not configured. The release is still published to R2."
+            echo "::notice::Homebrew tap update skipped — HOMEBREW_TAP_DEPLOY_KEY secret not configured. The release is still published to R2."
           fi
 
       - name: Check out repository
@@ -504,7 +510,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: daintreehq/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # A write-enabled deploy key on the tap. Kept in this checkout's git
+          # config (persist-credentials defaults to true) for the push below.
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: homebrew-tap
           fetch-depth: 1
 
@@ -545,7 +553,10 @@ jobs:
           brew audit --cask --strict --online --arch=all daintree-release/audit/daintree
           brew livecheck --cask daintree-release/audit/daintree
 
+      # Outputs the tap commit that carries this version, pushed now or by an
+      # earlier run, for verify-homebrew-install to install from.
       - name: Push cask to the tap
+        id: push
         if: steps.cask.outputs.written == 'true'
         shell: bash
         working-directory: homebrew-tap
@@ -556,6 +567,7 @@ jobs:
           cp "$RUNNER_TEMP/daintree.rb" Casks/daintree.rb
           if [[ -z "$(git status --porcelain -- Casks/daintree.rb)" ]]; then
             echo "::notice::Homebrew tap already carries daintree $version."
+            echo "commit=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -563,3 +575,133 @@ jobs:
           git add Casks/daintree.rb
           git commit -m "daintree $version"
           git push origin HEAD
+          echo "commit=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
+
+  # Installs the cask from the tap commit just published, on both arches, the
+  # way a user would: no credentials, the public tap, the live DMGs. Skipped
+  # when the tap job published nothing (no deploy key, or a newer tag already
+  # owns the tap).
+  verify-homebrew-install:
+    needs: [publish-homebrew-tap]
+    if: needs.publish-homebrew-tap.outputs.tap-commit != ''
+    name: Install from Homebrew tap (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      CASK: daintreehq/tap/daintree
+      APP: /Applications/Daintree.app
+      TAP_COMMIT: ${{ needs.publish-homebrew-tap.outputs.tap-commit }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Tap daintreehq/tap at the published commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew --version
+          brew tap daintreehq/tap
+          tap_dir="$(brew --repository daintreehq/tap)"
+          # brew tap clones the whole history, so the commit is normally here.
+          if ! git -C "$tap_dir" cat-file -e "$TAP_COMMIT^{commit}" 2>/dev/null; then
+            git -C "$tap_dir" fetch --quiet origin "$TAP_COMMIT"
+          fi
+          git -C "$tap_dir" checkout --quiet --detach "$TAP_COMMIT"
+          # Homebrew 7 refuses to load a cask from an untrusted third-party tap.
+          if brew trust --help >/dev/null 2>&1; then
+            brew trust --cask "$CASK"
+          fi
+
+      - name: Install cask
+        shell: bash
+        run: brew install --cask "$CASK"
+
+      - name: Check installed app
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version="${GITHUB_REF_NAME#v}"
+          version="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
+          if [[ "$version" != "$expected_version" ]]; then
+            echo "::error::installed Daintree $version, expected $expected_version"
+            exit 1
+          fi
+          host_arch="$(uname -m)"
+          if [[ "$host_arch" != "$EXPECTED_ARCH" ]]; then
+            echo "::error::runner is $host_arch, expected $EXPECTED_ARCH"
+            exit 1
+          fi
+          archs="$(lipo -archs "$APP/Contents/MacOS/Daintree")"
+          if [[ "$archs" != "$EXPECTED_ARCH" ]]; then
+            echo "::error::installed binary is $archs, expected $EXPECTED_ARCH"
+            exit 1
+          fi
+          # brew keeps the quarantine flag, so this is the first-launch check.
+          assess_status=0
+          assessment="$(spctl --assess --type execute --verbose=4 --ignore-cache --no-cache "$APP" 2>&1)" || assess_status=$?
+          echo "$assessment"
+          if [[ "$assess_status" -ne 0 ]] || ! grep -q '^source=Notarized Developer ID$' <<<"$assessment"; then
+            echo "::error::Gatekeeper did not accept $APP as a notarized Developer ID app"
+            exit 1
+          fi
+
+      # Every trash path the cask's zap declares gets something to remove, so
+      # the uninstall below proves the stanza matches real paths.
+      - name: Seed zap paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew info --json=v2 --cask "$CASK" \
+            | jq -r '.casks[0].artifacts[] | .zap? // empty | .[] | .trash? // empty | if type == "array" then .[] else . end' \
+            > "$RUNNER_TEMP/zap-trash"
+          : > "$RUNNER_TEMP/zap-seeded"
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            path="${entry/#\~/$HOME}"
+            path="${path//\*/seed}"
+            mkdir -p "$(dirname "$path")"
+            if [[ "$path" == *.plist ]]; then
+              touch "$path"
+            else
+              mkdir -p "$path"
+            fi
+            printf '%s\n' "$path" >> "$RUNNER_TEMP/zap-seeded"
+          done < "$RUNNER_TEMP/zap-trash"
+          count="$(wc -l < "$RUNNER_TEMP/zap-seeded" | tr -d ' ')"
+          if [[ "$count" -eq 0 ]]; then
+            echo "::error::the cask declares no zap trash paths"
+            exit 1
+          fi
+          echo "Seeded $count zap paths."
+
+      - name: Uninstall cask with zap
+        shell: bash
+        run: brew uninstall --zap --cask "$CASK"
+
+      - name: Check app and zap paths are gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          left=0
+          if [[ -e "$APP" || -L "$APP" ]]; then
+            echo "::error::$APP is still installed"
+            left=1
+          fi
+          while IFS= read -r path; do
+            if [[ -e "$path" || -L "$path" ]]; then
+              echo "::error::zap left $path"
+              left=1
+            fi
+          done < "$RUNNER_TEMP/zap-seeded"
+          exit "$left"
