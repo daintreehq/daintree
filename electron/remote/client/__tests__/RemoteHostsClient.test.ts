@@ -17,6 +17,7 @@ import type {
 import type { IpcContext } from "../../../ipc/types.js";
 import type { RemoteRouter } from "../../../ipc/endpoint.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
+import { FIXTURE_KEYS } from "../../host/__tests__/sshKeyFixtures.js";
 import type { RemoteHostManager } from "../RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "../RemoteHostsClient.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
@@ -214,6 +215,97 @@ describe("RemoteHostsClient", () => {
     registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
     await watched.update({ hostId: "studio-02", name: "studio two" });
     expect(letGo).toHaveLength(3);
+  });
+
+  it("reads a connected host's SSH host keys, keeping complete readings and never dialling", async () => {
+    const FIXTURE = { A: "ed25519", B: "ecdsa", C: "rsa", D: "ed25519" } as const;
+    const fp = (c: keyof typeof FIXTURE) => FIXTURE_KEYS[FIXTURE[c]].fingerprint;
+    const answer = (c: keyof typeof FIXTURE, complete = true) => {
+      const [type, blob] = FIXTURE_KEYS[FIXTURE[c]].line.split(" ") as [string, string];
+      return {
+        status: "reading" as const,
+        complete,
+        truncated: false,
+        listeners: [
+          {
+            listenerId: "main",
+            pid: 7,
+            complete,
+            gaps: complete ? [] : ["timed-out" as const],
+            configFile: null,
+            listenAddresses: ["0.0.0.0:22"],
+            keys: [
+              {
+                outcome: "read" as const,
+                hostKeyPath: "/etc/ssh/k",
+                publicKeyPath: "/etc/ssh/k.pub",
+                type,
+                publicKey: `${type} ${blob}`,
+                fingerprint: fp(c),
+              },
+            ],
+          },
+        ],
+      };
+    };
+    await expect(client.readSshHostKeys({ hostId: "studio-01" })).resolves.toEqual({
+      outcome: { status: "not-connected" },
+      baselines: [],
+    });
+    expect(manager.connect).not.toHaveBeenCalled();
+
+    const read = vi.fn();
+    Object.assign(manager.connect("studio-01"), { readSshHostKeys: read });
+    manager.connect.mockClear();
+    read.mockResolvedValueOnce(answer("A"));
+    const first = await client.readSshHostKeys({ hostId: "studio-01" });
+    expect(first.baselines.map((b) => b.keys[0]!.fingerprint)).toEqual([fp("A")]);
+
+    read.mockResolvedValueOnce(answer("B", false));
+    const partial = await client.readSshHostKeys({ hostId: "studio-01" });
+    expect(partial.baselines).toEqual(first.baselines);
+
+    read.mockRejectedValueOnce(new Error("link dropped"));
+    const failed = await client.readSshHostKeys({ hostId: "studio-01" });
+    expect(failed.outcome.status).toBe("failed");
+    expect(failed.baselines).toEqual(first.baselines);
+
+    read.mockResolvedValueOnce(null);
+    expect((await client.readSshHostKeys({ hostId: "studio-01" })).outcome).toEqual({
+      status: "host-outdated",
+    });
+
+    read.mockResolvedValueOnce(answer("C"));
+    const [changed] = (await client.readSshHostKeys({ hostId: "studio-01" })).baselines;
+    expect(changed!.change?.previous.map((k) => k.fingerprint)).toEqual([fp("A")]);
+    expect(manager.connect).not.toHaveBeenCalled();
+
+    // Two windows reading at once share one read and its commit.
+    let land: (value: unknown) => void = () => {};
+    read.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const one = client.readSshHostKeys({ hostId: "studio-01" });
+    const two = client.readSshHostKeys({ hostId: "studio-01" });
+    land(answer("C"));
+    expect(await two).toEqual(await one);
+    expect(read).toHaveBeenCalledTimes(6);
+
+    // A reply landing as its link drops keeps nothing.
+    const kept = registry.sshHostKeyBaselines("studio-01");
+    read.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const dropped = client.readSshHostKeys({ hostId: "studio-01" });
+    await manager.disconnect("studio-01");
+    land(answer("D"));
+    expect((await dropped).outcome).toEqual({ status: "not-connected" });
+    expect(registry.sshHostKeyBaselines("studio-01")).toEqual(kept);
+    Object.assign(manager.connect("studio-01"), { readSshHostKeys: read });
+
+    // A reply that lands after the host was pointed elsewhere keeps and shows nothing of it.
+    read.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const late = client.readSshHostKeys({ hostId: "studio-01" });
+    registry.update({ hostId: "studio-01", connection: { kind: "ssh", target: "other.example" } });
+    land(answer("D"));
+    expect(await late).toEqual({ outcome: { status: "not-connected" }, baselines: [] });
+    expect(registry.sshHostKeyBaselines("studio-01")).toEqual([]);
   });
 
   it("reports this machine for a window that never attached anywhere", () => {

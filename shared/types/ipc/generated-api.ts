@@ -2158,6 +2158,9 @@ export interface GeneratedElectronAPI {
     probe(
       ...args: IpcInvokeMap["remote-hosts:probe"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:probe"]["result"]>;
+    readSshHostKeys(
+      ...args: IpcInvokeMap["remote-hosts:read-ssh-host-keys"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:read-ssh-host-keys"]["result"]>;
     resetClipboardGrants(
       ...args: IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["result"]>;

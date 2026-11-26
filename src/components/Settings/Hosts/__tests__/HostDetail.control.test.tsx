@@ -6,6 +6,7 @@ import type { HostListEntry } from "@shared/types/remoteHosts";
 const client = vi.hoisted(() => ({
   update: vi.fn(async (payload: unknown) => payload),
   listClipboardGrants: vi.fn(async () => []),
+  readSshHostKeys: vi.fn(async () => ({ outcome: { status: "not-connected" }, baselines: [] })),
   listPluginViewConsents: vi.fn(async () => []),
   resetClipboardGrants: vi.fn(async () => undefined),
 }));

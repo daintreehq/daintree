@@ -1014,6 +1014,14 @@ export interface StoreSchema {
     retiredIds?: string[];
     /** Host id → when a window last landed there; "local" is this machine. */
     lastUsed?: Record<string, number>;
+    /** Host id → the last complete SSH host-key reading per listener (#18259). */
+    sshHostKeys?: Record<
+      string,
+      {
+        connection: import("../shared/types/remoteHosts.js").HostConnection;
+        listeners: import("../shared/types/ipc/remoteHosts.js").HostSshListenerBaseline[];
+      }
+    >;
   };
   /**
    * Cloud accounts (never their keys, which live in the keychain-sealed

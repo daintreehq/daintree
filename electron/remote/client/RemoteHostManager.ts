@@ -34,11 +34,13 @@ import {
   HostProjectListSchema,
   LinkMethod,
   ProjectDescriptionSchema,
+  SshHostKeysAnswerSchema,
   type EndpointReconcilePayload,
   type EndpointResyncReason,
   type HostInfo,
   type HostProjectList,
   type ProjectDescription,
+  type SshHostKeysAnswer,
 } from "../host/linkMethods.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import {
@@ -172,6 +174,12 @@ function notifyEndpointOpened(
  * local view that has called through it), and routing of the host's events
  * back to those views.
  */
+/**
+ * How long a host gets to read its SSH host keys: past the 6 s it holds
+ * itself to, so its own `timed-out` arrives first.
+ */
+export const HOST_SSH_HOST_KEYS_TIMEOUT_MS = 10_000;
+
 /** How long a host gets to list its projects before the listing counts as failed. */
 export const HOST_PROJECT_LIST_TIMEOUT_MS = 8_000;
 
@@ -617,6 +625,40 @@ export class HostConnection {
       throw new AppError({
         code: "INTERNAL",
         message: `Host ${this.hostId} sent an invalid project list`,
+      });
+    }
+    return parsed.data;
+  }
+
+  /**
+   * The SSH host public keys the host reads on its own machine (#18257), or
+   * null from a host whose build can't. Rejects while it can't be reached.
+   */
+  async readSshHostKeys(): Promise<SshHostKeysAnswer | null> {
+    const session = this.session;
+    if (this.unavailableEnvelope() || !session) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${this.hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
+    let answer: unknown;
+    try {
+      answer = await session.call(LinkMethod.SSH_HOST_KEYS, null, {
+        timeoutMs: HOST_SSH_HOST_KEYS_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "UNSUPPORTED") return null;
+      throw error;
+    }
+    const parsed = SshHostKeysAnswerSchema.safeParse(answer);
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${this.hostId} sent an invalid SSH host-key reading`,
+        userMessage: "The host's answer couldn't be read.",
       });
     }
     return parsed.data;

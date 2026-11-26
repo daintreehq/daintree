@@ -1810,6 +1810,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_CANCEL_INSTALL: "remote-hosts:cancel-install",
   REMOTE_HOSTS_START_HOST_MODE: "remote-hosts:start-host-mode",
   REMOTE_HOSTS_LIST_HOST_PROJECTS: "remote-hosts:list-host-projects",
+  REMOTE_HOSTS_READ_SSH_HOST_KEYS: "remote-hosts:read-ssh-host-keys",
   REMOTE_HOSTS_LIST_CLIPBOARD_GRANTS: "remote-hosts:list-clipboard-grants",
   REMOTE_HOSTS_RESET_CLIPBOARD_GRANTS: "remote-hosts:reset-clipboard-grants",
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",

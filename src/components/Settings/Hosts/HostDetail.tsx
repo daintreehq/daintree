@@ -30,7 +30,11 @@ import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { CloudMachineSection } from "./CloudMachineSection";
 import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
-import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
+import {
+  canDeleteMachines,
+  cloudProviderFor,
+  cloudProviderName,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
 import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
 import { HostRootCommand } from "./HostCommand";
@@ -48,8 +52,10 @@ import {
   platformLabel,
   isLoginRefused,
   removeHostOutcome,
+  sshKeyTrustText,
   STARTS_ON_CONNECT_COVERAGE,
 } from "./hostLabels";
+import { HostSshKeysSection } from "./HostSshKeysSection";
 import { SshSignInDialog } from "./SshSignInDialog";
 import { HostAgentSignInDialog } from "./HostAgentSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
@@ -551,6 +557,20 @@ export function HostDetail({
       </SettingsSection>
 
       {sshTarget !== null && <HostWakeSetup descriptor={descriptor} />}
+
+      <HostSshKeysSection
+        hostId={descriptor.id}
+        hostName={hostName}
+        connected={connected}
+        connectionKey={connectionNow}
+        pinnedFingerprint={cloud?.hostKeyFingerprint ?? null}
+        trust={sshKeyTrustText({
+          connectionKind: descriptor.connection.kind,
+          providerName: cloud ? cloudProviderName(cloudProvider, cloud) : null,
+          sshTrust: cloudProvider?.capabilities.sshTrust ?? null,
+          pinnedFingerprint: cloud?.hostKeyFingerprint ?? null,
+        })}
+      />
 
       <HostSessionsSection
         hostId={descriptor.id}

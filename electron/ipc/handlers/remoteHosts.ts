@@ -28,6 +28,7 @@ import type {
   HostSetupTarget,
   StartHostModeResult,
   HostProjectSummary,
+  HostSshHostKeys,
   InstallHostPayload,
   ListHostProjectsPayload,
   InstallHostResult,
@@ -256,6 +257,11 @@ export const remoteHostsNamespace = defineIpcNamespace({
         if (typeof hostId === "string" && isLocalHostId(hostId)) return listLocalProjects();
         return requireRemoteService("remoteHostsClient").listHostProjects(payload);
       }
+    ),
+    readSshHostKeys: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.readSshHostKeys,
+      async (payload: ListHostProjectsPayload): Promise<HostSshHostKeys> =>
+        requireRemoteService("remoteHostsClient").readSshHostKeys(payload)
     ),
     // This machine's own answers about a host's plugins and its clipboard.
     listClipboardGrants: op(

@@ -13,6 +13,7 @@ const { client, cloud } = vi.hoisted(() => ({
     forget: vi.fn(async () => undefined),
     checkAgentForwarding: vi.fn(async () => ({ localAgent: true })),
     listClipboardGrants: vi.fn(async () => []),
+    readSshHostKeys: vi.fn(async () => ({ outcome: { status: "not-connected" }, baselines: [] })),
     listPluginViewConsents: vi.fn(async () => []),
     resetClipboardGrants: vi.fn(async () => undefined),
   },

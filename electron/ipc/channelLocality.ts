@@ -1195,6 +1195,7 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:cancel-install": "shell",
   "remote-hosts:start-host-mode": "shell",
   "remote-hosts:list-host-projects": "shell",
+  "remote-hosts:read-ssh-host-keys": "shell",
   "remote-hosts:list-clipboard-grants": "shell",
   "remote-hosts:reset-clipboard-grants": "shell",
   "remote-hosts:list-plugin-view-consents": "shell",

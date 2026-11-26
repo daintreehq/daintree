@@ -4294,6 +4294,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").HostSetupTarget];
     result: import("./remoteHosts.js").HostProbeResult;
   };
+  "remote-hosts:read-ssh-host-keys": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").HostSshHostKeys;
+  };
   "remote-hosts:reset-clipboard-grants": {
     args: [payload: import("./remoteHosts.js").ResetClipboardGrantsPayload];
     result: void;
