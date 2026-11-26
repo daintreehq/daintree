@@ -1577,6 +1577,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
       hourlyDollars: 0.9,
+      termsProblem: null,
     });
     // Choosing it again answers with the machine it leased, sending nothing.
     expect(await recovering.offerCreate.leaseOffer(account, order.id, offer!.id)).toMatchObject({
@@ -1851,6 +1852,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: raced.order.id, machine: "deleted" }),
       hourlyDollars: 0.0006,
+      termsProblem: null,
     });
     expect(sent(raced.fake, "DELETE", `/deployments/${raced.dseq}`)).toHaveLength(1);
 
@@ -2222,8 +2224,10 @@ describe("AkashProvider orders and machines", () => {
     for (const swap of [
       { bseq: 1, price: "3000" },
       { bseq: 2, price: "3000" },
-      // Another bid at the same price is still another bid.
+      // Another bid at the same price is still another bid, and a lease that doesn't say which
+      // bid it is can't be taken for the one chosen.
       { bseq: 2, price: "1000" },
+      { bseq: undefined as unknown as number, price: "1000" },
     ]) {
       const { fake, account, order, dseq, deployment, fresh } = await placed();
       fake.bid(dseq, "akash1p", "1000");
@@ -2236,9 +2240,11 @@ describe("AkashProvider orders and machines", () => {
       deployment.leases.push({ ...liveLease(fake, "akash1p"), ...swap, forwarded: null });
       const machine = await fresh().offerCreate.leaseOffer(account, order.id, offer!.id);
       // 600 blocks an hour, at a millionth of a dollar a uact.
-      expect(machine.machine).toBe("error");
       expect(machine.leaseHourlyDollars).toBeCloseTo((Number(swap.price) * 600) / 1e6, 12);
-      expect(machine.error).toMatch(/replaced its offer/);
+      if (swap.bseq !== undefined) {
+        expect(machine.machine).toBe("error");
+        expect(machine.leaseTermsProblem).toMatch(/replaced its offer/);
+      }
       expect(sent(fake, "POST", "/leases")).toHaveLength(0);
       expect(fake.manifestSends).toBe(0);
     }
@@ -2258,6 +2264,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
       hourlyDollars: null,
+      termsProblem: null,
     });
     deployment.leases[1] = { ...liveLease(fake), price: "0" };
     expect(await provider.offerCreate.closeOrder(account, order.id)).toMatchObject({
@@ -2281,21 +2288,39 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       hourlyDollars: 1.8,
       resource: { resourceId: order.id, machine: "error" },
+      termsProblem: expect.stringMatching(
+        /replaced its offer as it was leased: the lease is at \$1\.8000 an hour/
+      ),
     });
-    expect(found.kind === "leased" && found.resource.error).toMatch(/replaced its offer/);
     // Leased as it was sent, it runs; with no offer sent, it is answered as it is.
     deployment.leases[0]!.price = "1000";
-    expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
-      resource: { machine: "running", error: null },
-    });
+    const clean = { resource: { machine: "running", error: null }, termsProblem: null };
+    expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject(
+      clean
+    );
     deployment.leases[0]!.price = "3000";
-    expect(await provider.offerCreate.closeOrder(account, order.id)).toMatchObject({
-      resource: { machine: "running", error: null },
-    });
-    // Leased from another bidder than the offer sent: not the terms chosen either.
-    deployment.leases[0]!.provider = "akash1other";
+    expect(await provider.offerCreate.closeOrder(account, order.id)).toMatchObject(clean);
+    // Leased from another bidder at the same price, or another of its bids: not the terms chosen.
+    deployment.leases[0] = { ...liveLease(fake, "akash1other"), price: "1000" };
     expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
       resource: { machine: "error" },
+      termsProblem: expect.any(String),
+    });
+    deployment.leases[0] = { ...liveLease(fake, "akash1p"), price: "1000", bseq: 2 };
+    expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
+      termsProblem: expect.any(String),
+    });
+    // An ended lease of the offer sent says nothing of the one that runs now, at other terms.
+    deployment.leases[0] = {
+      ...liveLease(fake, "akash1p"),
+      price: "1000",
+      state: "closed",
+      createdHeight: 1,
+    };
+    deployment.leases.push({ ...liveLease(fake, "akash1other"), price: "5000" });
+    expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
+      hourlyDollars: 3,
+      termsProblem: expect.stringMatching(/\$3\.0000 an hour/),
     });
   });
 

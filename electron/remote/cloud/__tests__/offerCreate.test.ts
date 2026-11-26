@@ -255,6 +255,7 @@ class FakeOffers {
           machine: "error" as const,
           error: "The provider replaced its offer as it was leased.",
           leaseHourlyDollars: 1.8,
+          leaseTermsProblem: "The provider replaced its offer as it was leased.",
         };
       }
       return leased;
@@ -270,14 +271,9 @@ class FakeOffers {
         const swapped = sentOfferId !== undefined && order.swappedFrom === sentOfferId;
         return {
           kind: "leased" as const,
-          resource: swapped
-            ? {
-                ...order.machine!,
-                machine: "error" as const,
-                error: "The provider replaced its offer as it was leased.",
-              }
-            : order.machine!,
+          resource: order.machine!,
           hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
+          termsProblem: swapped ? "The provider replaced its offer as it was leased." : null,
         };
       }
       if (order) order.state = "closed";
@@ -1397,7 +1393,10 @@ describe("a leased machine's price (#18233)", () => {
     const failed = {
       resourceId,
       hourlyDollars: 1.8,
-      lastError: { code: "failed", message: "The provider replaced its offer as it was leased." },
+      lastError: {
+        code: "lease-terms",
+        message: "The provider replaced its offer as it was leased.",
+      },
     };
     expect(statusOf(env, hostId)).toMatchObject(failed);
     // Written with the machine, so no restart finds one without the other.
@@ -1420,14 +1419,20 @@ describe("a leased machine's price (#18233)", () => {
     const hostId = await env.create();
     const choice = await env.awaitChoice();
     env.api.plans.lease.push("swap-lost");
-    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.6).catch(() => {});
+    // Accepted once the machine is bound, and stopped there.
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.6)
+    ).resolves.toBeUndefined();
     await env.settled();
     // The close was told the offer whose lease went out, and found the lease on other terms.
     expect(env.api.closeOrder).toHaveBeenCalledWith(expect.anything(), choice.order.id, "a");
     const failed = {
       resourceId: `lease-${choice.order.id}`,
       hourlyDollars: 1.8,
-      lastError: { code: "failed", message: "The provider replaced its offer as it was leased." },
+      lastError: {
+        code: "lease-terms",
+        message: "The provider replaced its offer as it was leased.",
+      },
     };
     expect(statusOf(env, hostId)).toMatchObject(failed);
     expect(env.store.createOrders()).toEqual([]);
@@ -1455,8 +1460,9 @@ describe("a leased machine's price (#18233)", () => {
     expect(statusOf(env, hostId)).toMatchObject({
       resourceId: `lease-${choice.order.id}`,
       hourlyDollars: 1.8,
-      lastError: { code: "failed" },
+      lastError: { code: "lease-terms" },
     });
+    expect(env.store.createOrders()).toEqual([]);
   });
 
   it.each([0.25, 0])(

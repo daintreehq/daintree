@@ -669,7 +669,7 @@ function machineOf(binding: StoredCloudBinding): CloudMachineState {
  * lost placement found `open` again, waiting on a choice; or one still
  * `pending`, unseen but inside its settle window.
  */
-/** `failed`: the lease it bound came back failed (leased on terms nobody chose), and says so. */
+/** `failed`: the lease it bound is on terms nobody chose, and its host says so. */
 type OrderSettlement =
   | { kind: "closed" }
   | { kind: "leased"; bound: boolean; failed?: boolean }
@@ -677,12 +677,12 @@ type OrderSettlement =
   | { kind: "pending" };
 
 /**
- * What went wrong with a machine a lease made, as its provider said, to be
- * kept on the host it binds to; null when it runs as it should.
+ * A lease on other terms than the offer chosen, as its provider said, to be
+ * kept on the host it binds to until someone keeps or deletes the machine;
+ * null for a lease on the terms chosen.
  */
-function leaseFailure(resource: ProviderResource, at: number): CloudHostError | null {
-  if (resource.machine !== "error") return null;
-  return { code: "failed", message: resource.error ?? "The machine failed as it was leased.", at };
+function leaseFailure(problem: string | null | undefined, at: number): CloudHostError | null {
+  return problem ? { code: "lease-terms", message: problem, at } : null;
 }
 
 /** A machine bound with what went wrong with it: setup stops here, and says why. */
@@ -2022,7 +2022,7 @@ export class CloudHostLifecycle {
     }
     const bound = this.deps.store.binding(bindingId);
     // Bound meanwhile by the keeper's close, failed: the create stops on that, never past it.
-    if (bound?.resourceId && bound.lastError?.code === "failed") {
+    if (bound?.resourceId && bound.lastError?.code === "lease-terms") {
       throw stoppedOnFailure(bound.lastError.message);
     }
     return bound?.resourceId != null;
@@ -2127,7 +2127,7 @@ export class CloudHostLifecycle {
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
-        const failure = leaseFailure(outcome.resource, this.now());
+        const failure = leaseFailure(outcome.termsProblem, this.now());
         if (
           this.adoptLease(
             order,
@@ -2578,7 +2578,7 @@ export class CloudHostLifecycle {
         : reportedRate(resource.leaseHourlyDollars);
     // A machine the provider says failed as it was leased stops here, and says why, until the
     // person deals with it: a later look that finds it running doesn't take that back.
-    const failure = leaseFailure(resource, this.now());
+    const failure = leaseFailure(resource.leaseTermsProblem, this.now());
     const bound = this.adoptLease(marked, provider, resource, rate, failure);
     this.retireOrder(orderRecordId);
     if (!bound) {

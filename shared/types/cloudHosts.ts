@@ -630,6 +630,12 @@ export type CloudHostErrorCode =
   | "lifetime-renewal"
   /** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
   | "refused"
+  /**
+   * Leased on other terms than the offer chosen (its bidder swapped it as it
+   * was leased): the machine runs, at a rate nobody chose, and setup waits
+   * until someone keeps or deletes it.
+   */
+  | "lease-terms"
   | "failed";
 
 /** Every code, so a code that arrives as data (from a plugin) can be checked. */
@@ -649,6 +655,7 @@ const CLOUD_HOST_ERROR_CODES = {
   unsupported: true,
   "lifetime-renewal": true,
   refused: true,
+  "lease-terms": true,
   failed: true,
 } as const satisfies Record<CloudHostErrorCode, true>;
 

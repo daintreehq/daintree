@@ -273,7 +273,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     status?.machine === "running" &&
     status.operation === null &&
     !status.pendingCreate &&
-    status.lastError?.code !== "failed";
+    status.lastError?.code !== "lease-terms";
   // A stopped import only gets here once someone starts it; a running one at once.
   const handedOver = useRef(false);
   useEffect(() => {

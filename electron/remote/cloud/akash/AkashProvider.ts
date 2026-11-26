@@ -148,7 +148,7 @@ const INVALID: LeaseNote = {
 };
 
 /** The machine with what went wrong said, its state failed only while it still runs. */
-function withNote(resource: ProviderResource, note: LeaseNote | null): ProviderResource {
+function withNote<T extends ProviderResource>(resource: T, note: LeaseNote | null): T {
   if (!note) return resource;
   return {
     ...resource,
@@ -206,11 +206,13 @@ function viewOf(raw: unknown): DeploymentView {
 
 /**
  * The create that made a deployment, as far as the view says: the mark its
- * stored SDL carries, else the one at the end of its name. Null for one no
- * create of Daintree's made, or renamed out of its mark with no SDL to read.
+ * stored SDL carries, mark or none, since a name can be pasted from another;
+ * the one at the end of its name only where there is no stored SDL (a list
+ * row). Null for one no create of Daintree's made.
  */
 function markOf(view: DeploymentView): AkashMark | null {
-  return view.stored ? view.stored : nameMarkOf(view);
+  if (view.stored !== undefined) return view.stored || null;
+  return nameMarkOf(view);
 }
 
 /** The mark at the end of a deployment's name alone, which a rename can change. */
@@ -1183,7 +1185,8 @@ export class AkashProvider implements CloudProvider {
     if (!lease) return resource;
     const machine = { ...resource, leaseHourlyDollars: leaseHourly(lease) };
     if (!swapped(lease, offer)) return machine;
-    return withNote(machine, swapNote(lease));
+    const note = swapNote(lease);
+    return { ...withNote(machine, note), leaseTermsProblem: note.problem };
   }
 
   /**
@@ -1265,12 +1268,17 @@ export class AkashProvider implements CloudProvider {
     } catch {
       // An id this build can't read says nothing of the terms: the lease is answered as it is.
     }
-    const chosen = sent && view.leases.find((entry) => tupleOf(entry.id) === tupleOf(sent));
-    const note = !sent || !lease ? null : chosen ? (swapped(chosen, sent) ? chosen : null) : lease;
+    // Judged by the lease that says what the machine is, the one priced: never an ended one.
+    const off =
+      sent !== null &&
+      lease !== null &&
+      (tupleOf(lease.id) !== tupleOf(sent) || replaced(lease, sent) || !quoted(lease.price, sent));
+    const note = off ? swapNote(lease!) : null;
     return {
       kind: "leased",
-      resource: note ? withNote(resource, swapNote(note)) : resource,
+      resource: note ? withNote(resource, note) : resource,
       hourlyDollars: leaseHourly(lease),
+      termsProblem: note?.problem ?? null,
     };
   }
 
@@ -1501,12 +1509,11 @@ export class AkashProvider implements CloudProvider {
    * `carries` what is looked for, each checked against the SDL Console stored
    * for it, which a rename never touches. The name's mark is searched for
    * first. When that finds none, every deployment of the project is read,
-   * and the stored SDL of each that may be the one: a name with no mark, a
-   * name whose mark another deployment's name repeats (pasted from it), and a
-   * name that carries what is looked for after all (put back meanwhile). A
-   * scan that can't finish refuses rather than answer with nothing, so
-   * whatever the caller is recovering is kept. Only a miss scans: a create
-   * whose search finds one of its deployments isn't looked for further.
+   * and the stored SDL of each that `eligible` lets through, whatever its
+   * name says: a rename can take the mark off, or paste another's on. A scan
+   * that can't finish refuses rather than answer with nothing, so whatever
+   * the caller is recovering is kept. Only a miss scans: a create whose
+   * search finds one of its deployments isn't looked for further.
    */
   private async marked(
     client: AkashConsoleClient,
@@ -1524,17 +1531,7 @@ export class AkashProvider implements CloudProvider {
     const all = first.plain
       ? first.views
       : (await this.everyDeployment(client, ctx, state, undefined)).views;
-    const keys = new Map<string, number>();
-    for (const view of all) {
-      const key = view.name.createKey;
-      if (key !== null) keys.set(key, (keys.get(key) ?? 0) + 1);
-    }
-    const candidates = all.filter((view) => {
-      if (!eligible(view)) return false;
-      const key = view.name.createKey;
-      return key === null || keys.get(key)! > 1 || carries(nameMarkOf(view));
-    });
-    return this.withStoredMarks(client, ctx, candidates, wanted);
+    return this.withStoredMarks(client, ctx, all.filter(eligible), wanted);
   }
 
   /**

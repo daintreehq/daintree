@@ -1345,18 +1345,19 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
         pendingCreate: null,
         resourceId: "dseq-1",
         machine: "running",
-        lastError: { code: "failed", message: swapped, at: 1 },
+        lastError: { code: "lease-terms", message: swapped, at: 1 },
       }),
     ]);
     expect(screen.getByText(swapped)).toBeTruthy();
     expect(onReady).not.toHaveBeenCalled();
-    // A poll that missed on the way up holds nothing back once the machine runs.
+    // Any other error a running machine has got past (a missed poll, a slow start, a failed
+    // look) holds nothing back.
     show([
       hostStatus({
         pendingCreate: null,
         resourceId: "dseq-1",
         machine: "running",
-        lastError: { code: "rate-limited", message: "Try again in a few minutes.", at: 1 },
+        lastError: { code: "failed", message: "It didn't answer.", at: 1 },
       }),
     ]);
     expect(onReady).toHaveBeenCalledTimes(1);
