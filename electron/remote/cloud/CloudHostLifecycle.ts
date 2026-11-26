@@ -682,7 +682,7 @@ type OrderSettlement =
  * null for a lease on the terms chosen.
  */
 function leaseFailure(problem: string | null | undefined, at: number): CloudHostError | null {
-  return problem ? { code: "lease-terms", message: problem, at } : null;
+  return problem ? { code: "lease-problem", message: problem, at } : null;
 }
 
 /** A machine bound with what went wrong with it: setup stops here, and says why. */
@@ -2022,7 +2022,7 @@ export class CloudHostLifecycle {
     }
     const bound = this.deps.store.binding(bindingId);
     // Bound meanwhile by the keeper's close, failed: the create stops on that, never past it.
-    if (bound?.resourceId && bound.lastError?.code === "lease-terms") {
+    if (bound?.resourceId && bound.lastError?.code === "lease-problem") {
       throw stoppedOnFailure(bound.lastError.message);
     }
     return bound?.resourceId != null;
@@ -2127,7 +2127,7 @@ export class CloudHostLifecycle {
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
-        const failure = leaseFailure(outcome.termsProblem, this.now());
+        const failure = leaseFailure(outcome.leaseProblem, this.now());
         if (
           this.adoptLease(
             order,
@@ -2578,7 +2578,7 @@ export class CloudHostLifecycle {
         : reportedRate(resource.leaseHourlyDollars);
     // A machine the provider says failed as it was leased stops here, and says why, until the
     // person deals with it: a later look that finds it running doesn't take that back.
-    const failure = leaseFailure(resource.leaseTermsProblem, this.now());
+    const failure = leaseFailure(resource.leaseProblem, this.now());
     const bound = this.adoptLease(marked, provider, resource, rate, failure);
     this.retireOrder(orderRecordId);
     if (!bound) {

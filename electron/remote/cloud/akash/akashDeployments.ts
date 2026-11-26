@@ -251,8 +251,14 @@ function markOfText(text: string): AkashMark | null {
 function markOfDefinition(definition: unknown): AkashMark | null | undefined {
   const services = (definition as { services?: unknown } | null)?.services;
   if (typeof services !== "object" || services === null) return undefined;
-  const env = (services as Record<string, { env?: unknown } | undefined>)[AKASH_SERVICE]?.env;
-  if (!Array.isArray(env)) return null;
+  const service = (services as Record<string, unknown>)[AKASH_SERVICE];
+  // No service of Daintree's: a deployment Daintree didn't make.
+  if (service === undefined) return null;
+  if (typeof service !== "object" || service === null) return undefined;
+  const env = (service as { env?: unknown }).env;
+  if (env === undefined) return null;
+  // An environment that isn't a list isn't an SDL Daintree reads: never taken for no mark.
+  if (!Array.isArray(env)) return undefined;
   const prefix = `${AKASH_CREATE_MARK_ENV}=`;
   const entries = env.filter(
     (entry): entry is string => typeof entry === "string" && entry.startsWith(prefix)

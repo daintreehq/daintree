@@ -230,6 +230,19 @@ function currentLease(leases: readonly AkashLease[]): AkashLease | null {
   );
 }
 
+/**
+ * The offer's lease, judged by the lease that says what the machine is (the
+ * live one, else the latest); null when that lease is another offer's. An
+ * ended lease of the offer never speaks for a lease that runs now.
+ */
+function takenBy(
+  leases: readonly AkashLease[],
+  offer: { gseq: number; oseq: number; provider: string }
+): AkashLease | null {
+  const lease = currentLease(leases);
+  return lease && tupleOf(lease.id) === tupleOf(offer) ? lease : null;
+}
+
 /** The machine a deployment is; null for an order nobody leased, which is none. */
 function machineOf(
   view: DeploymentView
@@ -998,7 +1011,7 @@ export class AkashProvider implements CloudProvider {
       );
     }
     if (view.leases.length > 0) {
-      const taken = view.leases.find((lease) => tupleOf(lease.id) === tupleOf(offer));
+      const taken = takenBy(view.leases, offer);
       if (!taken) throw otherOfferLeased();
       // The lease is the bid as the chain took it: on other terms, its manifest is never resent.
       if (needsManifest(taken, offer)) return this.sendLease(client, ctx, view, offer);
@@ -1131,10 +1144,7 @@ export class AkashProvider implements CloudProvider {
         null
       );
     }
-    return {
-      view,
-      taken: view.leases.find((lease) => tupleOf(lease.id) === tupleOf(offer)) ?? null,
-    };
+    return { view, taken: takenBy(view.leases, offer) };
   }
 
   /**
@@ -1154,7 +1164,11 @@ export class AkashProvider implements CloudProvider {
     if (taken) {
       // The provider reports it after all: the manifest arrived, whatever an answer said.
       const said = note === UNDELIVERED && taken.status ? null : note;
-      return withNote(await this.leased(client, view, offer, signal), said);
+      const machine = withNote(await this.leased(client, view, offer, signal), said);
+      // A lease whose machine the provider refused stands, and bills, until someone deletes it.
+      return said?.machine === "error"
+        ? { ...machine, leaseProblem: machine.leaseProblem ?? said.problem }
+        : machine;
     }
     if (view.leases.length > 0) throw otherOfferLeased();
     // Nothing shows: a refusal the Console named stands, unless it said the lease was made.
@@ -1181,12 +1195,12 @@ export class AkashProvider implements CloudProvider {
     signal: AbortSignal | undefined
   ): Promise<LeasedOffer> {
     const resource = await this.resourceOf(client, view, signal);
-    const lease = view.leases.find((entry) => tupleOf(entry.id) === tupleOf(offer));
+    const lease = takenBy(view.leases, offer);
     if (!lease) return resource;
     const machine = { ...resource, leaseHourlyDollars: leaseHourly(lease) };
     if (!swapped(lease, offer)) return machine;
     const note = swapNote(lease);
-    return { ...withNote(machine, note), leaseTermsProblem: note.problem };
+    return { ...withNote(machine, note), leaseProblem: note.problem };
   }
 
   /**
@@ -1278,7 +1292,7 @@ export class AkashProvider implements CloudProvider {
       kind: "leased",
       resource: note ? withNote(resource, note) : resource,
       hourlyDollars: leaseHourly(lease),
-      termsProblem: note?.problem ?? null,
+      leaseProblem: note?.problem ?? null,
     };
   }
 

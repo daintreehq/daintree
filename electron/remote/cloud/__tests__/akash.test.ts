@@ -1202,6 +1202,12 @@ describe("Akash deployment names", () => {
     expect(akashStoredMark({ definition: null, sdl: "{ not yaml" })).toBe(false);
     expect(akashStoredMark({ definition: null, sdl: "just text" })).toBe(false);
     expect(akashStoredMark({ definition: { version: "2.0" }, sdl: "" })).toBe(false);
+    // An environment that isn't a list is no word either way: the YAML speaks, or nothing does.
+    const listless = { services: { daintree: { env: { DAINTREE_CREATE_MARK: MARK } } } };
+    expect(akashStoredMark({ definition: listless, sdl })).toEqual(mark);
+    expect(akashStoredMark({ definition: listless, sdl: "" })).toBe(false);
+    // A deployment with no service of Daintree's carries no mark.
+    expect(akashStoredMark({ definition: { services: { web: { env } } } })).toBeNull();
   });
 
   it("carries an offer's quoted price in its id, one way however the amount is written", () => {
@@ -1577,7 +1583,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
       hourlyDollars: 0.9,
-      termsProblem: null,
+      leaseProblem: null,
     });
     // Choosing it again answers with the machine it leased, sending nothing.
     expect(await recovering.offerCreate.leaseOffer(account, order.id, offer!.id)).toMatchObject({
@@ -1790,10 +1796,12 @@ describe("AkashProvider orders and machines", () => {
       fake.manifestFailures = failuresFirst;
       fake.manifestInvalid = true;
       const refused = await provider.offerCreate.leaseOffer(account, order.id, strict!.id);
+      // It stands, and bills, until someone deletes it: setup stops on it.
       expect(refused).toMatchObject({
         resourceId: order.id,
         machine: "error",
         error: expect.stringMatching(/invalid/),
+        leaseProblem: expect.stringMatching(/invalid/),
       });
       expect(fake.manifestSends).toBe(failuresFirst + 1);
       expect(deployment.leases).toHaveLength(1);
@@ -1852,7 +1860,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: raced.order.id, machine: "deleted" }),
       hourlyDollars: 0.0006,
-      termsProblem: null,
+      leaseProblem: null,
     });
     expect(sent(raced.fake, "DELETE", `/deployments/${raced.dseq}`)).toHaveLength(1);
 
@@ -2243,7 +2251,7 @@ describe("AkashProvider orders and machines", () => {
       expect(machine.leaseHourlyDollars).toBeCloseTo((Number(swap.price) * 600) / 1e6, 12);
       if (swap.bseq !== undefined) {
         expect(machine.machine).toBe("error");
-        expect(machine.leaseTermsProblem).toMatch(/replaced its offer/);
+        expect(machine.leaseProblem).toMatch(/replaced its offer/);
       }
       expect(sent(fake, "POST", "/leases")).toHaveLength(0);
       expect(fake.manifestSends).toBe(0);
@@ -2264,7 +2272,7 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
       hourlyDollars: null,
-      termsProblem: null,
+      leaseProblem: null,
     });
     deployment.leases[1] = { ...liveLease(fake), price: "0" };
     expect(await provider.offerCreate.closeOrder(account, order.id)).toMatchObject({
@@ -2288,13 +2296,13 @@ describe("AkashProvider orders and machines", () => {
       kind: "leased",
       hourlyDollars: 1.8,
       resource: { resourceId: order.id, machine: "error" },
-      termsProblem: expect.stringMatching(
+      leaseProblem: expect.stringMatching(
         /replaced its offer as it was leased: the lease is at \$1\.8000 an hour/
       ),
     });
     // Leased as it was sent, it runs; with no offer sent, it is answered as it is.
     deployment.leases[0]!.price = "1000";
-    const clean = { resource: { machine: "running", error: null }, termsProblem: null };
+    const clean = { resource: { machine: "running", error: null }, leaseProblem: null };
     expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject(
       clean
     );
@@ -2304,11 +2312,11 @@ describe("AkashProvider orders and machines", () => {
     deployment.leases[0] = { ...liveLease(fake, "akash1other"), price: "1000" };
     expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
       resource: { machine: "error" },
-      termsProblem: expect.any(String),
+      leaseProblem: expect.any(String),
     });
     deployment.leases[0] = { ...liveLease(fake, "akash1p"), price: "1000", bseq: 2 };
     expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
-      termsProblem: expect.any(String),
+      leaseProblem: expect.any(String),
     });
     // An ended lease of the offer sent says nothing of the one that runs now, at other terms.
     deployment.leases[0] = {
@@ -2320,8 +2328,22 @@ describe("AkashProvider orders and machines", () => {
     deployment.leases.push({ ...liveLease(fake, "akash1other"), price: "5000" });
     expect(await provider.offerCreate.closeOrder(account, order.id, offer!.id)).toMatchObject({
       hourlyDollars: 3,
-      termsProblem: expect.stringMatching(/\$3\.0000 an hour/),
+      leaseProblem: expect.stringMatching(/\$3\.0000 an hour/),
     });
+  });
+
+  it("judges a lease of the chosen offer by the lease that runs now, never an ended one", async () => {
+    const { fake, account, order, dseq, deployment, fresh } = await placed();
+    fake.bid(dseq, "akash1p", "1000");
+    const [offer] = await fresh().offerCreate.listOffers(account, order.id);
+    // The chosen offer's lease ended; another bidder's runs now.
+    deployment.leases.push(
+      { ...liveLease(fake, "akash1p"), price: "1000", state: "closed", createdHeight: 1 },
+      { ...liveLease(fake, "akash1other"), price: "5000" }
+    );
+    const error = await rejection(fresh().offerCreate.leaseOffer(account, order.id, offer!.id));
+    expect(error).toMatchObject({ kind: "outcome-unknown" });
+    expect(sent(fake, "POST", "/leases")).toHaveLength(0);
   });
 
   it("never takes a deployment for a create's by a mark pasted into its name", async () => {

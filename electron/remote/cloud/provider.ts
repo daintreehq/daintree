@@ -95,7 +95,7 @@ export type GuestPowerOffCheck =
  * leased, with that machine and the rate its lease runs at in dollars per
  * running hour. The rate is the provider's own word, never the rate Daintree
  * asked for: a close may find a lease made elsewhere, at another rate. Null
- * when it can't say, and the machine then shows no price. `termsProblem`
+ * when it can't say, and the machine then shows no price. `leaseProblem`
  * says why the lease isn't on the terms of the offer Daintree sent, when it
  * isn't (see `closeOrder`'s `sentOfferId`).
  */
@@ -105,7 +105,7 @@ export type CloseOrderOutcome =
       kind: "leased";
       resource: ProviderResource;
       hourlyDollars: number | null;
-      termsProblem?: string | null;
+      leaseProblem?: string | null;
     };
 
 /**
@@ -113,13 +113,13 @@ export type CloseOrderOutcome =
  * at in dollars per running hour, as the provider reports it: a bidder can
  * swap its offer as it is leased, so it can differ from the rate chosen.
  * Null when the provider can't price it; left out when the lease always runs
- * at the rate chosen. `leaseTermsProblem` says why the lease isn't on the
- * chosen offer's terms, when it isn't: the machine then stops for the person
- * to keep or delete.
+ * at the rate chosen. `leaseProblem` says what is wrong with a lease that
+ * stands (not on the chosen offer's terms, or its machine refused by the
+ * provider): the machine then stops for the person to keep or delete.
  */
 export type LeasedOffer = ProviderResource & {
   leaseHourlyDollars?: number | null;
-  leaseTermsProblem?: string | null;
+  leaseProblem?: string | null;
 };
 
 /**
@@ -171,7 +171,7 @@ export interface OfferCreate {
    * which only `delete` ends, so a lease whose answer was lost is still bound.
    * `sentOfferId` is the offer whose lease Daintree sent on this order, when
    * it did: a lease found on other terms than that offer's comes back with
-   * `termsProblem` saying so, for the person to keep or delete.
+   * `leaseProblem` saying so, for the person to keep or delete.
    */
   closeOrder(
     credentials: ProviderCredentials,

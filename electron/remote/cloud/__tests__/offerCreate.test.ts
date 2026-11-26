@@ -255,7 +255,7 @@ class FakeOffers {
           machine: "error" as const,
           error: "The provider replaced its offer as it was leased.",
           leaseHourlyDollars: 1.8,
-          leaseTermsProblem: "The provider replaced its offer as it was leased.",
+          leaseProblem: "The provider replaced its offer as it was leased.",
         };
       }
       return leased;
@@ -273,7 +273,7 @@ class FakeOffers {
           kind: "leased" as const,
           resource: order.machine!,
           hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
-          termsProblem: swapped ? "The provider replaced its offer as it was leased." : null,
+          leaseProblem: swapped ? "The provider replaced its offer as it was leased." : null,
         };
       }
       if (order) order.state = "closed";
@@ -1394,7 +1394,7 @@ describe("a leased machine's price (#18233)", () => {
       resourceId,
       hourlyDollars: 1.8,
       lastError: {
-        code: "lease-terms",
+        code: "lease-problem",
         message: "The provider replaced its offer as it was leased.",
       },
     };
@@ -1430,7 +1430,7 @@ describe("a leased machine's price (#18233)", () => {
       resourceId: `lease-${choice.order.id}`,
       hourlyDollars: 1.8,
       lastError: {
-        code: "lease-terms",
+        code: "lease-problem",
         message: "The provider replaced its offer as it was leased.",
       },
     };
@@ -1460,7 +1460,7 @@ describe("a leased machine's price (#18233)", () => {
     expect(statusOf(env, hostId)).toMatchObject({
       resourceId: `lease-${choice.order.id}`,
       hourlyDollars: 1.8,
-      lastError: { code: "lease-terms" },
+      lastError: { code: "lease-problem" },
     });
     expect(env.store.createOrders()).toEqual([]);
   });
