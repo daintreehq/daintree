@@ -337,6 +337,7 @@ describe("CloudProviderRegistry", () => {
       listOffers: vi.fn(),
       leaseOffer: vi.fn(),
       closeOrder: vi.fn(),
+      readOrder: vi.fn(),
     });
     const offerBased = (id = "akash") => {
       const provider = declaring(id, { createMode: "offers" });

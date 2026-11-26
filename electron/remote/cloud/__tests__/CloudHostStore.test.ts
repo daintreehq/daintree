@@ -1042,15 +1042,29 @@ describe("CloudHostStore create orders (#18230)", () => {
     store.removeBinding("cb_abcdefgh12");
     expect(writes).toEqual(["cloudCreateOrders", "cloudHosts"]);
     expect(store.bindings()).toEqual([]);
+    // A lease sent is kept as it was, to be read back before its order is closed (#18251).
     expect(store.createOrders().map((entry) => [entry.id, entry.state, entry.offerId])).toEqual([
-      ["co_1", "close", null],
+      ["co_1", "leasing", "bid-7"],
       ["co_2", "open", null],
       ["co_3", "close", null],
     ]);
-    // A placement whose answer is unknown is still looked for by its key once it closes, and
-    // one whose order is known keeps it to close.
+    // A placement whose answer is unknown is still looked for by its key once it closes.
     expect(store.createOrder("co_3")?.orderIds).toBeNull();
-    expect(store.createOrder("co_1")?.orderIds).toEqual(["dseq-1"]);
+  });
+
+  it("keeps a cancel written while a lease is out, and reads it on no other state", () => {
+    const backend = keyedDisk();
+    const store = new CloudHostStore(backend);
+    store.putCreateOrder(order({ state: "leasing", offerId: "bid-7", cancelled: true }));
+    store.putCreateOrder({ ...order({ id: "co_2", state: "close" }), cancelled: true });
+    const after = new CloudHostStore(backend);
+    expect(after.createOrder("co_1")).toEqual(
+      order({ state: "leasing", offerId: "bid-7", cancelled: true })
+    );
+    expect(after.createOrder("co_2")).toEqual(order({ id: "co_2", state: "close" }));
+    // Written by a build from before it: a lease with no cancel.
+    backend.set("cloudCreateOrders", [{ ...order({ state: "leasing", offerId: "bid-7" }) }]);
+    expect(new CloudHostStore(backend).createOrder("co_1")?.cancelled).toBeUndefined();
   });
 
   it("never acts on an order that doesn't read, and keeps it on disk through every write", () => {

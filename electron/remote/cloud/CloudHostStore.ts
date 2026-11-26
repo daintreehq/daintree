@@ -351,9 +351,16 @@ export interface StoredCreateOrder {
   /**
    * `placing` until the provider answers, `open` while it waits on a choice,
    * `leasing` once the chosen offer's lease is sent, and `close` once nothing
-   * may be leased from it: cancelled, its host removed, or a lease unconfirmed.
+   * may be leased from it: cancelled, its host removed, or a lease turned
+   * down. A lease sent stays `leasing` until its answer, or a read of the
+   * order, says what it came to: a close is never sent while it may land.
    */
   state: "placing" | "open" | "leasing" | "close";
+  /**
+   * While `leasing`: the create was cancelled after the lease was sent, so a
+   * machine it made is deleted once bound, and an order it left open closed.
+   */
+  cancelled?: true;
   /**
    * The provider's ids for it: one once placed, several when a lost answer
    * left more, the ones still to close while closing. Null while the
@@ -835,6 +842,7 @@ function readCreateOrder(raw: unknown): StoredCreateOrder | null {
     placedAt: num(value.placedAt) ?? 0,
     waitingSince: num(value.waitingSince),
     offerId: state === "leasing" ? offerId : null,
+    ...(state === "leasing" && value.cancelled === true ? { cancelled: true as const } : {}),
   };
 }
 
@@ -978,13 +986,13 @@ export class CloudHostStore {
    * Removes the binding and, in the same write, marks every key its machine was
    * given for revoking. Its orders are marked for closing first, in their own
    * key: a crash between the two writes leaves a close to finish, never an
-   * order nothing here names.
+   * order nothing here names. A lease sent stays as it is, to be read back.
    */
   removeBinding(id: string): void {
     this.mutateOrders((orders) =>
       orders.map((entry) => {
         const order = readCreateOrder(entry);
-        return order?.bindingId === id && order.state !== "close"
+        return order?.bindingId === id && order.state !== "close" && order.state !== "leasing"
           ? { ...order, state: "close" as const, offerId: null }
           : entry;
       })
