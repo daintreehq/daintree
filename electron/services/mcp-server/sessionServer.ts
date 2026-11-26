@@ -173,6 +173,7 @@ import {
   HOST_CALL_TOOL,
   HOST_CONTROL_TOOL_IDS,
   HOST_SETTINGS_TOOL,
+  HOST_SSH_HOST_KEYS_TOOL,
   HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
 } from "../../../shared/types/hostControl.js";
@@ -3392,7 +3393,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                     }
                   : actionId === HOST_STATUS_TOOL
                     ? { tier }
-                    : actionId === HOST_START_AGENT_SIGN_IN_TOOL
+                    : actionId === HOST_START_AGENT_SIGN_IN_TOOL ||
+                        actionId === HOST_SSH_HOST_KEYS_TOOL
                       ? { tier, signal: extra.signal }
                       : undefined
                 : undefined;

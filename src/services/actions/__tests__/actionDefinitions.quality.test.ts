@@ -635,7 +635,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // CLI sign-in for the person. It has to say only the person types in, reads
   // and finishes it, and that ok never means it worked. Trimmed twice; in-app
   // only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 28_100;
+  // 28_100 → 28_300 for #18258, measured at 28_268 B (+172 over develop's
+  // 28_096): `host.sshHostKeys`, so an Assistant can read a connected host's
+  // SSH host keys to pin it. It has to say they are read on the host over the
+  // link rather than scanned, and that the answer names the trust that link
+  // rests on. Trimmed once; in-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 28_300;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1727,6 +1732,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.bringBack": { hostId: "h-placeholder" },
       "host.status": { targets: [{ hostId: "h-placeholder", projectId: "p-placeholder" }] },
       "host.startAgentSignIn": { hostId: "h-placeholder", agentId: "claude" },
+      "host.sshHostKeys": { hostId: "h-placeholder" },
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },

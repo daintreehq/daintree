@@ -3,6 +3,7 @@ import {
   HOST_CALL_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_SSH_HOST_KEYS_TOOL,
   HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
@@ -51,7 +52,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * reads `terminal.getStatus` in many projects on many hosts at once, each as
  * `host.call` would read it there (#16191). `host.startAgentSignIn` names a
  * host, never a project, and opens an agent CLI's own sign-in there in the
- * window showing it, for the person to finish (#18197). `mcp.surface` reports its own
+ * window showing it, for the person to finish (#18197). `host.sshHostKeys`
+ * reads one connected host's SSH host public keys over the link, with the
+ * trust that link rests on (#18258). `mcp.surface` reports its own
  * session, `role` included, so it can tell when the `daintree` server it
  * reached took it for something other than the global assistant (#16765).
  */
@@ -63,6 +66,7 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_BRING_BACK_TOOL,
   HOST_STATUS_TOOL,
   HOST_START_AGENT_SIGN_IN_TOOL,
+  HOST_SSH_HOST_KEYS_TOOL,
   "mcp.surface",
 ]);
 

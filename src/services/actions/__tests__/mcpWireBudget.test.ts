@@ -1144,7 +1144,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 206_352): `host.startAgentSignIn`, in-app only. Half of it is the closed
   // outcome schema every host tool answers in; the description and the one
   // field description were trimmed twice first.
-  const MAX_COHORT_PAYLOAD_BYTES = 207_200;
+  // 207_200 → 210_100 for #18258, measured at 210_004 B (+2_806 over develop's
+  // 207_198): `host.sshHostKeys`, in-app only. Most of it is the closed output
+  // schema, which carries each sshd listener's keys, the gaps the Host named
+  // and the trust behind the link; the Host's four no-keys answers share one
+  // arm, output-only bounds and patterns were dropped, and the description was
+  // trimmed first.
+  const MAX_COHORT_PAYLOAD_BYTES = 210_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

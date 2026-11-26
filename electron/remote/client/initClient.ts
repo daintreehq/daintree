@@ -119,6 +119,7 @@ import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 import { HostBringBackService } from "./HostBringBackService.js";
 import { SshSignInService } from "./SshSignInService.js";
+import { HostSshHostKeysService } from "./HostSshHostKeysService.js";
 import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
 import { markEnteringFullScreen } from "../../window/fullScreenEntry.js";
 
@@ -128,6 +129,7 @@ declare module "../runtime.js" {
     hostSetup: HostSetupService;
     hostBringBack: HostBringBackService;
     sshSignIn: SshSignInService;
+    hostSshHostKeys: HostSshHostKeysService;
   }
 }
 
@@ -932,7 +934,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
             // update's reconnect) would hold the old distro after its release.
             { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
             ensureRunning,
-            cloudTransports.transportFor
+            (bindingId, ensure) => cloudTransports.transportFor(bindingId, ensure, descriptor.id)
           )
       );
     },
@@ -1221,6 +1223,14 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopMcpServerOnConnect = manager.onSessionOpened((hostId, session) =>
     mcpServerOnConnect.sessionOpened(hostId, session)
   );
+  // Told of every session from the first, so each reading names what its own dial rested on.
+  const sshHostKeys = new HostSshHostKeysService({
+    connectionOf: (hostId) => registry.get(hostId)?.connection ?? null,
+    sessionOf: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    hold: (hostId) => manager.hold(hostId),
+    onSessionOpened: (listener) => manager.onSessionOpened(listener),
+    cloudDialledWith: (hostId, bindingId) => cloudTransports.dialledWith(hostId, bindingId),
+  });
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
@@ -1289,6 +1299,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const unregisterSetup = registerRemoteService("hostSetup", setup);
   const unregisterBringBack = registerRemoteService("hostBringBack", bringBack);
   const unregisterSignIn = registerRemoteService("sshSignIn", signIn);
+  const unregisterSshHostKeys = registerRemoteService("hostSshHostKeys", sshHostKeys);
   // Views restored before Remote Hosts started read an empty list, and nothing
   // else tells them the configured hosts until one is dialled or edited.
   broadcastLocal({ type: "hosts-changed", hosts: client.list() });
@@ -1314,6 +1325,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterSetup();
       unregisterBringBack();
       unregisterSignIn();
+      unregisterSshHostKeys();
+      sshHostKeys.dispose();
       // Before the masters close at quit: one it was starting is then among them.
       await signIn.dispose();
       stopArmingMachines();

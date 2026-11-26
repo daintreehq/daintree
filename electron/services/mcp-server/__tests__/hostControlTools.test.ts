@@ -53,6 +53,9 @@ function fakeRuntime() {
     ),
     status: vi.fn(() => ok({ hosts: [], targets: [], terminals: [] })),
     startAgentSignIn: vi.fn(() => ok({ outcome: "ok" as const, detail: null, retryAfterMs: null })),
+    sshHostKeys: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, trust: null, reading: null })
+    ),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -576,6 +579,28 @@ describe("runHostControlTool (#13493)", () => {
         undefined
       )
     ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    uninstall();
+  });
+
+  it("hands host.sshHostKeys its one host and the call's abort, and refuses anything else (#18258)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const signal = new AbortController().signal;
+    expect(
+      await runHostControlTool("host.sshHostKeys", { hostId: "studio" }, access, {
+        tier: "core",
+        signal,
+      })
+    ).toMatchObject({ ok: true, value: { outcome: "ok" } });
+    expect(runtime.sshHostKeys).toHaveBeenCalledWith("hub", { hostId: "studio" }, signal);
+    for (const args of [{}, { hostId: "" }, { hostId: "x".repeat(65) }]) {
+      expect(await runHostControlTool("host.sshHostKeys", args, access)).toMatchObject({
+        ok: false,
+        code: "INVALID_ARGS",
+      });
+    }
+    expect(runtime.sshHostKeys).toHaveBeenCalledTimes(1);
     uninstall();
   });
 

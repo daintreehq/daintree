@@ -454,6 +454,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
     ...(deps.bringBack ? { bringBack: deps.bringBack } : {}),
+    // The same reader Settings → Hosts reads a host's SSH keys through (#18258).
+    sshHostKeys: () => getRemoteService("hostSshHostKeys") ?? null,
     // From provisioning, before the run is confirmed: the view a session was opened in.
     // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
