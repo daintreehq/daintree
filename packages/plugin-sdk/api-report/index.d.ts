@@ -10076,9 +10076,10 @@ interface PluginActionContribution {
      * person has told Daintree not to ask (an automation grant, or the
      * Assistant's Never ask). The handler's {@link PluginActionContext} then says
      * which: `approval: "person"` only when the dialog was answered. The global
-     * Assistant reaches it too, through `host.call` on this machine while a view
-     * of the project is open, and always meets that view's dialog. Agent panes
-     * never reach it.
+     * Assistant reaches it too, through `host.call` while a view of the project
+     * is open on the machine running it, this one or a host that lets other
+     * machines' assistants work there, and always meets that view's dialog.
+     * Agent panes never reach it.
      */
     assistantReach?: "confirm-only";
     keywords?: string[];

@@ -15,6 +15,8 @@ import type { LinkSession } from "../../link/session.js";
 import { HostControlLinkClient, type RelayNoticeReceiver } from "../HostControlLinkClient.js";
 import {
   AssistantLinkMethod,
+  ConversationMcpCallPayloadSchema,
+  McpCallPayloadSchema,
   type McpCallPayload,
   type RelayApproveAnswer,
   type RelayApprovePayload,
@@ -118,6 +120,63 @@ describe("HostControlLinkClient.relayCall (#13493)", () => {
     await expect(garbled.relay.relayCall("studio", PAYLOAD, 105_000)).rejects.toMatchObject({
       code: "INTERNAL",
     });
+  });
+});
+
+// #18255: a call the Shell could only send as a plugin action carries that on
+// every method, so a host from before it refuses the call rather than run it.
+describe("HostControlLinkClient.relayCall for a plugin action (#18255)", () => {
+  const SENT = {
+    ...PAYLOAD,
+    tool: "acme.stages.resume",
+    global: true as const,
+    pluginAction: true as const,
+  };
+  /** The payloads a host from before #18255 took: the same, with no `pluginAction`. */
+  const OLD_CALL = McpCallPayloadSchema.omit({ pluginAction: true }).strict();
+  const OLD_CONVERSATION = ConversationMcpCallPayloadSchema.omit({ pluginAction: true }).strict();
+
+  it("never sends it to a host from before it as anything it would run", async () => {
+    const { relay, calls } = client((method, payload) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) return null;
+      const schema =
+        method === AssistantLinkMethod.CONVERSATION_MCP_CALL ? OLD_CONVERSATION : OLD_CALL;
+      if (!schema.safeParse(payload).success) {
+        throw new AppError({ code: "VALIDATION", message: "Invalid payload" });
+      }
+      return { status: "done", result: { isError: false, structured: null, text: "ran" } };
+    });
+
+    for (const request of [SENT, { ...SENT, callId: "call-2", conversationId: "conv-1" }]) {
+      await expect(relay.relayCall("studio", request, 105_000)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    const sent = calls.filter((call) => call.method !== AssistantLinkMethod.AUTHENTICATE);
+    expect(sent.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.CONVERSATION_MCP_CALL,
+    ]);
+    expect(sent.map((call) => (call.payload as { pluginAction?: true }).pluginAction)).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it("carries it when a host without the global method takes the call as any assistant's", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return method === AssistantLinkMethod.MCP_CALL
+        ? { status: "done", result: { isError: false, structured: null, text: "ok" } }
+        : null;
+    });
+
+    await relay.relayCall("studio", SENT, 105_000);
+
+    const plain = calls.find((call) => call.method === AssistantLinkMethod.MCP_CALL);
+    expect(McpCallPayloadSchema.parse(plain!.payload).pluginAction).toBe(true);
   });
 });
 

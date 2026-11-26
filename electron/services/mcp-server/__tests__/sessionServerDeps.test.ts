@@ -439,7 +439,7 @@ describe("createSessionServerDeps", () => {
   // #18153: only this machine's own global Assistant's call tells the view who
   // asked, and a plugin's opted-in query never reads as one another machine's
   // driving view could answer.
-  it("marks the local global Assistant's dispatches, and never counts a plugin action a read", async () => {
+  it("marks a global Assistant's dispatches, and never counts a plugin action a read", async () => {
     const REACH = "acme.stages.inspect";
     const uninstall = setPluginAssistantReachSource({
       has: (id) => id === REACH,
@@ -488,12 +488,44 @@ describe("createSessionServerDeps", () => {
       expect(read?.callerOrigin).toBe("global-assistant");
       expect(read?.relay?.readOnly).toBe(true);
 
-      for (const relay of [
-        { ...caller, global: true },
-        { ...caller, local: true },
-      ]) {
+      // #18255: another machine's global Assistant's plugin action is marked
+      // as one, for this machine's own view alone, and never asked at its Shell.
+      const accepts = vi.fn(() => true);
+      const askShell = vi.fn();
+      const remote = bound({
+        ...caller,
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        global: true,
+        stillAccepted: accepts,
+        requestApproval: askShell,
+        callDeadline: () => Date.now() + 60_000,
+      });
+      await remote.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
+      await remote.sessionDeps.dispatchAction("terminal.list", {}, false, undefined, "call-4");
+      const [remotePlugin, remoteRead] = remote.options() as Array<
+        | {
+            callerOrigin?: string;
+            relay?: {
+              readOnly?: boolean;
+              pluginAction?: true;
+              stillAccepted?: () => boolean;
+              requestApproval?: unknown;
+            };
+          }
+        | undefined
+      >;
+      expect(remotePlugin?.callerOrigin).toBe("global-assistant");
+      expect(remotePlugin?.relay).toMatchObject({ readOnly: false, pluginAction: true });
+      expect(remotePlugin?.relay?.stillAccepted).toBe(accepts);
+      expect(remotePlugin?.relay).not.toHaveProperty("requestApproval");
+      expect(remoteRead).not.toHaveProperty("callerOrigin");
+      expect(remoteRead?.relay).not.toHaveProperty("pluginAction");
+      expect(remoteRead?.relay).toHaveProperty("requestApproval");
+
+      for (const relay of [{ ...caller, local: true }, { ...caller }]) {
         const other = bound(relay);
-        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
+        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-5");
         expect(other.options()[0]).not.toHaveProperty("callerOrigin");
       }
     } finally {

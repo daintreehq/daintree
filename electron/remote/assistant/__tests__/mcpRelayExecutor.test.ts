@@ -6,6 +6,7 @@ import {
   type McpRelayExecutor,
   type RelayMcpSessionSpec,
 } from "../mcpRelayExecutor.js";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void;
@@ -674,5 +675,74 @@ describe("createMcpRelayExecutor and conversations a restart kept (#16845)", () 
     loaded = true;
     vi.advanceTimersByTime(60_000);
     expect(forgotten).toEqual([["local", "conv-1"]]);
+  });
+});
+
+// #18255: a call its Shell could only send as a plugin action runs here only as one.
+describe("createMcpRelayExecutor and a call sent as a plugin action (#18255)", () => {
+  const REACH = "acme.stages.resume";
+  let executor: McpRelayExecutor | undefined;
+  let uninstall: () => void = () => {};
+
+  afterEach(() => {
+    executor?.dispose();
+    uninstall();
+  });
+
+  function harness() {
+    const calls: string[] = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: async (tool) => {
+          calls.push(tool);
+          return ANSWER;
+        },
+        close: () => {},
+      }),
+    });
+    return { executor, calls };
+  }
+
+  const REMOTE: RelayMcpSessionSpec = {
+    linkSessionId: "link-1",
+    senderId: "sender-a",
+    helpSessionId: "help-1",
+    projectId: "proj-2",
+    tier: "core",
+    shellName: "studio",
+    global: true,
+    deliverNotices: () => {},
+    requestApproval: async () => ({ decision: "unavailable" }),
+  };
+  const { global: _global, ...NOT_GLOBAL } = REMOTE;
+  const SENT = { ...PAYLOAD, tool: REACH, pluginAction: true as const };
+
+  it("runs it while this host's registry offers it to the assistant", async () => {
+    uninstall = setPluginAssistantReachSource({ has: (id) => id === REACH, ids: () => [REACH] });
+    const { executor, calls } = harness();
+
+    await expect(executor.call(REMOTE, SENT)).resolves.toMatchObject({
+      status: "done",
+      result: { isError: false },
+    });
+    expect(calls).toEqual([REACH]);
+  });
+
+  it.each([
+    ["a built-in this host has under that id", "terminal.list", REMOTE],
+    ["a plugin action this host doesn't offer the assistant", "acme.stages.other", REMOTE],
+    ["an assistant that isn't a global one", REACH, NOT_GLOBAL],
+  ])("runs nothing for %s", async (_label, tool, spec) => {
+    uninstall = setPluginAssistantReachSource({ has: (id) => id === REACH, ids: () => [REACH] });
+    const { executor, calls } = harness();
+
+    const answer = await executor.call(spec, { ...SENT, tool, callId: `call-${tool}` });
+
+    expect(answer).toMatchObject({ status: "done", result: { isError: true } });
+    expect(JSON.stringify(answer)).toContain("Nothing was run");
+    expect(calls).toEqual([]);
   });
 });

@@ -1909,3 +1909,161 @@ describe("rendererBridge — a help session with no view (#13511)", () => {
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 });
+
+// #18255: another machine's global Assistant calling one of this host's plugin
+// actions is asked in a window here, never in its Shell's view or at the Shell.
+describe("rendererBridge — another machine's global Assistant's plugin action (#18255)", () => {
+  const REACH = "acme.stages.resume";
+  let bridge: ReturnType<typeof createRendererBridge>;
+  let accepts: boolean;
+  let askShell: ReturnType<typeof vi.fn>;
+
+  /** A view of the project here that holds each dispatch until the test answers it. */
+  function localView(id: number) {
+    const requests: string[] = [];
+    const wc = makeWebContents(id, (channel, payload) => {
+      if (channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) requests.push(payload.requestId);
+    });
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(WORKSPACE, [wc]);
+    const answer = (requestId: string, result: unknown) =>
+      mockIpcMain.emit(
+        CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+        { sender: { id } },
+        { requestId, result, confirmationDecision: "approved" }
+      );
+    return { wc, requests, answer };
+  }
+
+  const options = (): WorkspaceDispatchOptions => ({
+    callerOrigin: "global-assistant",
+    relay: {
+      linkSessionId: "link-1",
+      readOnly: false,
+      pluginAction: true,
+      stillAccepted: () => accepts,
+      requestApproval: askShell,
+    },
+  });
+  const dispatch = () =>
+    bridge.dispatchActionForWorkspace(WORKSPACE, REACH, {}, false, "external", options());
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    _resetMcpDriveTargetResolverForTesting();
+    viewless.runViewlessAction.mockReset();
+    viewless.describeViewlessWorkspace.mockReset().mockResolvedValue(undefined);
+    viewless.hasViewlessImplementation.mockReset().mockReturnValue(false);
+    accepts = true;
+    askShell = vi.fn();
+    bridge = createRendererBridge(new Map(), new Map(), () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    _resetMcpDriveTargetResolverForTesting();
+  });
+
+  it.each([
+    ["no lease installed", null],
+    ["nobody driving it", { state: "vacant" as const }],
+  ])(
+    "asks in the window here that shows the project, with %s, and runs on its approval",
+    async (_label, target) => {
+      if (target !== null) setMcpDriveTargetResolver(() => target);
+      const view = localView(7);
+
+      const pending = dispatch();
+      await vi.waitFor(() => expect(view.requests).toHaveLength(1));
+      const [, payload] = view.wc.send.mock.calls[0] as [string, Record<string, unknown>];
+      expect(payload).toMatchObject({ actionId: REACH, confirmed: false });
+      expect(payload.callerOrigin).toBe("global-assistant");
+
+      expect(bridge.holdDispatch(7, view.requests[0]!, "approved").held).toBe(true);
+      view.answer(view.requests[0]!, { ok: true, result: "resumed" });
+
+      expect((await pending).result).toEqual({ ok: true, result: "resumed" });
+      expect(askShell).not.toHaveBeenCalled();
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["the requesting Shell's own view", "link-1"],
+    ["another machine's view", "link-2"],
+  ])("refuses it while %s drives the project, naming who does", async (_label, linkSessionId) => {
+    const view = localView(7);
+    const remote = {
+      ...makeRemoteEndpoint(async () => ({ result: { ok: true, result: "remote" } })),
+      linkSessionId,
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
+
+    const err = await dispatch().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((err as Error).message).toContain("studio-02 has control");
+    expect((err as Error).message).toContain("window on the host");
+    expect(remote.request).not.toHaveBeenCalled();
+    expect(view.wc.send).not.toHaveBeenCalled();
+    expect(askShell).not.toHaveBeenCalled();
+  });
+
+  it("says no frontend is attached when no window here shows the project, and never asks the Shell", async () => {
+    for (const target of [null, { state: "vacant" as const }]) {
+      if (target !== null) setMcpDriveTargetResolver(() => target);
+      const err = await dispatch().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NoFrontendAttachedError);
+    }
+
+    expect(askShell).not.toHaveBeenCalled();
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+  });
+
+  it("runs nothing on an approval that lands after this host stopped taking other machines' assistants", async () => {
+    const view = localView(7);
+    const pending = dispatch();
+    await vi.waitFor(() => expect(view.requests).toHaveLength(1));
+    expect(bridge.holdDispatch(7, view.requests[0]!, "shown").held).toBe(true);
+
+    accepts = false;
+    expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
+
+    const err = await pending.catch((e: unknown) => e);
+    expect((err as Error).message).toContain(
+      "stopped letting other machines' assistants work here"
+    );
+    // The view's late answer finds nothing left to settle.
+    view.answer(view.requests[0]!, { ok: true, result: "resumed" });
+  });
+
+  it("runs nothing on an approval that lands after another machine took the project over", async () => {
+    const view = localView(7);
+    const pending = dispatch();
+    await vi.waitFor(() => expect(view.requests).toHaveLength(1));
+
+    const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId: "link-1" };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
+    expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
+
+    const err = await pending.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect(remote.request).not.toHaveBeenCalled();
+  });
+
+  it("leaves an ordinary relayed change to the Shell's own view, as before", async () => {
+    const view = localView(7);
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+
+    const err = await bridge
+      .dispatchActionForWorkspace(WORKSPACE, REACH, {}, false, "external", {
+        relay: { linkSessionId: "link-1", readOnly: false },
+      })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect(view.wc.send).not.toHaveBeenCalled();
+  });
+});
