@@ -10,6 +10,7 @@ import {
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
   RelayCancelUnconfirmedError,
+  RelayPluginActionUnsupportedError,
   RelayApproveTimedPayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
@@ -360,6 +361,10 @@ export class HostControlLinkClient {
         // No answer, after a cancel the host didn't take: it ran on, for all this Shell knows.
         if (codeOf(error) === "OUTCOME_UNKNOWN" && sent.taken !== null && !(await sent.taken)) {
           throw new RelayCancelUnconfirmedError();
+        }
+        // Refused as a payload, before any handler: a host too old for the field (#18255).
+        if (payload.pluginAction === true && codeOf(error) === "VALIDATION") {
+          throw new RelayPluginActionUnsupportedError();
         }
         throw error;
       } finally {

@@ -288,6 +288,12 @@ export interface WorkspaceDispatchOptions {
      */
     stillAccepted?: () => boolean;
     /**
+     * Whether the caller still waits on this call, read before a person's
+     * approval of a plugin action runs it (#18255): a call it cancelled or
+     * stopped waiting on runs nothing.
+     */
+    callLive?: () => boolean;
+    /**
      * Asks the person at the requesting Shell, in its own window, about this
      * one call when no view here can (#13501). Absent, an unapproved
      * confirm-gated call the host runs itself is refused.

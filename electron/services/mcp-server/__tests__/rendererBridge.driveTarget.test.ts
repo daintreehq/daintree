@@ -1917,6 +1917,7 @@ describe("rendererBridge — another machine's global Assistant's plugin action 
   let bridge: ReturnType<typeof createRendererBridge>;
   let accepts: boolean;
   let askShell: ReturnType<typeof vi.fn>;
+  let callLive: boolean;
 
   /** A view of the project here that holds each dispatch until the test answers it. */
   function localView(id: number) {
@@ -1942,7 +1943,10 @@ describe("rendererBridge — another machine's global Assistant's plugin action 
       readOnly: false,
       pluginAction: true,
       stillAccepted: () => accepts,
-      requestApproval: askShell,
+      callLive: () => callLive,
+      requestApproval: askShell as NonNullable<
+        WorkspaceDispatchOptions["relay"]
+      >["requestApproval"],
     },
   });
   const dispatch = () =>
@@ -1958,6 +1962,7 @@ describe("rendererBridge — another machine's global Assistant's plugin action 
     viewless.hasViewlessImplementation.mockReset().mockReturnValue(false);
     accepts = true;
     askShell = vi.fn();
+    callLive = true;
     bridge = createRendererBridge(new Map(), new Map(), () => null);
     bridge.setupListeners([]);
   });
@@ -2039,12 +2044,25 @@ describe("rendererBridge — another machine's global Assistant's plugin action 
     view.answer(view.requests[0]!, { ok: true, result: "resumed" });
   });
 
+  it("runs nothing on an approval that lands after its caller stopped waiting on it", async () => {
+    const view = localView(7);
+    const pending = dispatch();
+    await vi.waitFor(() => expect(view.requests).toHaveLength(1));
+
+    callLive = false;
+    expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
+
+    const err = await pending.catch((e: unknown) => e);
+    expect((err as Error).message).toContain("This call ended before the dialog was answered");
+  });
+
   it("runs nothing on an approval that lands after another machine took the project over", async () => {
     const view = localView(7);
     const pending = dispatch();
     await vi.waitFor(() => expect(view.requests).toHaveLength(1));
 
-    const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId: "link-1" };
+    // Not the requesting Shell's link: any other machine driving stops it.
+    const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId: "link-2" };
     setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
     expect(bridge.holdDispatch(7, view.requests[0]!, "approved")).toEqual({ held: false });
 

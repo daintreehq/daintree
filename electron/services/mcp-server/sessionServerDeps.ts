@@ -968,6 +968,14 @@ export function createSessionServerDeps(
       // counts as a read another machine's driving view could answer, and the
       // Shell is never asked in its place.
       const relayPluginAction = relay !== undefined && isPluginAssistantReachAction(actionId);
+      // No relayed caller reaches a plugin's action but through its opt-in, so
+      // one dropped since the call was admitted (#18255) runs nothing, rather
+      // than whatever its replacement now counts as.
+      if (relay !== undefined && !relayPluginAction && relayEntry?.pluginId !== undefined) {
+        return Promise.reject(
+          new Error(`${actionId} is no longer offered to the assistant, so nothing was run`)
+        );
+      }
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
             ...(holdUntil !== undefined ? { holdUntil } : {}),
@@ -984,6 +992,9 @@ export function createSessionServerDeps(
               ...(relayPluginAction ? { pluginAction: true as const } : {}),
               ...(relayPluginAction && relay.stillAccepted
                 ? { stillAccepted: relay.stillAccepted }
+                : {}),
+              ...(relayPluginAction && relay.callDeadline && relayCallId !== undefined
+                ? { callLive: () => relay.callDeadline?.(relayCallId) !== undefined }
                 : {}),
               ...(relayCallId !== undefined
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }

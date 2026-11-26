@@ -148,8 +148,9 @@ describe("HostControlLinkClient.relayCall for a plugin action (#18255)", () => {
     });
 
     for (const request of [SENT, { ...SENT, callId: "call-2", conversationId: "conv-1" }]) {
+      // Refused before anything ran, and a resend can't change that: never "may have run".
       await expect(relay.relayCall("studio", request, 105_000)).rejects.toMatchObject({
-        code: "VALIDATION",
+        code: "PLUGIN_ACTION_UNSUPPORTED",
       });
     }
     const sent = calls.filter((call) => call.method !== AssistantLinkMethod.AUTHENTICATE);

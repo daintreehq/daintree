@@ -290,6 +290,18 @@ export class RelayCancelUnconfirmedError extends Error {
   }
 }
 
+/**
+ * A host from before plugin actions for another machine's global Assistant
+ * (#18255) refused such a call's payload: nothing ran, and a resend can't
+ * change that.
+ */
+export class RelayPluginActionUnsupportedError extends Error {
+  readonly code = "PLUGIN_ACTION_UNSUPPORTED";
+  constructor() {
+    super("The host doesn't take plugin actions from another machine's global Assistant");
+  }
+}
+
 export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
 export type RelayRefusal = (typeof RELAY_REFUSALS)[number];
 

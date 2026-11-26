@@ -2377,6 +2377,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           ...this.outcomeWith("rate_limited", CALL_RATE_LIMITED_DETAIL, 1_000),
           ...unsent,
         };
+      case "PLUGIN_ACTION_UNSUPPORTED":
+        noted.notRun();
+        return {
+          ...this.outcomeWith("unsupported", pluginActionUnsupportedDetail(host!)),
+          ...unsent,
+        };
       // Only a link answers it, so only for a host this Shell knows.
       case "UNSUPPORTED":
         noted.notRun();
@@ -3260,6 +3266,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 }
 
 /** A host that can't run relayed calls, named with the version it said it runs. */
+function pluginActionUnsupportedDetail(host: ObservedHost): string {
+  return `${host.name} runs a Daintree that can't run its plugin actions for another machine's global Assistant. Nothing was run. It needs a newer Daintree.`;
+}
+
 function unsupportedCallDetail(host: ObservedHost): string {
   const version = host.connection.status === "connected" ? host.connection.handshake.version : null;
   return version !== null

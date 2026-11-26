@@ -24,6 +24,7 @@ import {
   type LocalMcpRelay,
 } from "../localMcpRelay.js";
 import type { RelayMcpSession, RelayMcpSessionSpec } from "../mcpRelayExecutor.js";
+import { RelayPluginActionUnsupportedError } from "../linkMethods.js";
 import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 
 const RUN_A: OpenRun = {
@@ -704,6 +705,21 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           [REACH, undefined, undefined],
           [LIST.tool, true, undefined],
         ]);
+      });
+
+      it("tells a host too old to take it apart from a call that may have run", async () => {
+        relayCall.mockRejectedValueOnce(new RelayPluginActionUnsupportedError());
+        const settled = await runtime.call(
+          "g",
+          { ...RESUME, hostId: "studio", projectId: "host-p" },
+          { tier: "core" }
+        );
+
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "unsupported", callId: null },
+        });
+        expect(JSON.stringify(settled)).toContain("Nothing was run");
       });
 
       it("never sends a built-in or host tool to another machine as a plugin action", async () => {

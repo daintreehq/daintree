@@ -2381,14 +2381,20 @@ export function createRendererBridge(
 
   /**
    * Why a person's approval of a global Assistant's plugin action may no
-   * longer run it (#18255): this host stopped taking other machines'
-   * assistants, or another machine took the project over, while the dialog
-   * was open. Either would have refused the call before it was asked.
+   * longer run it (#18255): its caller stopped waiting on it, this host
+   * stopped taking other machines' assistants, or another machine took the
+   * project over, while the dialog was open. Each would have refused the call
+   * before it was asked.
    */
   function pluginApprovalRefusal(
     workspaceId: string,
     relay: NonNullable<WorkspaceDispatchOptions["relay"]>
   ): Error | null {
+    if (relay.callLive?.() === false) {
+      return new Error(
+        "This call ended before the dialog was answered, so the plugin action didn't run. Nothing was run."
+      );
+    }
     if (relay.stillAccepted?.() === false) {
       return new Error(
         "This host stopped letting other machines' assistants work here before the dialog was answered, so the plugin action didn't run. Nothing was run."
