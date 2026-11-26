@@ -1022,7 +1022,8 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
     expect(idleRow()).toContain("The host's idle time is in charge while this device is connected");
     expect(idleRow()).not.toContain("keeps its own idle timer");
 
-    // With no device connected, the host's hold on it and when that runs out (#17918).
+    // With no device connected, what the host sends, when the last reached it, when the link
+    // runs out (#17918, #17976), and a sleep Agent 37 reported.
     cleanup();
     show(
       sleeper({
@@ -1031,13 +1032,22 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
           expiresAt: Date.UTC(2026, 10, 26, 15),
           confirmedAt: Date.UTC(2026, 10, 19, 15),
           reached: true,
+          lastRequestAt: Date.UTC(2026, 10, 19, 14, 59),
+          sleep: {
+            sleptAt: Date.UTC(2026, 10, 19, 15, 2),
+            lastRequestAt: Date.UTC(2026, 10, 19, 14, 59),
+          },
         },
       }),
       [agent37]
     );
     expect(idleRow()).toContain(
-      `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(Date.UTC(2026, 10, 26, 15))} (as the host said ${dayTime(Date.UTC(2026, 10, 19, 15))}).`
+      `With no device connected, the host sends requests through a link from Daintree while it sees work (as the host said ${dayTime(Date.UTC(2026, 10, 19, 15))}). Its last request reached it ${dayTime(Date.UTC(2026, 10, 19, 14, 59))}. The link expires ${dayTime(Date.UTC(2026, 10, 26, 15))}.`
     );
+    expect(idleRow()).toContain(
+      `Agent 37 put it to sleep ${dayTime(Date.UTC(2026, 10, 19, 15, 2))}, 3 minutes after the host's last request this device heard of.`
+    );
+    expect(idleRow()).not.toContain("keep the machine awake");
     expect(idleRow()).not.toContain("is in charge while no device is connected");
     cleanup();
     show(sleeper({ keepAwake: { kind: "expired", expiredAt: Date.UTC(2026, 10, 26, 15) } }), [

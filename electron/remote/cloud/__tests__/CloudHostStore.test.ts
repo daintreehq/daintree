@@ -686,6 +686,37 @@ describe("CloudHostStore keep-awake (#17918)", () => {
       expect(read.resourceId).toBe(RESOURCE);
     }
   });
+
+  it("keeps a sleep the provider reported across a restart, for the machine it was reported of (#17976)", () => {
+    const backend = disk();
+    const sleep = {
+      resourceId: RESOURCE,
+      sleptAt: 1_800_000_180_000,
+      lastRequestAt: 1_800_000_000_000,
+    };
+    new CloudHostStore(backend).putBinding(
+      binding({ resourceId: RESOURCE, keepAwakeSleep: sleep })
+    );
+    expect(new CloudHostStore(backend).bindings()[0]!.keepAwakeSleep).toEqual(sleep);
+    const cleared = { ...sleep, lastRequestAt: null, cleared: true as const };
+    new CloudHostStore(backend).putBinding(
+      binding({ resourceId: RESOURCE, keepAwakeSleep: cleared })
+    );
+    expect(new CloudHostStore(backend).bindings()[0]!.keepAwakeSleep).toEqual(cleared);
+
+    for (const keepAwakeSleep of [
+      { ...sleep, resourceId: "zz12cd34ef" },
+      { ...sleep, sleptAt: "then" },
+      "asleep",
+    ]) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId: RESOURCE }), keepAwakeSleep }],
+      });
+      expect(new CloudHostStore(backend).bindings()[0]!.keepAwakeSleep).toBeUndefined();
+    }
+  });
 });
 
 describe("CloudHostStore SSH access", () => {

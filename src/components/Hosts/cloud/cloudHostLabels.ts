@@ -370,7 +370,10 @@ function apart(ms: number): string {
  * the host saw in its own passes with no sleep reported, of unknown cause.
  * The last request itself is said with the link while one is held.
  */
-function seenSentences(name: string, keepAwake: NonNullable<IdleSleepMachine["keepAwake"]>): string {
+function seenSentences(
+  name: string,
+  keepAwake: NonNullable<IdleSleepMachine["keepAwake"]>
+): string {
   const out: string[] = [];
   if (keepAwake.kind !== "held" && keepAwake.lastRequestAt !== undefined && !keepAwake.sleep) {
     out.push(`The host's last request reached it ${dayTime(keepAwake.lastRequestAt)}.`);

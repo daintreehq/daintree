@@ -61,8 +61,9 @@ const LISTENER_GRACE_MS = 5 * 60_000;
 const GAP_MS = 2 * PING_EVERY_MS;
 
 const EXPIRED =
-  "The link Daintree gave this host to keep Agent 37 from sleeping it expired. Connect to it from Daintree to renew it.";
-const REFUSED = "Agent 37 no longer accepts the link Daintree gave this host to keep it awake.";
+  "The link Daintree gave this host to send requests through while it sees work expired. Connect to it from Daintree to renew it.";
+const REFUSED =
+  "Agent 37 no longer accepts the link Daintree gave this host to send requests through.";
 const NOT_ARRIVED = "A request through the link Daintree gave this host never arrived at it.";
 const UNREACHED = "Agent 37 couldn't reach this host through the link Daintree gave it.";
 const PORT_CLOSED = "This host's port closed while it checked that link. Ask for its port again.";
@@ -272,7 +273,7 @@ export class KeepAwakeKeeper {
       })
       .catch((error: unknown) => {
         this.listenerProblem =
-          "This host couldn't open a port for Agent 37 to reach it, so it can't keep the machine awake.";
+          "This host couldn't open a port for Agent 37 to reach it, so it sends no requests while it sees work.";
         throw error;
       })
       .finally(() => {
@@ -411,7 +412,8 @@ export class KeepAwakeKeeper {
     if (!last) return;
     const mono = pass.mono - last.mono;
     const wall = pass.wall - last.wall;
-    if (mono > GAP_MS || Math.abs(wall - mono) > GAP_MS) this.gap = { from: last.wall, to: pass.wall };
+    if (mono > GAP_MS || Math.abs(wall - mono) > GAP_MS)
+      this.gap = { from: last.wall, to: pass.wall };
   }
 
   /** One request through the URL, carrying a nonce only this listener knows to expect. */

@@ -550,3 +550,72 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await expect(env.arm()).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
 });
+
+describe("what the keeper observed (#17976)", () => {
+  it("says when any URL's request last reached it, though the URL it reports is another", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm(URL_A, env.now() + 8 * DAY);
+    const armedAt = env.now();
+    // A shorter one replaces it: the longer one, behind it, is what the host says covers it.
+    await env.arm(URL_B, env.now() + DAY);
+    await env.passes(2, 60_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_B);
+    const status = env.keeper.status();
+    expect(status.reachedAt).toBe(armedAt);
+    expect(status.lastRequest).toEqual({ resourceId: RESOURCE, at: env.now() });
+  });
+
+  it("keeps the last request through a URL it then lost", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    const reachedAt = env.now();
+    env.answer(() => ({ status: 403, reaches: false }));
+    await env.passes(1, 60_000);
+    expect(env.keeper.status()).toMatchObject({
+      expiresAt: null,
+      lastRequest: { resourceId: RESOURCE, at: reachedAt },
+    });
+    expect(env.keeper.status().problem).not.toBeNull();
+  });
+
+  it("reports a busy pass that came far too late as a gap, by the wall clock at either end", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(3, 10_000);
+    expect(env.keeper.status().gap).toBeUndefined();
+    const from = env.now();
+    // The process stood still five minutes: both clocks moved, no pass ran.
+    await env.passes(1, 5 * 60_000);
+    expect(env.keeper.status().gap).toEqual({ from, to: env.now() });
+    // A request still went, and reached it.
+    expect(env.keeper.status().lastRequest?.at).toBe(env.now());
+  });
+
+  it("reports a wall-clock step between busy passes as a gap", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(1, 10_000);
+    const from = env.now();
+    env.stepWall(-10 * 60_000);
+    await env.passes(1, 10_000);
+    expect(env.keeper.status().gap).toEqual({ from, to: env.now() });
+    expect(env.keeper.status().gap!.from).toBeGreaterThan(env.keeper.status().gap!.to);
+  });
+
+  it("sees no gap across a stretch the host spent idle", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    await env.passes(1, 10_000);
+    env.setBusy(false);
+    await env.passes(1, 10_000);
+    env.advance(60 * 60_000);
+    env.setBusy(true);
+    await env.passes(3, 10_000);
+    expect(env.keeper.status().gap).toBeUndefined();
+  });
+});

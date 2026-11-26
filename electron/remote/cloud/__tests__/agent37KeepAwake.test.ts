@@ -236,6 +236,12 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     edgeRequests,
     run,
     status: () => lifecycle.statuses()[0]!,
+    /** A person's refresh: an ordinary read of the instance. */
+    refresh: () => lifecycle.refresh("build"),
+    /** Agent 37's clock alone moves on: the host's process is frozen with its instance asleep. */
+    frozen: (seconds: number) => {
+      for (let passed = 0; passed < seconds; passed += 30) api.advance(30);
+    },
     changes: () => changes,
     /** What the store last wrote, as it would land on disk. */
     raw: () => JSON.stringify(saved),
@@ -303,6 +309,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       expiresAt: minted[0]!.expiresAt * 1000,
       confirmedAt: env.api.now,
       reached: true,
+      lastRequestAt: env.api.now,
     });
     // Connecting again while it holds one still hands over a new one, for seven days from then.
     env.api.advance(600);
@@ -445,9 +452,11 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
   it("keeps the hour's pause once the queued renewal is refused too", async () => {
     const { env, arms, mints } = await promotedMintFails(["refused", "refused"]);
     expect(arms()).toBe(2);
+    // What reached the host through the link it held before is still said.
     expect(env.status().keepAwake).toEqual({
       kind: "none",
       problem: "This host's port closed while it checked that link. Ask for its port again.",
+      lastRequestAt: expect.any(Number),
     });
     for (let i = 0; i < 59; i++) {
       env.api.advance(60);
@@ -813,6 +822,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(env.status().keepAwake).toEqual({
       kind: "none",
       problem: expect.stringContaining("no longer accepts"),
+      lastRequestAt: expect.any(Number),
     });
     expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(1);
 
@@ -845,7 +855,11 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       problem: expect.stringContaining("expired"),
     });
     await env.links.tick();
-    expect(env.status().keepAwake).toEqual({ kind: "expired", expiredAt: firstExpiry * 1000 });
+    expect(env.status().keepAwake).toEqual({
+      kind: "expired",
+      expiredAt: firstExpiry * 1000,
+      lastRequestAt: expect.any(Number),
+    });
     expect(env.changes()).toBeGreaterThan(changesBefore);
     const hits = env.hits();
     await env.run(86_400, 3600);
@@ -994,5 +1008,154 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(arms[0]!.label).toBe("second");
     expect(env.api.signedUrls).toHaveLength(1);
     expect(env.status().keepAwake).toMatchObject({ kind: "held" });
+  });
+});
+
+describe("what an Agent 37 host's keep-awake observed (#17976)", () => {
+  /** A link's token, written or encoded, and its origin: none of it may be kept. */
+  function expectNoLink(env: Awaited<ReturnType<typeof agent37>>) {
+    const raw = env.raw();
+    for (const grant of env.api.signedUrls) {
+      expect(raw).not.toContain(grant.token);
+      expect(raw).not.toContain(encodeURIComponent(grant.token));
+    }
+    expect(raw).not.toContain("agent37.app");
+    expect(raw).not.toContain("a37_token");
+    expect(JSON.stringify(env.status())).not.toContain("agent37.app");
+  }
+
+  it("with Agent 37 crediting the host's requests: says when the last reached it, and no sleep", async () => {
+    const env = await agent37();
+    await env.connect();
+    env.disconnect();
+    expect(await env.run(3 * 1800)).toBe(true);
+    await env.refresh();
+    await env.connect();
+    const view = env.status().keepAwake;
+    expect(view).toMatchObject({
+      kind: "held",
+      lastRequestAt: env.api.now,
+      expiresAt: env.api.signedUrls.at(-1)!.expiresAt * 1000,
+    });
+    expect(view).not.toHaveProperty("sleep");
+    expect(view).not.toHaveProperty("gap");
+    expectNoLink(env);
+  });
+
+  it("with Agent 37 not crediting them: records its sleep beside the last request, through later reads", async () => {
+    const env = await agent37();
+    env.api.creditsEdge = false;
+    await env.connect();
+    const lastRequestAt = env.api.now;
+    expect(env.status().keepAwake).toMatchObject({ kind: "held", lastRequestAt });
+    env.disconnect();
+    // Busy all along, its requests uncounted: Agent 37 sleeps it, and the host stands still.
+    env.frozen(1830);
+    expect(env.machine.status).toBe("sleeping");
+    const sleptAt = env.machine.slept_at! * 1000;
+    await env.refresh();
+    expect(env.status().keepAwake).toMatchObject({ sleep: { sleptAt, lastRequestAt } });
+    expect(sleptAt - lastRequestAt).toBe(1800_000);
+    expect(env.raw()).toContain('"keepAwakeSleep"');
+    // Asleep on the next read, then woken by the host's next request and running on the one after.
+    await env.refresh();
+    await env.run(30);
+    expect(env.machine.status).toBe("running");
+    await env.refresh();
+    expect(env.status().keepAwake).toMatchObject({ sleep: { sleptAt, lastRequestAt } });
+    expectNoLink(env);
+
+    // A device connects: the host says a request reached it since, and the sleep is over.
+    await env.connect();
+    expect(env.status().keepAwake).not.toHaveProperty("sleep");
+    expect(env.status().keepAwake).toMatchObject({ lastRequestAt: env.api.now });
+    // A read that still says asleep, from before the wake, never brings it back.
+    await env.refresh();
+    expect(env.status().keepAwake).not.toHaveProperty("sleep");
+    expectNoLink(env);
+  });
+
+  it("records a normal idle sleep, and keeps it through an idle reconnect and a new link", async () => {
+    const env = await agent37();
+    await env.connect();
+    const lastRequestAt = env.api.now;
+    env.disconnect();
+    env.setBusy(false);
+    await env.run(1830);
+    expect(env.machine.status).toBe("sleeping");
+    const sleptAt = env.machine.slept_at! * 1000;
+    await env.refresh();
+    expect(env.status().keepAwake).toMatchObject({ sleep: { sleptAt, lastRequestAt } });
+
+    // Idle on reconnect: a new link, no request, and the same last request said again.
+    await env.connect();
+    expect(env.api.signedUrls).toHaveLength(2);
+    await env.links.tick();
+    expect(env.status().keepAwake).toMatchObject({
+      kind: "held",
+      lastRequestAt,
+      sleep: { sleptAt, lastRequestAt },
+    });
+
+    // Work starts: its first request reaches the host, and the next check ends the sleep.
+    env.setBusy(true);
+    await env.run(30);
+    env.api.advance(60);
+    await env.links.tick();
+    expect(env.status().keepAwake).not.toHaveProperty("sleep");
+    expect(env.status().keepAwake).toMatchObject({ lastRequestAt: env.api.now - 60_000 });
+  });
+
+  it("keeps what it saw once the link expires", async () => {
+    const env = await agent37();
+    await env.connect();
+    const lastRequestAt = env.api.now;
+    env.disconnect();
+    env.setBusy(false);
+    await env.run(1830);
+    await env.refresh();
+    const sleptAt = env.machine.slept_at! * 1000;
+    env.api.advance(SEVEN_DAYS_S);
+    await env.links.tick();
+    expect(env.status().keepAwake).toEqual({
+      kind: "expired",
+      expiredAt: env.api.signedUrls[0]!.expiresAt * 1000,
+      lastRequestAt,
+      sleep: { sleptAt, lastRequestAt },
+    });
+  });
+
+  it("says a gap in the busy host's passes with no sleep reported is of unknown cause, not a sleep", async () => {
+    const env = await agent37();
+    await env.connect();
+    await env.run(30);
+    // A tick five minutes late: the host was busy, Agent 37 never slept it.
+    const from = env.api.now;
+    await env.run(300, 300);
+    expect(env.machine.status).toBe("running");
+    await env.refresh();
+    await env.links.tick();
+    const view = env.status().keepAwake;
+    expect(view).toMatchObject({ kind: "held", gap: { from, to: env.api.now } });
+    expect(view).not.toHaveProperty("sleep");
+  });
+
+  it("takes a gap the provider reported a sleep inside as that sleep", async () => {
+    const env = await agent37();
+    env.api.creditsEdge = false;
+    await env.connect();
+    await env.run(30);
+    env.frozen(1830);
+    expect(env.machine.status).toBe("sleeping");
+    await env.refresh();
+    expect(env.status().keepAwake).toHaveProperty("sleep");
+    // The host thaws: its next pass is long after the last, and its request wakes the instance.
+    await env.run(30);
+    expect(env.keeper.status().gap).toBeDefined();
+    await env.links.tick();
+    // The request since ends the sleep, and the gap it left is never said as unexplained.
+    const view = env.status().keepAwake;
+    expect(view).not.toHaveProperty("gap");
+    expect(view).not.toHaveProperty("sleep");
   });
 });

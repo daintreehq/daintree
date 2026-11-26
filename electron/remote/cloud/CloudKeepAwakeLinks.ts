@@ -3,11 +3,7 @@ import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.j
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
-import type {
-  CloudHostStore,
-  StoredCloudBinding,
-  StoredKeepAwakeSleep,
-} from "./CloudHostStore.js";
+import type { CloudHostStore, StoredCloudBinding, StoredKeepAwakeSleep } from "./CloudHostStore.js";
 import {
   KeepAwakeLinkMethod,
   KeepAwakeStatusSchema,
@@ -39,7 +35,7 @@ const CALL_TIMEOUT_MS = 30_000;
 const ARM_TIMEOUT_MS = 60_000;
 
 const TOO_OLD =
-  "The Daintree on this machine is too old to keep it awake with no device connected. Update it to let it.";
+  "The Daintree on this machine is too old to send requests through a link while it sees work with no device connected. Update it to let it.";
 
 type KeepAwakeProvider = CloudProvider & Required<Pick<CloudProvider, "keepAwakeUrl">>;
 
@@ -464,7 +460,7 @@ export class CloudKeepAwakeLinks {
           : provider.describeError(error).message;
       this.noteProblem(
         bindingId,
-        `Daintree couldn't get a link from ${provider.info(process.platform).name} to keep this machine awake: ${reason}`
+        `Daintree couldn't get a link from ${provider.info(process.platform).name} for the host to send requests through: ${reason}`
       );
       this.retryAt.set(bindingId, this.now() + RETRY_MS);
       return;
@@ -569,7 +565,8 @@ export class CloudKeepAwakeLinks {
     if (!this.sleepBaseline.has(bindingId)) {
       // The first word after the sleep: what it says may be a request from before it, heard late.
       this.sleepBaseline.set(bindingId, reported);
-      if (reported !== null && reported <= sleep.sleptAt) this.pairSleep(bindingId, sleep, reported);
+      if (reported !== null && reported <= sleep.sleptAt)
+        this.pairSleep(bindingId, sleep, reported);
       return;
     }
     if (reported === null || reported === this.sleepBaseline.get(bindingId)) return;
@@ -583,11 +580,7 @@ export class CloudKeepAwakeLinks {
   }
 
   /** A request from before the sleep, later than the one it was recorded beside. */
-  private pairSleep(
-    bindingId: string,
-    sleep: StoredKeepAwakeSleep,
-    at: number
-  ): void {
+  private pairSleep(bindingId: string, sleep: StoredKeepAwakeSleep, at: number): void {
     if (sleep.lastRequestAt !== null && sleep.lastRequestAt >= at) return;
     this.updateSleep(bindingId, sleep, { lastRequestAt: at });
   }
