@@ -11,7 +11,6 @@ import {
   type AssistantStartArgs,
   type AssistantStartResult,
   type GlobalAssistantEntry,
-  type GlobalAssistantPeer,
   type GlobalAssistantRole,
   type KeptAssistantSlot,
 } from "../../../shared/types/assistantControl.js";
@@ -462,11 +461,15 @@ export class AssistantTerminalControl {
     return target;
   }
 
-  private scopeOf(caller: AssistantCaller, lane: RunningLane): AssistantTarget["scope"] | null {
+  private scopeOf(
+    caller: AssistantCaller,
+    lane: RunningLane,
+    coordinator: () => number | null = () => this.coordinatorSlot()
+  ): AssistantTarget["scope"] | null {
     if (isGlobalAssistantId(lane.projectId)) {
       // A project's assistant reaches only the session that coordinates (#18143),
       // never the person's conversation beside it (#18280).
-      if (reachesGlobal(caller)) return lane.slot === this.coordinatorSlot() ? "global" : null;
+      if (reachesGlobal(caller)) return lane.slot === coordinator() ? "global" : null;
       // A global session is never a project peer, not even of the other global
       // session (#18142), but the two may message each other (#18280).
       return this.callerGlobalSlot(caller) !== null ? "global-peer" : null;
@@ -477,14 +480,16 @@ export class AssistantTerminalControl {
   /**
    * The global session that coordinates (#18143), read afresh at every call
    * so a handover moves both what a project reaches and each session's side.
-   * Absent or failing, the first running session.
+   * Absent, the first running session; failing, none, so a project reaches no
+   * global session and neither stamps itself the coordinator.
    */
   private coordinatorSlot(): number | null {
-    try {
-      const slot = this.deps.globalCoordinatorSlot?.();
-      if (slot !== undefined) return slot;
-    } catch {
-      // Falls through to the first running session, as with no reading at all.
+    if (this.deps.globalCoordinatorSlot !== undefined) {
+      try {
+        return this.deps.globalCoordinatorSlot();
+      } catch {
+        return null;
+      }
     }
     let first: number | null = null;
     for (const lane of this.deps.listRunningLanes()) {
@@ -512,30 +517,30 @@ export class AssistantTerminalControl {
 
   /**
    * A global session's listing (#18280): its own slot and side, and the other
-   * session to send to. It has no project, so no project lanes or slots.
+   * session as its `global`, the one it sends to. It has no project, so no
+   * project lanes or slots. One reading of coordination covers it all.
    */
   private async listForGlobal(
     caller: AssistantCaller & { kind: "local" }
   ): Promise<AssistantListResult> {
-    let self: AssistantSelf | undefined;
-    let peer: GlobalAssistantPeer | null = null;
+    const coordinator = this.coordinatorSlot();
     const ownSlot = this.callerGlobalSlot(caller);
+    let self: AssistantSelf | undefined;
+    let peer: RunningLane | null = null;
     for (const lane of this.deps.listRunningLanes()) {
       if (!isGlobalAssistantId(lane.projectId)) continue;
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (!running) continue;
-      if (lane.slot === ownSlot) {
-        const record = await this.deps.getTerminal(running.terminalId).catch(() => null);
-        self = {
-          slot: lane.slot,
-          agentId: record?.detectedAgentId ?? record?.launchAgentId ?? lane.agentId,
-          role: this.globalRoleOf(lane.slot),
-        };
+      if (lane.slot !== ownSlot) {
+        if (ownSlot !== null && peer === null) peer = lane;
         continue;
       }
-      if (ownSlot === null || peer !== null) continue;
-      const entry = await this.globalEntryFor(lane);
-      if (entry) peer = { ...entry, slot: lane.slot, role: this.globalRoleOf(lane.slot) };
+      const record = await this.deps.getTerminal(running.terminalId).catch(() => null);
+      self = {
+        slot: lane.slot,
+        agentId: record?.detectedAgentId ?? record?.launchAgentId ?? lane.agentId,
+        role: lane.slot === coordinator ? "coordinator" : "conversation",
+      };
     }
     return {
       projectId: caller.projectId,
@@ -543,8 +548,7 @@ export class AssistantTerminalControl {
       assistants: [],
       vacantSlots: [],
       keptSlots: [],
-      global: null,
-      globalPeer: peer,
+      global: peer === null ? null : await this.globalEntryFor(peer),
     };
   }
 
@@ -558,9 +562,11 @@ export class AssistantTerminalControl {
     // the other one acts on no worker, so it isn't the global assistant to reach.
     let globalLane: RunningLane | null = null;
     let self: AssistantSelf | undefined;
+    // One reading for the whole listing, which awaits between lanes.
+    const coordinator = this.coordinatorSlot();
     for (const lane of this.deps.listRunningLanes()) {
       if (lane.projectId !== caller.projectId || isGlobalAssistantId(lane.projectId)) {
-        if (this.scopeOf(caller, lane) === "global") globalLane = lane;
+        if (this.scopeOf(caller, lane, () => coordinator) === "global") globalLane = lane;
         continue;
       }
       occupied.add(lane.slot);

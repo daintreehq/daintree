@@ -457,11 +457,18 @@ function globalTargetRefusal(
 function globalPeerSendRefusal(
   args: Record<string, unknown>
 ): { code: string; message: string } | null {
-  if (args.notify !== true && args.waitForReply !== true && args.handback !== true) return null;
+  if (
+    args.notify !== true &&
+    args.waitForReply !== true &&
+    args.handback !== true &&
+    args.whenBusy === undefined
+  ) {
+    return null;
+  }
   return {
     code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
     message:
-      "A send to the other global session takes no `notify`, `waitForReply` or `handback`: it answers with a send of its own. Nothing was sent.",
+      "A send to the other global session takes no `notify`, `waitForReply`, `handback` or `whenBusy`: it answers with a send of its own. Nothing was sent.",
   };
 }
 
@@ -2217,7 +2224,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               ? {
                   code: ASSISTANT_TARGET_REFUSALS.notFound,
                   message:
-                    "A global session sends only to the other global session, by the `terminalId` and `generation` in `assistant.list`'s `globalPeer`. Nothing was sent.",
+                    "A global session sends only to the other global session, by the `terminalId` and `generation` in `assistant.list`'s `global`. Nothing was sent.",
                 }
               : globalPeerSendRefusal(callArgs);
           if (refusal !== null) {

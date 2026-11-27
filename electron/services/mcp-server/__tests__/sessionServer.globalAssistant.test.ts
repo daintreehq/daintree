@@ -269,7 +269,7 @@ describe("the global assistant's send to its other session (#18280)", () => {
     [
       "a batch",
       /sends only to the other global session/,
-      { terminalIds: ["t-peer"], terminalId: "t-peer", generation: 4, command: "x" },
+      { terminalIds: ["t-peer"], generation: 4, command: "x" },
     ],
     [
       "a notice",
@@ -285,6 +285,11 @@ describe("the global assistant's send to its other session (#18280)", () => {
       "a handback",
       /takes no `notify`/,
       { terminalId: "t-peer", generation: 4, command: "x", handback: true },
+    ],
+    [
+      "a held send",
+      /takes no `notify`/,
+      { terminalId: "t-peer", generation: 4, command: "x", whenBusy: "queue" },
     ],
   ])("refuses %s, sending nothing anywhere", async (_name, refusal, args) => {
     installHostRuntime(true);
@@ -305,12 +310,14 @@ describe("the global assistant's send to its other session (#18280)", () => {
     const { control, submit } = peerControl();
     const { server, source } = await serverFor(GLOBAL_ASSISTANT_ID, "full", control, false);
 
+    // An id that names no assistant, so only the global peer gate stands in its way.
     const result = await callTool(server, {
       name: "terminal.sendCommand",
-      arguments: { terminalId: "t-peer", generation: 4, command: "x" },
+      arguments: { terminalId: "t-worker", generation: 4, command: "x" },
     });
 
     expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/sends only to the other global session/);
     expect(submit).not.toHaveBeenCalled();
     expect(source.dispatchAction).not.toHaveBeenCalled();
     expect(source.dispatchActionWithoutView).not.toHaveBeenCalled();

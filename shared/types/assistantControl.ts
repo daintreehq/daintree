@@ -102,25 +102,10 @@ export type GlobalAssistantRole = (typeof GLOBAL_ASSISTANT_ROLES)[number];
 export const AssistantSelfSchema = z.object({
   slot: z.number(),
   agentId: z.string(),
-  role: z
-    .enum(GLOBAL_ASSISTANT_ROLES)
-    .optional()
-    .describe("A global session's side, as of this listing. Absent for a project's lane."),
+  /** A global session's side as of this listing (#18280); absent for a project's lane. */
+  role: z.enum(GLOBAL_ASSISTANT_ROLES).optional(),
 });
 export type AssistantSelf = z.infer<typeof AssistantSelfSchema>;
-
-/**
- * The other global session on this machine, as a global session sees it
- * (#18280): the one thing it may send to directly.
- */
-export const GlobalAssistantPeerSchema = z.object({
-  terminalId: z.string(),
-  generation: z.number(),
-  slot: z.number(),
-  role: z.enum(GLOBAL_ASSISTANT_ROLES),
-  agentState: AssistantEntrySchema.shape.agentState,
-});
-export type GlobalAssistantPeer = z.infer<typeof GlobalAssistantPeerSchema>;
 
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
@@ -131,12 +116,10 @@ export const AssistantListResultSchema = z.object({
   keptSlots: z
     .array(KeptAssistantSlotSchema)
     .describe("Stopped slots keeping a conversation: resume one, never start there."),
+  /** To a global session, the other one (#18280): what its own send reaches. */
   global: GlobalAssistantEntrySchema.nullable().describe(
     "This machine's global Assistant: send and status only. Null if none runs."
   ),
-  globalPeer: GlobalAssistantPeerSchema.nullable()
-    .optional()
-    .describe("For a global session only: the other one, to send to. Null if none runs."),
 });
 export type AssistantListResult = z.infer<typeof AssistantListResultSchema>;
 

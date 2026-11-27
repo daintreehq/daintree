@@ -153,7 +153,8 @@ export function registerListToolsHandler(
       .filter(
         (entry) =>
           shouldExposeTool(entry, tier, listSurface) &&
-          (!globalSession || globalAssistantListsTool(entry.id, listSurface.assistantCaller))
+          (!globalSession ||
+            globalAssistantListsTool(entry.id, listSurface.assistantCaller === true))
       )
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);

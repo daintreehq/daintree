@@ -52,8 +52,6 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               type: "string",
             },
             role: {
-              description:
-                "A global session's side, as of this listing. Absent for a project's lane.",
               type: "string",
               enum: ["coordinator", "conversation"],
             },
@@ -184,46 +182,6 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             },
           ],
           description: "This machine's global Assistant: send and status only. Null if none runs.",
-        },
-        globalPeer: {
-          description: "For a global session only: the other one, to send to. Null if none runs.",
-          anyOf: [
-            {
-              type: "object",
-              properties: {
-                terminalId: {
-                  type: "string",
-                },
-                generation: {
-                  type: "number",
-                },
-                slot: {
-                  type: "number",
-                },
-                role: {
-                  type: "string",
-                  enum: ["coordinator", "conversation"],
-                },
-                agentState: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      enum: ["idle", "working", "waiting", "directing", "completed", "exited"],
-                    },
-                    {
-                      type: "null",
-                    },
-                  ],
-                  description: "As last observed; not proof of what it is doing.",
-                },
-              },
-              required: ["terminalId", "generation", "slot", "role", "agentState"],
-              additionalProperties: false,
-            },
-            {
-              type: "null",
-            },
-          ],
         },
       },
       required: ["projectId", "assistants", "vacantSlots", "keptSlots", "global"],

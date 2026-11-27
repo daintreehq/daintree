@@ -1518,9 +1518,10 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(control.resolve(LOCAL, "t-global-2")).toBeNull();
       // One global session is never a project peer of the other, only its global peer.
       expect(control.resolve(GLOBAL_CALLER, "t-global-2")?.scope).toBe("global-peer");
+      // Its listing's `global` is that other session, and it has no project's lanes.
       const fromGlobal = await control.list(GLOBAL_CALLER);
       expect(fromGlobal.assistants).toEqual([]);
-      expect(fromGlobal.global).toBeNull();
+      expect(fromGlobal.global?.terminalId).toBe("t-global-2");
     });
 
     it("lists the first session when it started first, too", async () => {
@@ -1656,21 +1657,69 @@ describe("AssistantTerminalControl (#13496)", () => {
           assistants: [],
           vacantSlots: [],
           keptSlots: [],
-          global: null,
-          globalPeer: {
-            terminalId: "t-global-2",
-            generation: 4,
-            slot: 1,
-            role: "conversation",
-            agentState: "waiting",
-          },
+          global: { terminalId: "t-global-2", generation: 4, agentState: "waiting" },
         });
+        byTerminal("t-global")!.record = atPrompt({ agentState: "working" });
         const fromConversation = await control.list(CONVERSATION);
         expect(fromConversation.self).toMatchObject({ slot: 1, role: "conversation" });
-        expect(fromConversation.globalPeer).toMatchObject({
+        expect(fromConversation.global).toEqual({
           terminalId: "t-global",
-          role: "coordinator",
+          generation: 7,
+          agentState: "working",
         });
+      });
+
+      it("reads coordination once per listing, whatever changes while it reads", async () => {
+        let reads = 0;
+        control = new AssistantTerminalControl({
+          ...deps,
+          globalCoordinatorSlot: () => (reads++ === 0 ? GLOBAL_ASSISTANT_SLOT : 1),
+        });
+        addLane(2, "t-one");
+        expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global");
+      });
+
+      it("reaches no global session when coordination can't be read", async () => {
+        control = new AssistantTerminalControl({
+          ...deps,
+          globalCoordinatorSlot: () => {
+            throw new Error("store unreadable");
+          },
+        });
+        expect(control.resolve(LOCAL, "t-global")).toBeNull();
+        expect(control.resolve(LOCAL, "t-global-2")).toBeNull();
+        expect((await control.list(LOCAL)).global).toBeNull();
+        expect((await control.list(GLOBAL_CALLER)).self?.role).toBe("conversation");
+        expect((await control.list(CONVERSATION)).self?.role).toBe("conversation");
+      });
+
+      it("drops a project's send held for the coordinator once coordination is handed over", async () => {
+        const hold = vi.fn(
+          (_request: Parameters<WorkerSteerQueue["hold"]>[0]) =>
+            ({ queuedSendToken: "held-1", expiresAt: 9_000 }) as ReturnType<
+              WorkerSteerQueue["hold"]
+            >
+        );
+        control = new AssistantTerminalControl({
+          ...deps,
+          globalCoordinatorSlot: () => coordinator,
+          queue: () => ({ hold }),
+        });
+        byTerminal("t-global")!.record = atPrompt({
+          agentState: "working",
+          lastForeignPromptInputAt: 500,
+        });
+        await control.submit(LOCAL, control.require(LOCAL, "t-global"), {
+          command: "Hi",
+          generation: 7,
+          handback: false,
+          whenBusy: { queue: { ttlSeconds: 600 }, authorize: () => null },
+        });
+        const { authorize } = hold.mock.calls[0]![0];
+        expect(authorize()).toBeNull();
+        // Same sessions, same runs: only which one coordinates moved.
+        coordinator = 1;
+        expect(authorize()).toMatchObject({ code: "ASSISTANT_NOT_FOUND" });
       });
 
       it("swaps the sides when coordination is handed over", async () => {
@@ -1689,14 +1738,14 @@ describe("AssistantTerminalControl (#13496)", () => {
         );
         const listed = await control.list(GLOBAL_CALLER);
         expect(listed.self?.role).toBe("coordinator");
-        expect(listed.globalPeer).toBeNull();
+        expect(listed.global).toBeNull();
       });
 
       it("lists no peer for a global caller whose own session isn't running", async () => {
         const gone: AssistantCaller = { ...GLOBAL_CALLER, helpSessionId: "ended-session" };
         const listed = await control.list(gone);
         expect(listed.self).toBeUndefined();
-        expect(listed.globalPeer).toBeNull();
+        expect(listed.global).toBeNull();
         expect(control.resolve(gone, "t-global-2")).toBeNull();
       });
 
