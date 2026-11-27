@@ -17,11 +17,14 @@ import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
   stampAssistantPrompt,
+  stampSiblingAssistantPrompt,
   stampUpwardAssistantPrompt,
+  type SiblingAssistantLane,
 } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
 import {
   buildTerminalSendCommandReceipt,
@@ -704,13 +707,28 @@ export class AssistantTerminalControl {
     return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
   }
 
+  /**
+   * The caller's own running lane, matched by its help session so a slot
+   * reused since the call began never lends its identity; null once it ended.
+   */
+  private callerLane(caller: AssistantCaller & { kind: "local" }): SiblingAssistantLane | null {
+    for (const lane of this.deps.listRunningLanes()) {
+      if (lane.projectId !== caller.projectId) continue;
+      const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+      if (running?.sessionId !== caller.helpSessionId) continue;
+      return { slot: lane.slot, agentName: getAgentConfig(lane.agentId)?.name ?? lane.agentId };
+    }
+    return null;
+  }
+
   /** The line a send types: stamped with where it came from, with any handback instruction. */
   private prepareLine(
     caller: AssistantCaller,
     target: AssistantTarget,
     request: { command: string; handback: boolean }
   ): { text: string; handbackCode: string | undefined } {
-    // A message up to the global is raised with it, never a brief for it to carry out.
+    // A message up to the global is raised with it, never a brief for it to carry out;
+    // one from a sibling lane is a peer's (#18277). Another machine's stays a brief.
     const stamped =
       target.scope === "global"
         ? stampUpwardAssistantPrompt(
@@ -718,7 +736,13 @@ export class AssistantTerminalControl {
             this.deps.projectName(caller.projectId) ?? caller.projectId,
             caller.machineName
           )
-        : stampAssistantPrompt(request.command, caller.machineName);
+        : caller.kind === "local"
+          ? stampSiblingAssistantPrompt(
+              request.command,
+              this.callerLane(caller),
+              caller.machineName
+            )
+          : stampAssistantPrompt(request.command, caller.machineName);
     if (!request.handback) return { text: stamped, handbackCode: undefined };
     const handbackCode = mintHandbackCode();
     return { text: appendHandbackInstruction(stamped, handbackCode, "run"), handbackCode };
