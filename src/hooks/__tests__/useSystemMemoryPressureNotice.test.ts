@@ -355,7 +355,7 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(notifyMock).toHaveBeenCalledTimes(2);
     const toast = notifyMock.mock.calls[1]![0];
     expect(history.getState().entries.find((e) => e.id === toast.historyId)?.message).toContain(
-      "swap is 97% full"
+      "swap in use grew to 97%"
     );
   });
 
@@ -475,7 +475,7 @@ describe("useSystemMemoryPressureNotice", () => {
 
       await deliver({ ...DEGRADED, fileInbox: false });
 
-      expect(store.getState().notice?.reading).toContain("Swap is 91% full");
+      expect(store.getState().notice?.reading).toContain("Swap in use grew to 91%");
       expect(notifyMock).not.toHaveBeenCalled();
       expect(claimMock).not.toHaveBeenCalled();
     });
@@ -496,7 +496,7 @@ describe("useSystemMemoryPressureNotice", () => {
       expect(
         history.getState().entries.find((e) => e.id === "system-memory-pressure:episode-1:warning")
           ?.message
-      ).toContain("Swap is 95% full");
+      ).toContain("Swap in use grew to 95%");
     });
 
     it("never brings back a row the user dismissed, even from a delivery replayed late", async () => {
@@ -588,7 +588,7 @@ describe("useSystemMemoryPressureNotice", () => {
         .getState()
         .entries.find((e) => e.id === notifyMock.mock.calls[0]![0].historyId);
       // The worsening refreshed the filed row; recovery then retired it.
-      expect(row?.message).toContain("Swap is 97% full");
+      expect(row?.message).toContain("Swap in use grew to 97%");
       expect(row?.archivedAt).toEqual(expect.any(Number));
     });
 
@@ -602,7 +602,7 @@ describe("useSystemMemoryPressureNotice", () => {
       await deliver(DEGRADED);
       await deliver({ ...DEGRADED, episodeId: "episode-2", swapUsedPercent: 95 });
 
-      expect(store.getState().notice?.reading).toContain("Swap is 95% full");
+      expect(store.getState().notice?.reading).toContain("Swap in use grew to 95%");
       expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
