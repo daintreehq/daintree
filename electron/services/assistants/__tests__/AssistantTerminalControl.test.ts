@@ -256,9 +256,17 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(first).not.toMatch(/orchestrator's brief/);
     });
 
-    it("never names a lane whose slot another session took since the sender's ran there", async () => {
-      addLane(0, "t-replacement", { sessionId: "replacement-session", agentId: "claude" });
+    it("never names a lane whose slot another session took while the send read its target", async () => {
+      const sender = addLane(0, "t-hub", { sessionId: "hub-session", agentId: "claude" });
       const target = control.require(LOCAL, "t-one");
+      const read = deps.getTerminal;
+      control = new AssistantTerminalControl({
+        ...deps,
+        getTerminal: async (terminalId) => {
+          sender.running = { ...sender.running, sessionId: "replacement-session" };
+          return read(terminalId);
+        },
+      });
       await control.submit(LOCAL, target, { command: "Hello", generation: 3, handback: false });
       const first = String(mocks.submit.mock.calls[0]![1]).split("\n")[0]!;
       expect(first).toMatch(/^From the Daintree Assistant of another lane in this project /);
@@ -375,7 +383,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       });
 
     it("holds it for the run it named, under the sender, stamped as an immediate send is", async () => {
-      addLane(2, "t-hub", { sessionId: "hub-session", agentId: "claude" });
+      addLane(2, "t-hub", { sessionId: "hub-session" });
       const receipt = await send();
       expect(mocks.submit).not.toHaveBeenCalled();
       expect(receipt).toMatchObject({
@@ -400,7 +408,7 @@ describe("AssistantTerminalControl (#13496)", () => {
         },
       });
       expect(request.text.split("\n")[0]).toMatch(
-        /^From the Daintree Assistant of lane 2 \(Claude\) in this project on .*Another lane of this project is raising this with you/
+        /^From the Daintree Assistant of lane 2 \(Codex\) in this project on .*Another lane of this project is raising this with you/
       );
       expect(request.text.endsWith(buildHandbackInstruction(request.handbackCode!, "run"))).toBe(
         true

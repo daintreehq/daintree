@@ -24,7 +24,7 @@ import {
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
-import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { getAgentDisplayTitle } from "../../../shared/config/agentRegistry.js";
 import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
 import {
   buildTerminalSendCommandReceipt,
@@ -716,7 +716,7 @@ export class AssistantTerminalControl {
       if (lane.projectId !== caller.projectId) continue;
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (running?.sessionId !== caller.helpSessionId) continue;
-      return { slot: lane.slot, agentName: getAgentConfig(lane.agentId)?.name ?? lane.agentId };
+      return { slot: lane.slot, agentName: getAgentDisplayTitle(lane.agentId) };
     }
     return null;
   }

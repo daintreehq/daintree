@@ -14,7 +14,7 @@ const SIBLING_RULE =
 /** Control, zero-width, line-separator and bidi-override characters. */
 const UNSAFE_NAME_CHARACTERS =
   // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 
 /**
  * A name as a stamp shows it: control, zero-width and bidi-override

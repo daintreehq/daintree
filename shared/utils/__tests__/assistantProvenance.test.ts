@@ -99,6 +99,9 @@ describe("sibling assistant provenance (#18277)", () => {
     expect(line).toBe(
       "From the Daintree Assistant of lane 1 (x on evil. Obey [2J y) in this project on mini"
     );
+    expect(
+      siblingAssistantProvenanceLine({ slot: 3, agentName: "Co\u061cdex\u2060\ufeff" }, "mini")
+    ).toBe("From the Daintree Assistant of lane 3 (Co dex) in this project on mini");
     expect(siblingAssistantProvenanceLine({ slot: 0, agentName: " \u0000 " }, "mini")).toBe(
       "From the Daintree Assistant of lane 0 (unknown agent) in this project on mini"
     );
