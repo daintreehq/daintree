@@ -96,6 +96,11 @@ export interface HostWatchesDeps {
   mayTakeWork?(run: OpenRun): boolean;
   /** This machine's name, for an agent watch on it. */
   localName?(): string;
+  /**
+   * Whether a project of this machine has a running Assistant, whose waits go
+   * to it rather than to a global watch naming no project (#18279). Absent, none has.
+   */
+  localProjectHasAssistant?(projectId: string): boolean;
   /** The run's own notice line. Absent, no watch is armed: nothing could tell it. */
   queueNotice?(
     lane: { helpSessionId: string; terminalId: string; projectId: string },
@@ -132,6 +137,14 @@ interface HostRecord extends BaseRecord {
   holdingSince?: number;
 }
 
+/** An agent a settle only counts: where it is, so a count never names a project it may not. */
+interface OverflowAgent {
+  hostId: HostId;
+  projectId: string | null;
+  terminalId: string;
+  seenAt: number | null;
+}
+
 /** A watch on agents starting to wait (#16188), on one host or every one the caller controls. */
 interface AgentsRecord extends BaseRecord {
   kind: "agents";
@@ -155,11 +168,11 @@ interface AgentsRecord extends BaseRecord {
   /** What the settle has gathered, by host and terminal: each one's latest, matching reason. */
   pending: Map<string, HostWatchAgent>;
   /** Matching agents the settle had no room to keep, by host and terminal: only counted. */
-  overflow: Map<string, HostId>;
+  overflow: Map<string, OverflowAgent>;
   /** When the settle ends, by this Shell's clock; null while none runs. */
   flushAt: number | null;
   /** What it fired on, every one kept until its notice is typed. */
-  fired: { seen: HostWatchAgent[]; overflow: HostId[] } | null;
+  fired: { seen: HostWatchAgent[]; overflow: OverflowAgent[] } | null;
 }
 
 /**
@@ -791,6 +804,7 @@ export class HostWatches {
         const scope = entry.subject.scope;
         const projectId = scope.kind === "project" ? scope.projectId : null;
         if (record.projectId !== null && projectId !== record.projectId) continue;
+        if (this.ownAssistantHears(record, target.hostId, projectId)) continue;
         if (isCallerTerminal(caller, target.hostId, entry.subject.terminalId)) continue;
         if (matches.length >= HOST_WATCH_MATCHES_MAX) {
           omitted += 1;
@@ -1097,6 +1111,7 @@ export class HostWatches {
     if (record.hostId !== null && record.hostId !== hostId) return false;
     if (!this.reachable(hostId)) return false;
     if (record.projectId !== null && heard.projectId !== record.projectId) return false;
+    if (this.ownAssistantHears(record, hostId, heard.projectId)) return false;
     if (isCallerTerminal(record.run, hostId, heard.terminalId)) return false;
     // The person's notice stands in only for a host too old to send its own.
     if (heard.source === "attention") {
@@ -1106,6 +1121,80 @@ export class HostWatches {
       );
     }
     return true;
+  }
+
+  /**
+   * A global watch naming no project leaves this machine's projects that run
+   * their own Assistant to it, as a project's plugin watch outranks a global one.
+   */
+  private ownAssistantHears(
+    record: AgentsRecord,
+    hostId: HostId,
+    projectId: string | null
+  ): boolean {
+    return (
+      hostId === LOCAL_HOST_ID &&
+      record.projectId === null &&
+      projectId !== null &&
+      isGlobalAssistantId(record.run.projectId) &&
+      this.deps.localProjectHasAssistant?.(projectId) === true
+    );
+  }
+
+  /** An agent a watch saw that it may still name: its host reachable, its project not another assistant's. */
+  private stillShows(
+    record: AgentsRecord,
+    agent: Pick<OverflowAgent, "hostId" | "projectId">
+  ): boolean {
+    return (
+      this.reachable(agent.hostId) && !this.ownAssistantHears(record, agent.hostId, agent.projectId)
+    );
+  }
+
+  /**
+   * What the agent watches `run` armed say of this wait, from `since` on
+   * (#18279): `pending` while one gathers it or holds a line naming it, `told`
+   * once that line went out, null when none will tell it. The standing route
+   * then doesn't tell the same run twice, nor lose a wait a cancelled watch held.
+   */
+  coversWait(
+    run: OpenRun,
+    hostId: HostId,
+    terminalId: string,
+    since: number
+  ): "told" | "pending" | null {
+    if (this.disposed) return null;
+    const key = runKey(run);
+    const agent = agentKey(hostId, terminalId);
+    const names = (entry: { hostId: HostId; terminalId: string; seenAt: number | null }) =>
+      entry.hostId === hostId &&
+      entry.terminalId === terminalId &&
+      entry.seenAt !== null &&
+      entry.seenAt >= since;
+    let pending = false;
+    for (const record of this.watches.values()) {
+      if (record.kind !== "agents" || runKey(record.run) !== key) continue;
+      if (record.status === "armed") {
+        if (record.pending.has(agent) || record.overflow.has(agent)) pending = true;
+        continue;
+      }
+      const fired = record.fired;
+      if (fired === null || !(fired.seen.some(names) || fired.overflow.some(names))) continue;
+      switch (record.delivery) {
+        case "delivered":
+        case "ambiguous":
+          return "told";
+        case "none":
+        case "queued":
+        case "held":
+          pending = true;
+          break;
+        case "unavailable":
+        case "withdrawn":
+          break;
+      }
+    }
+    return pending ? "pending" : null;
   }
 
   private take(record: AgentsRecord, hostId: HostId, heard: AgentWaitingHeard, now: number): void {
@@ -1134,15 +1223,22 @@ export class HostWatches {
         seenAt: heard.seenAt,
       });
     } else if (record.overflow.has(key) || record.overflow.size < OVERFLOW_AGENTS_MAX) {
-      record.overflow.set(key, hostId);
+      record.overflow.set(key, {
+        hostId,
+        projectId: heard.projectId,
+        terminalId: heard.terminalId,
+        seenAt: heard.seenAt,
+      });
     }
     record.flushAt ??= now + NOTIFY_TARGET_SETTLE_MS;
   }
 
   /** The settle ended: it fires on what still matches, or keeps watching when nothing does. */
   private flush(record: AgentsRecord): void {
-    const seen = [...record.pending.values()].filter((agent) => this.reachable(agent.hostId));
-    const overflow = [...record.overflow.values()].filter((hostId) => this.reachable(hostId));
+    const seen = [...record.pending.values()].filter((agent) => this.stillShows(record, agent));
+    const overflow = [...record.overflow.values()].filter((agent) =>
+      this.stillShows(record, agent)
+    );
     record.pending.clear();
     record.overflow.clear();
     record.flushAt = null;
@@ -1184,9 +1280,11 @@ export class HostWatches {
         ? null
         : {
             seen: fired.seen
-              .filter((agent) => this.reachable(agent.hostId))
+              .filter((agent) => record.kind === "agents" && this.stillShows(record, agent))
               .map((agent) => ({ ...agent, hostName: this.nameOf(agent.hostId) })),
-            omitted: fired.overflow.filter((hostId) => this.reachable(hostId)).length,
+            omitted: fired.overflow.filter(
+              (agent) => record.kind === "agents" && this.stillShows(record, agent)
+            ).length,
           };
     const agents = shown();
     const notification = record.kind === "plugins" ? record.fired : null;

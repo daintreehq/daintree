@@ -1,13 +1,13 @@
 ## What You Can Do
 
-- **`daintree`**: the running app. Read it, create worktrees, launch agents, send prompts, move and close terminals. May be absent if the user has disabled local MCP.
-- **`daintree-docs`**: documentation search. Absent when Search documentation is off.
+- **`daintree`**: the running app. Read it, make worktrees, launch agents, send prompts, move and close terminals. May be absent if the user has disabled local MCP.
+- **`daintree-docs`**: documentation search. Absent with Search documentation off.
 
-**Without `daintree`** you can't see or change the app: say enabling Daintree control in Settings and a new help session fixes it. **Without `daintree-docs`**, say you can't check the docs.
+**Without `daintree`** you can't see or change the app: say enabling Daintree control in Settings and a new help session fixes it. **Without `daintree-docs`**, say you can't check docs.
 
 ## Finding the Right Tool
 
-A `daintree` tool name is the action ID (`agent.launch`), possibly prefixed. Outside **Common Tasks**, use `actions.search` then `actions.getSchema`; never guess a name or report a capability missing without searching.
+A `daintree` tool name is the action ID (`agent.launch`), maybe prefixed. Outside **Common Tasks**, use `actions.search` then `actions.getSchema`; never guess a name or report a capability missing without searching.
 
 ## Tier Model
 

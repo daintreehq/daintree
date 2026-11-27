@@ -309,6 +309,11 @@ export interface HostCallRuntimeDeps {
   ): void;
   hosts(): ObservedHost[];
   /**
+   * Whether a project of this machine has a running Assistant, which hears its
+   * waits instead of a global agent watch naming no project (#18279).
+   */
+  localProjectHasAssistant?(projectId: string): boolean;
+  /**
    * This machine's own projects (#14024): `host.list` names them first, as
    * `local`, and `host.call` reaches them there. Absent, `local` is no host.
    */
@@ -1216,6 +1221,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // A global session standing by is never handed work its coordinator should get (#18143).
       mayTakeWork: (run) => this.caller(run.sessionId)?.standby !== true,
       ...(deps.local ? { localName: () => deps.local!.name() } : {}),
+      ...(deps.localProjectHasAssistant
+        ? { localProjectHasAssistant: deps.localProjectHasAssistant }
+        : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
       clock: () => this.clock(),
@@ -2000,6 +2008,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   retireWatches(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
+  }
+
+  /** What the agent watches `run` armed say of this machine's terminal's wait (#18279). */
+  watchCoversWait(run: OpenRun, terminalId: string, since: number): "told" | "pending" | null {
+    return this.hostWatches.coversWait(run, LOCAL_HOST_ID, terminalId, since);
   }
 
   /** Forgets every call and notice; calls on hosts are left as they are. */

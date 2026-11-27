@@ -30,6 +30,7 @@ import {
   type OwnPane,
   type TerminalNotifyPtyClient,
 } from "../terminalNotify.js";
+import { formatWorkerWaitLine } from "../noticeFormat.js";
 import { createApprovalWake, type ApprovalWakeDeps } from "../approvalWake.js";
 import { GrantCache } from "../grantCache.js";
 import {
@@ -354,6 +355,87 @@ describe("TerminalNotifyService", () => {
       await expect(h.service.whenIdle(PANE, { terminalId: "t-a" })).rejects.toMatchObject({
         code: NOTIFY_LIMIT_REACHED,
       });
+    });
+  });
+
+  describe("whether a requested notice tells a wait (#18279)", () => {
+    it("may tell the wait it settles on until its line is written, and told it then, never a later one", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const waitedAt = Date.now();
+      h.settle("t-a", { waitingReason: "question" });
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("pending");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS);
+      expect(h.service.getPaneState(OWN)?.pendingCount).toBe(0);
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("pending");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("told");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.resume("t-a");
+      const laterAt = Date.now();
+      h.settle("t-a", { waitingReason: "question" });
+      expect(h.service.coversStop("t-a", laterAt)).toBeNull();
+    });
+
+    it("tells a wait the settle reaches through another stop, by when it entered the wait", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      h.settle("t-a", { state: "completed", waitingReason: undefined });
+      await vi.advanceTimersByTimeAsync(500);
+      const waitedAt = Date.now();
+      h.stateChange({ terminalId: "t-a", previousState: "completed", waitingReason: "approval" });
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS);
+      await flushNotice();
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("told");
+      // A wait that turned actionable later than the one it reported isn't covered.
+      expect(h.service.coversStop("t-a", waitedAt + 1)).toBeNull();
+    });
+
+    it("says nothing of a wait its notice reported as another state, or will never settle", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const stoppedAt = Date.now();
+      h.settle("t-a", { state: "completed", waitingReason: undefined });
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS);
+      await flushNotice();
+      expect(h.service.coversStop("t-a", stoppedAt)).toBeNull();
+
+      // Armed, but straight from idle to a question: no settle out of working starts.
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+      const askedAt = Date.now();
+      h.stateChange({ terminalId: "t-b", previousState: "idle", waitingReason: "question" });
+      expect(h.service.coversStop("t-b", askedAt)).toBeNull();
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS);
+      expect(h.service.coversStop("t-b", askedAt)).toBeNull();
+    });
+
+    it("says the receiver's own pane holds it, and nothing once that pane is stopped", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const waitedAt = Date.now();
+      h.settle("t-a", { waitingReason: "question" });
+      expect(h.service.coversStop("t-a", waitedAt, OWN)).toBe("pending-here");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS);
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("pending");
+      expect(h.service.coversStop("t-a", waitedAt, "other-pane")).toBe("pending");
+      expect(h.service.coversStop("t-a", waitedAt, OWN)).toBe("pending-here");
+      expect(h.service.stoppedSince(OWN, waitedAt)).toBe(false);
+      h.service.stopPane(OWN);
+      expect(h.service.coversStop("t-a", waitedAt)).toBeNull();
+      expect(h.service.stoppedSince(OWN, waitedAt)).toBe(true);
+      expect(h.service.stoppedSince(OWN, Date.now() + 1)).toBe(false);
+    });
+
+    it("may tell a wait while its send's write is unconfirmed", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      h.client.records.set("tok-1", { phase: "queued", at: Date.now() });
+      pending.complete({ sent: true, submissionToken: "tok-1" });
+      const waitedAt = Date.now();
+      h.settle("t-a", { waitingReason: "question" });
+      expect(h.service.coversStop("t-a", waitedAt)).toBe("pending");
     });
   });
 
@@ -2383,6 +2465,53 @@ describe("lane wakes (#13333)", () => {
 
   /** Long enough for a queued wake to go out and its line to be confirmed. */
   const flushWake = () => vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+  describe("a worker's wait, told unasked (#18279)", () => {
+    const agent = {
+      hostId: "local",
+      projectId: PROJECT,
+      worktreeId: null,
+      terminalId: "w-1",
+      incarnation: 2,
+      agentIncarnation: null,
+      waitingReason: "question" as const,
+      seenAt: Date.parse("2026-09-25T09:59:00Z"),
+    };
+    const workerWake = () => {
+      const outcomes: LaneWakeOutcome[] = [];
+      const wake: LaneWake = {
+        id: "ww-1",
+        kind: "worker-wait",
+        workerWaits: { agents: [agent], global: false },
+        recheck: () => ({ kind: "ready" }),
+        beforeType: () => true,
+        report: (outcome) => outcomes.push(outcome),
+      };
+      return { wake, outcomes };
+    };
+
+    it("types its line, naming the worker, and counts it on the pane until then", async () => {
+      const h = setup();
+      const w = workerWake();
+      h.service.enqueueWake(PANE, PROJECT, w.wake);
+      expect(h.service.getPaneState(OWN)?.readyCount).toBe(1);
+      await flushWake();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toBe(formatWorkerWaitLine([agent], false));
+      expect(w.outcomes).toEqual([{ kind: "delivered" }]);
+    });
+
+    it("hears that the host refused its line before any of it was written", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      const w = workerWake();
+      h.service.enqueueWake(PANE, PROJECT, w.wake);
+      await flushWake();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(w.outcomes).toEqual([{ kind: "unavailable", reason: LINE_REFUSED }]);
+    });
+  });
 
   it("types the fixed line through the guarded submit and records it delivered", async () => {
     const h = setup();

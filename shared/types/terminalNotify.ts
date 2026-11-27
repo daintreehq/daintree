@@ -6,10 +6,12 @@ import { APPROVAL_KIND_DESCRIPTION } from "./terminalStatus.js";
  * agent terminal stops working, instead of spending model turns to find out.
  *
  * Asked for per call — `notify: true` on a send or launch, or
- * `terminal.notifyWhenIdle` for a terminal that is already working — and never
- * on Daintree's own initiative. A notice fires once, at the first settle out
- * of `working`, and Daintree types one self-contained notice into the asking
- * pane's own prompt. The first line carries only what Daintree observed and
+ * `terminal.notifyWhenIdle` for a terminal that is already working. The one
+ * notice Daintree sends unasked is a worker's wait on an approval or a
+ * question no pane asked to hear, to the project's running Assistant or else
+ * the global one (#18279): starting an Assistant is the opt-in. A requested
+ * notice fires once, at the first settle out of `working`, and Daintree types
+ * one self-contained notice into the asking pane's own prompt. The first line carries only what Daintree observed and
  * the caller's own note. Below it, unless the caller asked for none, come the
  * target's last screen lines in a fenced block labelled as terminal output, so
  * an orchestrator reads the reply without another call. Notices live in main,

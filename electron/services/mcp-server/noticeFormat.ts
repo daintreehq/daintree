@@ -537,3 +537,19 @@ export function formatHostWatchLine(notice: HostWatchNotice): string {
     }
   }
 }
+
+/**
+ * Workers in a project seen waiting, told unasked to the Assistant that
+ * receives the project's waits (#18279): the project's lowest running lane,
+ * else the global coordinator. What was seen and when, never that it still
+ * waits, and nothing of what it asks: the reader checks before acting.
+ */
+export function formatWorkerWaitLine(seen: readonly HostWatchAgent[], global = false): string {
+  const shown = seen.slice(0, HOST_WATCH_AGENTS_MAX);
+  const rest = seen.length - shown.length;
+  const named = `${shown
+    .map((agent) => describeWatchedAgent({ ...agent, hostName: "" }))
+    .join("; ")}${rest > 0 ? `; and ${rest} more` : ""}`;
+  const what = seen.length === 1 ? "an agent start waiting" : `${seen.length} agents start waiting`;
+  return `Daintree: saw ${what}: ${named}. Sent unasked: you hear the waits of these workers that no pane asked to hear. Observations only; it may have moved on, and the reason is a reading of its screen. Read each one's status and screen with ${global ? "host.status on local" : "terminal.getStatus"} before acting.`;
+}
