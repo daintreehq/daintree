@@ -62,6 +62,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * itself and the other one, and the send reaches that other session and no
  * terminal else.
  */
+/** The one send a global session makes itself: to the other global session (#18280). */
+export const GLOBAL_PEER_SEND_TOOL = "terminal.sendCommand";
+
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
@@ -73,8 +76,17 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_SSH_HOST_KEYS_TOOL,
   "mcp.surface",
   "assistant.list",
-  "terminal.sendCommand",
+  GLOBAL_PEER_SEND_TOOL,
 ]);
+
+/**
+ * Whether a global session is shown `id` from its root set. The send to the
+ * other session goes with the listing that names it (#18280), so a session
+ * with no assistant control has neither.
+ */
+export function globalAssistantListsTool(id: string, assistantCaller: boolean): boolean {
+  return GLOBAL_ASSISTANT_TOOL_IDS.has(id) && (id !== GLOBAL_PEER_SEND_TOOL || assistantCaller);
+}
 
 /**
  * The tool its readiness probe looks for in `tools/list` (#14483). Its set has

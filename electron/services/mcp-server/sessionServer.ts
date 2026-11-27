@@ -1,4 +1,7 @@
-import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_TOOL_IDS,
+  globalAssistantListsTool,
+} from "../../../shared/config/globalAssistant.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -3601,7 +3604,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // The global assistant's report keeps to its own set, as its
             // listing does (#16765), whichever manifest answered.
             const manifest = isGlobalSession()
-              ? resolved.filter((entry) => GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+              ? resolved.filter((entry) =>
+                  globalAssistantListsTool(entry.id, assistantCaller !== null)
+                )
               : resolved;
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather
