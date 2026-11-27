@@ -1417,7 +1417,6 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
               ...escalation,
               episodeId: expect.any(String),
               fileInbox: true,
-              launchNoticeShown: false,
             },
           },
         ],

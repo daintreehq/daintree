@@ -18,9 +18,10 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   deliverOpenSystemMemoryPressure,
+  claimSystemMemoryNotice,
   getOpenSystemMemoryPressure,
-  noteSystemMemoryNoticeShown,
   publishSystemMemoryPressure,
+  releaseSystemMemoryNotice,
   resetSystemMemoryPressureDeliveryForTesting,
 } from "../systemMemoryPressureDelivery.js";
 
@@ -97,7 +98,6 @@ const pushed = (
       ...payload,
       episodeId: expect.any(String),
       fileInbox: payload.status === "degraded",
-      launchNoticeShown: false,
       ...delivery,
     },
   },
@@ -278,22 +278,23 @@ describe("systemMemoryPressureDelivery", () => {
       expect(reopened).not.toBe(first);
     });
 
-    it("asks every view to file the inbox row until one reports it, then no view shown later files it", () => {
+    it("gives the inbox row to the first view that claims it, and stops asking views shown later", () => {
       const a = makeWebContents();
       const b = makeWebContents();
       const winA = makeWindow(1, a);
       const winB = makeWindow(2, b);
 
-      // Both visible views are asked, so the attended one can toast.
+      // Both visible views are asked; the first to claim files the row.
       publishSystemMemoryPressure(DEGRADED, [winA, winB]);
       expect(lastDelivery(a.send).fileInbox).toBe(true);
       expect(lastDelivery(b.send).fileInbox).toBe(true);
       const { episodeId } = lastDelivery(a.send);
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-warning")).toBe(true);
+      // The other, or one replaying a delivery it buffered, is refused.
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-warning")).toBe(false);
 
-      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [winA, winB]);
-
-      // A project switched to later, a reload, and a replacement view all leave
-      // the row as the user left it in the shared inbox.
+      // A project switched to later, a reload, and a worsening at the same
+      // level all leave the row as the user left it in the shared inbox.
       const cached = makeWebContents();
       deliverOpenSystemMemoryPressure(winA, cached.wc);
       expect(cached.send).toHaveBeenCalledWith(...pushed(DEGRADED, { fileInbox: false }));
@@ -301,75 +302,82 @@ describe("systemMemoryPressureDelivery", () => {
       a.setLoading(false);
       deliverOpenSystemMemoryPressure(winA, a.wc);
       expect(lastDelivery(a.send).fileInbox).toBe(false);
-
-      // A worsening at the same level refreshes the row rather than filing one.
       publishSystemMemoryPressure({ ...DEGRADED, swapUsedPercent: 95, escalated: true }, [winA]);
       expect(lastDelivery(a.send).fileInbox).toBe(false);
     });
 
-    it("files the first critical level once more, and drops a report for a level the episode passed", () => {
+    it("files the first critical level once more, and refuses a claim for a level the episode passed", () => {
       const view = makeWebContents();
       const win = makeWindow(1, view);
 
       publishSystemMemoryPressure(DEGRADED, [win]);
       const { episodeId } = lastDelivery(view.send);
-      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [win]);
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-warning")).toBe(true);
 
       publishSystemMemoryPressure(CRITICAL, [win]);
       expect(lastDelivery(view.send).fileInbox).toBe(true);
+      // A warning-level claim from a delivery handled after the critical publish.
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-warning")).toBe(false);
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-critical")).toBe(true);
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-warning")).toBe(false);
+      expect(claimSystemMemoryNotice(episodeId!, "inbox-critical")).toBe(false);
 
-      // A warning-level report landing after the critical publish is stale.
-      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [win]);
-      const late = makeWebContents();
-      deliverOpenSystemMemoryPressure(makeWindow(2, late), late.wc);
-      expect(lastDelivery(late.send).fileInbox).toBe(true);
-
-      noteSystemMemoryNoticeShown(episodeId!, "inbox-critical", [win]);
       const later = makeWebContents();
       deliverOpenSystemMemoryPressure(makeWindow(3, later), later.wc);
       expect(lastDelivery(later.send).fileInbox).toBe(false);
     });
 
-    it("tells every view once a launch bar was shown, visible ones now and cached ones on reveal", () => {
-      const a = makeWebContents();
-      const b = makeWebContents();
-      const winA = makeWindow(1, a);
-      const winB = makeWindow(2, b);
-      publishSystemMemoryPressure(DEGRADED, [winA, winB]);
-      const { episodeId } = lastDelivery(a.send);
-
-      noteSystemMemoryNoticeShown(episodeId!, "launch-bar", [winA, winB]);
-
-      expect(a.send).toHaveBeenCalledTimes(2);
-      expect(lastDelivery(a.send).launchNoticeShown).toBe(true);
-      expect(lastDelivery(b.send).launchNoticeShown).toBe(true);
-      const cached = makeWebContents();
-      deliverOpenSystemMemoryPressure(winA, cached.wc);
-      expect(lastDelivery(cached.send).launchNoticeShown).toBe(true);
-
-      // A repeat report sends nothing new.
-      noteSystemMemoryNoticeShown(episodeId!, "launch-bar", [winA, winB]);
-      expect(a.send).toHaveBeenCalledTimes(2);
-    });
-
-    it("ignores a report for an episode that has closed, and re-arms every surface for the next", () => {
+    it("gives the critical toast once, only at the critical level, and again after a release", () => {
       const view = makeWebContents();
       const win = makeWindow(1, view);
       publishSystemMemoryPressure(DEGRADED, [win]);
+      const { episodeId } = lastDelivery(view.send);
+      expect(claimSystemMemoryNotice(episodeId!, "critical-toast")).toBe(false);
+
+      publishSystemMemoryPressure(CRITICAL, [win]);
+      expect(claimSystemMemoryNotice(episodeId!, "critical-toast")).toBe(true);
+      expect(claimSystemMemoryNotice(episodeId!, "critical-toast")).toBe(false);
+
+      // Quiet hours held the toast back, so the next attended view may show it.
+      releaseSystemMemoryNotice(episodeId!, "critical-toast");
+      expect(claimSystemMemoryNotice(episodeId!, "critical-toast")).toBe(true);
+    });
+
+    it("gives the launch bar once, and again after a release", () => {
+      publishSystemMemoryPressure(DEGRADED, [makeWindow(1, makeWebContents())]);
+      const episodeId = (
+        vi.mocked(appWebContentsByWindow.get(1)!.send).mock.calls.at(-1)?.[1] as {
+          payload: SystemMemoryPressureDelivery;
+        }
+      ).payload.episodeId!;
+
+      expect(claimSystemMemoryNotice(episodeId, "launch-bar")).toBe(true);
+      expect(claimSystemMemoryNotice(episodeId, "launch-bar")).toBe(false);
+      releaseSystemMemoryNotice(episodeId, "launch-bar");
+      expect(claimSystemMemoryNotice(episodeId, "launch-bar")).toBe(true);
+    });
+
+    it("refuses claims for an episode that has closed, and re-arms every surface for the next", () => {
+      const view = makeWebContents();
+      const win = makeWindow(1, view);
+      publishSystemMemoryPressure(CRITICAL, [win]);
       const { episodeId: closed } = lastDelivery(view.send);
-      noteSystemMemoryNoticeShown(closed!, "inbox-warning", [win]);
-      noteSystemMemoryNoticeShown(closed!, "launch-bar", [win]);
+      for (const surface of ["inbox-critical", "critical-toast", "launch-bar"] as const) {
+        expect(claimSystemMemoryNotice(closed!, surface)).toBe(true);
+      }
       publishSystemMemoryPressure(NORMAL, [win]);
+      expect(claimSystemMemoryNotice(closed!, "launch-bar")).toBe(false);
 
-      publishSystemMemoryPressure(DEGRADED, [win]);
-      noteSystemMemoryNoticeShown(closed!, "inbox-warning", [win]);
-      noteSystemMemoryNoticeShown(closed!, "launch-bar", [win]);
-      const late = makeWebContents();
-      deliverOpenSystemMemoryPressure(makeWindow(2, late), late.wc);
-
-      expect(late.send).toHaveBeenCalledWith(
-        ...pushed(DEGRADED, { fileInbox: true, launchNoticeShown: false })
-      );
+      publishSystemMemoryPressure(CRITICAL, [win]);
+      const { episodeId: next } = lastDelivery(view.send);
+      // A late release from the closed episode leaves the new one's claims alone.
+      expect(claimSystemMemoryNotice(next!, "launch-bar")).toBe(true);
+      releaseSystemMemoryNotice(closed!, "launch-bar");
+      expect(claimSystemMemoryNotice(next!, "launch-bar")).toBe(false);
+      expect(claimSystemMemoryNotice(closed!, "inbox-critical")).toBe(false);
+      for (const surface of ["inbox-critical", "critical-toast"] as const) {
+        expect(claimSystemMemoryNotice(next!, surface)).toBe(true);
+      }
     });
   });
 });

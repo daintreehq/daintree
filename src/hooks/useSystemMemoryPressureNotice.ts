@@ -3,7 +3,7 @@ import type {
   SystemMemoryPressureDelivery,
   SystemMemoryPressurePayload,
 } from "@shared/types/ipc/system";
-import { notify } from "@/lib/notify";
+import { isWindowAttended, notify } from "@/lib/notify";
 import { isMac } from "@/lib/platform";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { pluralize } from "@/lib/pluralize";
@@ -12,8 +12,10 @@ import type { NotificationAction } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
 import {
-  reportSystemMemoryNoticeShown,
+  claimSystemMemoryNotice,
+  releaseSystemMemoryNotice,
   setSystemMemoryEpisode,
+  SYSTEM_MEMORY_LAUNCH_NOTICE_KEY,
 } from "@/services/systemMemoryLaunchNotice";
 
 const SUPERSEDE_KEY = "system-memory-pressure";
@@ -21,8 +23,8 @@ const SUPERSEDE_KEY = "system-memory-pressure";
 // One-way latch, as in useDiskSpaceWarnings: an app-lifetime listener with no
 // teardown, so a remount can never subscribe twice (#10455).
 let ipcListenerAttached = false;
-/** This renderer heard the episode now open. */
-let noticeRaised = false;
+/** The episode this renderer heard, while it is open. */
+let heardEpisodeId: string | null = null;
 /** The inbox row this renderer filed, so a repeat delivery refreshes it instead. */
 let filedHistoryId: string | null = null;
 
@@ -31,11 +33,17 @@ function inboxHistoryId(episodeId: string, critical: boolean): string {
   return `${SUPERSEDE_KEY}:${episodeId}:${critical ? "critical" : "warning"}`;
 }
 
-/** An episode's warning row is still active in the shared inbox. */
-function holdsActiveEpisodeRow(): boolean {
+/** The episode's rows still active in the shared inbox: its warnings and the launch bar's copy. */
+function activeEpisodeRowIds(): string[] {
   return useNotificationHistoryStore
     .getState()
-    .entries.some((e) => e.supersedeKey === SUPERSEDE_KEY && e.type === "warning" && !e.archivedAt);
+    .entries.filter(
+      (e) =>
+        !e.archivedAt &&
+        ((e.supersedeKey === SUPERSEDE_KEY && e.type === "warning") ||
+          e.supersedeKey === SYSTEM_MEMORY_LAUNCH_NOTICE_KEY)
+    )
+    .map((e) => e.id);
 }
 
 function formatGb(mb: number): string {
@@ -122,14 +130,17 @@ function buildMemoryUseAction(): NotificationAction {
   };
 }
 
-export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery): void {
+export async function handleSystemMemoryPressure(
+  payload: SystemMemoryPressureDelivery
+): Promise<void> {
   if (payload.status === "normal") {
     setSystemMemoryEpisode(null);
     // Recovery reaches every view. One that heard the episode answers, and so
-    // does one that only holds its row: a view that filed it and then reloaded
-    // never heard the episode again, and nothing else would retire the row.
-    if (!noticeRaised && !holdsActiveEpisodeRow()) return;
-    noticeRaised = false;
+    // does one that only holds its rows: a view that filed them and then
+    // reloaded never heard the episode again, and nothing else would retire them.
+    const held = activeEpisodeRowIds();
+    if (heardEpisodeId === null && held.length === 0) return;
+    heardEpisodeId = null;
     filedHistoryId = null;
     useSystemMemoryNoticeStore.getState().clearNotice();
     notify({
@@ -148,6 +159,10 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery
       message: "Every monitored reading has stayed below its threshold for three samples in a row.",
       context: { eventKind: "host" },
     });
+    // The recovery row supersedes one row; a sibling's recovery row this view
+    // took up first supersedes none, and the launch bar's row has its own key.
+    const history = useNotificationHistoryStore.getState();
+    for (const id of held) history.archiveEntry(id);
     return;
   }
 
@@ -155,13 +170,8 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery
   const readingMessage = formatSystemMemoryPressureMessage(payload, isMac());
   if (!reading || !readingMessage || !payload.episodeId) return;
   const episodeId = payload.episodeId;
-  setSystemMemoryEpisode({
-    episodeId,
-    reading,
-    workloads: payload.workloads,
-    launchNoticeShown: payload.launchNoticeShown,
-  });
-  noticeRaised = true;
+  setSystemMemoryEpisode({ episodeId, reading, workloads: payload.workloads });
+  heardEpisodeId = episodeId;
   const workloads = describeSystemMemoryWorkloads(payload.workloads);
   const message = workloads ? `${readingMessage} ${workloads}` : readingMessage;
   const critical = payload.kernelPressureLevel === "critical";
@@ -170,33 +180,49 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery
   // inbox record, which a later level and the recovery row both supersede.
   useSystemMemoryNoticeStore.getState().setNotice({ reading, detail: message, action, critical });
   const historyId = inboxHistoryId(episodeId, critical);
-  if (!payload.fileInbox || filedHistoryId === historyId) {
-    // A view already filed this level's row: refresh its figures in place. A
-    // row the user dismissed or archived is left gone, here and in every other
-    // project, until the episode reaches a new level or a new one opens.
-    useNotificationHistoryStore.getState().updateEntryMessage(historyId, message);
+  // A move to the kernel's critical level also toasts once, in whichever view
+  // the user is looking at: it is the last warning before macOS starts killing
+  // processes, Daintree's terminals among them. That needn't be the view that
+  // files the row, which may be in a window behind.
+  const [file, toast] = await Promise.all([
+    payload.fileInbox && filedHistoryId !== historyId
+      ? claimSystemMemoryNotice(episodeId, critical ? "inbox-critical" : "inbox-warning")
+      : false,
+    critical && isWindowAttended() ? claimSystemMemoryNotice(episodeId, "critical-toast") : false,
+  ]);
+  // Recovery, or a newer episode, landed while Main was answering.
+  if (heardEpisodeId !== episodeId) {
+    if (toast) releaseSystemMemoryNotice(episodeId, "critical-toast");
     return;
   }
-  filedHistoryId = historyId;
-  // A move to the kernel's critical level is the one step that also toasts: it
-  // is the last warning before macOS starts killing processes, Daintree's
-  // terminals among them. Views asked together file one row under one id, and
-  // only the focused one toasts. Later publishes at this level only refresh the
-  // row, so the toast stays up until recovery takes it down (#13639).
-  notify({
+  if (!file) {
+    // Another view filed this level's row: refresh its figures in place. A row
+    // the user dismissed or archived is left gone, here and in every other
+    // project, until the episode reaches a new level or a new one opens.
+    useNotificationHistoryStore.getState().updateEntryMessage(historyId, message);
+  } else {
+    filedHistoryId = historyId;
+  }
+  if (!file && !toast) return;
+  // Later publishes at this level only refresh the row, so the toast stays up
+  // until recovery's replaceKey takes it down (#13639).
+  const id = notify({
     type: "warning",
-    priority: critical ? "high" : "low",
+    priority: toast ? "high" : "low",
     urgent: false,
     countable: false,
     title: critical ? "Critical system memory pressure" : "High system memory use",
     message,
     replaceKey: SUPERSEDE_KEY,
     supersedeKey: SUPERSEDE_KEY,
-    historyId,
+    // A toast for a row another view filed stays out of the inbox, where the
+    // row is, or was until the user dismissed it.
+    ...(file ? { historyId } : { transient: true }),
     context: { eventKind: "host" },
     actions: [action],
   });
-  reportSystemMemoryNoticeShown(episodeId, critical ? "inbox-critical" : "inbox-warning");
+  // Quiet hours or a mute held it back, so a later delivery may try again.
+  if (toast && !id) releaseSystemMemoryNotice(episodeId, "critical-toast");
 }
 
 export function useSystemMemoryPressureNotice(): void {

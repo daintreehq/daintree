@@ -523,7 +523,7 @@ export function _resetPendingSuppressedForTest(): void {
  * Whether anyone can be looking at this window. A locked screen fires no blur,
  * so focus alone keeps answering yes on one (#14885).
  */
-function isWindowAttended(): boolean {
+export function isWindowAttended(): boolean {
   if (isScreenLocked()) return false;
   return typeof document === "undefined" || document.hasFocus();
 }

@@ -4,20 +4,25 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { useNotificationStore } from "@/store/notificationStore";
 
-const NOTICE_KEY = "system-memory-launch";
+/** The bar's key, which its inbox row is filed under too. */
+export const SYSTEM_MEMORY_LAUNCH_NOTICE_KEY = "system-memory-launch";
+const NOTICE_KEY = SYSTEM_MEMORY_LAUNCH_NOTICE_KEY;
 
 interface OpenEpisode {
   episodeId: string;
   /** `describeSystemMemoryReadings` for the episode's latest publish. */
   reading: string;
   workloads: SystemMemoryWorkloads | null;
-  /** Some project view already raised the bar this episode (#18274). */
-  launchNoticeShown: boolean;
 }
 
 let episode: OpenEpisode | null = null;
-/** The bar was raised for the episode now open; dismissing it never re-arms it. */
+/**
+ * The bar was raised, or Main gave it to another project view, for the episode
+ * now open; dismissing it never re-arms it.
+ */
 let shownThisEpisode = false;
+/** A claim to Main is in flight, so a second launch waits on it rather than asking again. */
+let claiming = false;
 let noticeId: string | null = null;
 
 function formatTotal(mb: number): string {
@@ -26,15 +31,27 @@ function formatTotal(mb: number): string {
 }
 
 /**
- * Tells Main a once-per-episode surface was shown, so no other project view
- * raises its own copy (#18274). Best effort: a lost report costs a duplicate.
+ * Asks Main for one of the episode's once-only surfaces (#18274). A failed ask
+ * is a refusal: a duplicate notice is worse than a missing one, and the
+ * sidebar row still shows the episode.
  */
-export function reportSystemMemoryNoticeShown(
+export async function claimSystemMemoryNotice(
+  episodeId: string,
+  surface: SystemMemoryNoticeSurface
+): Promise<boolean> {
+  try {
+    return (await systemClient.claimMemoryNotice({ episodeId, surface })) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function releaseSystemMemoryNotice(
   episodeId: string,
   surface: SystemMemoryNoticeSurface
 ): void {
   try {
-    void systemClient.noteMemoryNoticeShown({ episodeId, surface }).catch(() => {});
+    void systemClient.releaseMemoryNotice({ episodeId, surface }).catch(() => {});
   } catch {
     // No bridge outside Electron.
   }
@@ -64,6 +81,7 @@ export function describeLaunchDuringMemoryEpisode(
 export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
   episode = next;
   if (next !== null) return;
+  claiming = false;
   shownThisEpisode = false;
   if (noticeId !== null) {
     useNotificationStore.getState().dismissNotification(noticeId);
@@ -79,8 +97,26 @@ export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
  * the user's call.
  */
 export function noteVisibleAgentLaunch(): void {
-  if (episode === null || shownThisEpisode || episode.launchNoticeShown) return;
-  const message = describeLaunchDuringMemoryEpisode(episode);
+  if (episode === null || shownThisEpisode || claiming) return;
+  const { episodeId } = episode;
+  claiming = true;
+  void claimSystemMemoryNotice(episodeId, "launch-bar").then((granted) => {
+    // Recovery, or a newer episode, landed while Main was answering.
+    if (!claiming || episode?.episodeId !== episodeId) {
+      if (granted) releaseSystemMemoryNotice(episodeId, "launch-bar");
+      return;
+    }
+    claiming = false;
+    if (!granted) {
+      shownThisEpisode = true;
+      return;
+    }
+    raiseLaunchNotice(episode, episodeId);
+  });
+}
+
+function raiseLaunchNotice(open: OpenEpisode, episodeId: string): void {
+  const message = describeLaunchDuringMemoryEpisode(open);
   const id = notify({
     type: "warning",
     placement: "grid-bar",
@@ -94,15 +130,19 @@ export function noteVisibleAgentLaunch(): void {
     supersedeKey: NOTICE_KEY,
     context: { eventKind: "host" },
   });
-  // A notice the quiet period or a mute swallowed leaves the next launch to try.
-  if (!id) return;
+  // A notice the quiet period or a mute swallowed leaves the next launch, in
+  // any project, to try.
+  if (!id) {
+    releaseSystemMemoryNotice(episodeId, "launch-bar");
+    return;
+  }
   shownThisEpisode = true;
   noticeId = id;
-  reportSystemMemoryNoticeShown(episode.episodeId, "launch-bar");
 }
 
 export function resetSystemMemoryLaunchNoticeForTesting(): void {
   episode = null;
   shownThisEpisode = false;
+  claiming = false;
   noticeId = null;
 }

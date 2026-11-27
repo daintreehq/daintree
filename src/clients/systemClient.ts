@@ -95,10 +95,16 @@ export const systemClient = {
     return window.electron.system.isMemoryPressureCritical();
   },
 
-  noteMemoryNoticeShown: (
-    ...args: Parameters<typeof window.electron.system.noteMemoryNoticeShown>
+  claimMemoryNotice: (
+    ...args: Parameters<typeof window.electron.system.claimMemoryNotice>
+  ): Promise<boolean> => {
+    return window.electron.system.claimMemoryNotice(...args);
+  },
+
+  releaseMemoryNotice: (
+    ...args: Parameters<typeof window.electron.system.releaseMemoryNotice>
   ): Promise<void> => {
-    return window.electron.system.noteMemoryNoticeShown(...args);
+    return window.electron.system.releaseMemoryNotice(...args);
   },
 
   getTmpDir: (): Promise<string> => {

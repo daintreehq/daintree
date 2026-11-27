@@ -35,9 +35,11 @@ vi.mock("../../../services/SystemMemoryPressureMonitor.js", () => ({
   checkKernelPressureCritical: checkKernelPressureCriticalMock,
 }));
 
-const noteShownMock = vi.hoisted(() => vi.fn());
+const claimMock = vi.hoisted(() => vi.fn(() => true));
+const releaseMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../window/systemMemoryPressureDelivery.js", () => ({
-  noteSystemMemoryNoticeShown: noteShownMock,
+  claimSystemMemoryNotice: claimMock,
+  releaseSystemMemoryNotice: releaseMock,
 }));
 
 import { registerMemoryPressureHandlers } from "../memoryPressure.js";
@@ -62,33 +64,36 @@ describe("registerMemoryPressureHandlers", () => {
     expect(checkKernelPressureCriticalMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes a shown notice surface to the delivery with every window (#18274)", () => {
-    const win = { id: 1 };
-    registerMemoryPressureHandlers({
-      windowRegistry: { all: () => [{ browserWindow: win }] },
-    } as never);
+  it("answers a claim with the delivery's verdict and passes a release through (#18274)", () => {
+    registerMemoryPressureHandlers({} as never);
 
-    getHandler("system:note-memory-notice-shown")({
+    claimMock.mockReturnValueOnce(false);
+    expect(
+      getHandler("system:claim-memory-notice")({ episodeId: "episode-1", surface: "launch-bar" })
+    ).toBe(false);
+    expect(claimMock).toHaveBeenCalledWith("episode-1", "launch-bar");
+
+    getHandler("system:release-memory-notice")({
       episodeId: "episode-1",
-      surface: "launch-bar",
+      surface: "critical-toast",
     });
-
-    expect(noteShownMock).toHaveBeenCalledWith("episode-1", "launch-bar", [win]);
+    expect(releaseMock).toHaveBeenCalledWith("episode-1", "critical-toast");
   });
 
   it("refuses a surface it doesn't know", () => {
     registerMemoryPressureHandlers({} as never);
 
     expect(() =>
-      getHandler("system:note-memory-notice-shown")({ episodeId: "episode-1", surface: "toast" })
+      getHandler("system:claim-memory-notice")({ episodeId: "episode-1", surface: "toast" })
     ).toThrow();
-    expect(noteShownMock).not.toHaveBeenCalled();
+    expect(claimMock).not.toHaveBeenCalled();
   });
 
   it("unregisters its channels on dispose", () => {
     const dispose = registerMemoryPressureHandlers({} as never);
     dispose();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:is-memory-pressure-critical");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:note-memory-notice-shown");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:claim-memory-notice");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:release-memory-notice");
   });
 });

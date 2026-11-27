@@ -4,8 +4,10 @@ import { renderHook, act } from "@testing-library/react";
 import type { SystemMemoryPressureDelivery } from "@shared/types/ipc/system";
 
 const notifyMock = vi.fn();
+let attended = true;
 vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => notifyMock(...args),
+  isWindowAttended: () => attended,
 }));
 
 let mac = true;
@@ -19,8 +21,20 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 const eventsOnMock = vi.fn();
-const noticeShownMock = vi.fn();
-let captured: ((payload: SystemMemoryPressureDelivery) => void) | null = null;
+// Main's once-per-episode claims (#18274): the first claim of a surface wins.
+const granted = new Set<string>();
+const claimMock = vi.fn(async ({ episodeId, surface }: { episodeId: string; surface: string }) => {
+  const key = `${episodeId}:${surface}`;
+  if (granted.has(key)) return false;
+  granted.add(key);
+  return true;
+});
+const releaseMock = vi.fn(
+  async ({ episodeId, surface }: { episodeId: string; surface: string }) => {
+    granted.delete(`${episodeId}:${surface}`);
+  }
+);
+let captured: ((payload: SystemMemoryPressureDelivery) => Promise<void>) | null = null;
 
 const DEGRADED: SystemMemoryPressureDelivery = {
   status: "degraded",
@@ -64,6 +78,13 @@ async function mountAndCapture() {
 
 async function historyStore() {
   return (await import("@/store/slices/notificationHistorySlice")).useNotificationHistoryStore;
+}
+
+/** Hands the view a delivery and waits out its claims to Main. */
+async function deliver(payload: SystemMemoryPressureDelivery): Promise<void> {
+  await act(async () => {
+    await captured!(payload);
+  });
 }
 
 /** The same singleton the freshly imported hook writes, after `vi.resetModules`. */
@@ -164,14 +185,16 @@ describe("useSystemMemoryPressureNotice", () => {
     notifyMock.mockReset();
     notifyMock.mockReturnValue("notice-1");
     eventsOnMock.mockReset();
-    noticeShownMock.mockReset();
-    noticeShownMock.mockResolvedValue(undefined);
+    granted.clear();
+    claimMock.mockClear();
+    releaseMock.mockClear();
+    attended = true;
     dispatchMock.mockReset();
     dispatchMock.mockResolvedValue({ ok: true });
     mac = true;
     captured = null;
     eventsOnMock.mockImplementation(
-      (name: string, cb: (payload: SystemMemoryPressureDelivery) => void) => {
+      (name: string, cb: (payload: SystemMemoryPressureDelivery) => Promise<void>) => {
         if (name === "system:memory-pressure") captured = cb;
         return vi.fn();
       }
@@ -181,7 +204,7 @@ describe("useSystemMemoryPressureNotice", () => {
       writable: true,
       value: {
         events: { on: eventsOnMock },
-        system: { noteMemoryNoticeShown: noticeShownMock },
+        system: { claimMemoryNotice: claimMock, releaseMemoryNotice: releaseMock },
       },
     });
   });
@@ -205,7 +228,7 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!(DEGRADED));
+    await deliver(DEGRADED);
 
     expect(store.getState().notice).toMatchObject({
       reading: "Swap is 91% full and the fseventsd process is using 36 GB of memory.",
@@ -232,17 +255,15 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() =>
-      captured!({
-        ...DEGRADED,
-        workloads: {
-          appMemoryMb: 1024,
-          projects: [{ projectId: "a", projectName: "App", terminalCount: 3, memoryMb: 9216 }],
-          agentsRunning: 2,
-          memoryTotalMb: 36864,
-        },
-      })
-    );
+    await deliver({
+      ...DEGRADED,
+      workloads: {
+        appMemoryMb: 1024,
+        projects: [{ projectId: "a", projectName: "App", terminalCount: 3, memoryMb: 9216 }],
+        agentsRunning: 2,
+        memoryTotalMb: 36864,
+      },
+    });
 
     expect(store.getState().notice?.detail).toBe(
       "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this. App's terminals (3 terminals) use 9.0 GB. Daintree itself uses 1.0 GB."
@@ -255,7 +276,7 @@ describe("useSystemMemoryPressureNotice", () => {
   it("offers the memory breakdown, never an agent launch, and keeps the row after it opens", async () => {
     await mountAndCapture();
     const store = await noticeStore();
-    act(() => captured!(DEGRADED));
+    await deliver(DEGRADED);
 
     const action = store.getState().notice!.action!;
     expect(action).toMatchObject({ label: "Show memory use", actionId: "diagnostics.openWhySlow" });
@@ -277,7 +298,7 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!({ ...NORMAL, status: "degraded" }));
+    await deliver({ ...NORMAL, status: "degraded" });
 
     expect(store.getState().notice).toBeNull();
     expect(notifyMock).not.toHaveBeenCalled();
@@ -287,8 +308,8 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!(DEGRADED));
-    act(() => captured!(CRITICAL));
+    await deliver(DEGRADED);
+    await deliver(CRITICAL);
 
     expect(store.getState().notice).toMatchObject({
       reading:
@@ -304,9 +325,9 @@ describe("useSystemMemoryPressureNotice", () => {
   it("toasts the first critical reading of an episode, and only that one", async () => {
     await mountAndCapture();
 
-    act(() => captured!(DEGRADED));
-    act(() => captured!(CRITICAL));
-    act(() => captured!({ ...CRITICAL, fseventsdRssMb: null }));
+    await deliver(DEGRADED);
+    await deliver(CRITICAL);
+    await deliver({ ...CRITICAL, fseventsdRssMb: null });
 
     // The third publish stays at the critical level, so it only refreshes the row.
     expect(notifyMock.mock.calls.map(([p]) => p.priority)).toEqual(["low", "high"]);
@@ -322,9 +343,9 @@ describe("useSystemMemoryPressureNotice", () => {
       return "notice-1";
     });
 
-    act(() => captured!(DEGRADED));
-    act(() => captured!(CRITICAL));
-    act(() => captured!({ ...CRITICAL, swapUsedPercent: 97 }));
+    await deliver(DEGRADED);
+    await deliver(CRITICAL);
+    await deliver({ ...CRITICAL, swapUsedPercent: 97 });
 
     // Any later notify() carrying the replaceKey would dismiss the sticky toast.
     expect(notifyMock).toHaveBeenCalledTimes(2);
@@ -337,9 +358,9 @@ describe("useSystemMemoryPressureNotice", () => {
   it("dismisses the critical toast on recovery after an escalation", async () => {
     await mountAndCapture();
 
-    act(() => captured!(CRITICAL));
-    act(() => captured!({ ...CRITICAL, swapUsedPercent: 97 }));
-    act(() => captured!(NORMAL));
+    await deliver(CRITICAL);
+    await deliver({ ...CRITICAL, swapUsedPercent: 97 });
+    await deliver(NORMAL);
 
     const [toast, resolution] = notifyMock.mock.calls.map(([p]) => p);
     expect(resolution.replaceKey).toBe(toast.replaceKey);
@@ -348,7 +369,7 @@ describe("useSystemMemoryPressureNotice", () => {
   it("toasts an episode that opens at the critical level", async () => {
     await mountAndCapture();
 
-    act(() => captured!({ ...CRITICAL, escalated: false }));
+    await deliver({ ...CRITICAL, escalated: false });
 
     expect(notifyMock.mock.calls[0]![0]).toMatchObject({
       priority: "high",
@@ -360,8 +381,8 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!(DEGRADED));
-    act(() => captured!(NORMAL));
+    await deliver(DEGRADED);
+    await deliver(NORMAL);
 
     expect(store.getState().notice).toBeNull();
     expect(notifyMock).toHaveBeenCalledTimes(2);
@@ -386,7 +407,7 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!(NORMAL));
+    await deliver(NORMAL);
 
     expect(notifyMock).not.toHaveBeenCalled();
     expect(store.getState().notice).toBeNull();
@@ -396,9 +417,9 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const store = await noticeStore();
 
-    act(() => captured!(CRITICAL));
-    act(() => captured!(NORMAL));
-    act(() => captured!({ ...CRITICAL, episodeId: "episode-2" }));
+    await deliver(CRITICAL);
+    await deliver(NORMAL);
+    await deliver({ ...CRITICAL, episodeId: "episode-2" });
 
     expect(notifyMock.mock.calls.map(([p]) => [p.type, p.priority])).toEqual([
       ["warning", "high"],
@@ -409,19 +430,38 @@ describe("useSystemMemoryPressureNotice", () => {
   });
 
   describe("one notice across project views (#18274)", () => {
-    it("files the row under an id the episode and level name, and tells Main", async () => {
+    const fileRow = async () => {
+      const history = await historyStore();
+      notifyMock.mockImplementation(
+        (payload: { historyId?: string; message: string; transient?: boolean }) => {
+          if (!payload.transient) {
+            history.getState().addEntry({
+              id: payload.historyId,
+              type: "warning",
+              message: payload.message,
+              supersedeKey: "system-memory-pressure",
+            });
+          }
+          return "notice-1";
+        }
+      );
+      return history;
+    };
+
+    it("claims the row and the toast before showing them, under ids the episode and level name", async () => {
       await mountAndCapture();
 
-      act(() => captured!(DEGRADED));
-      act(() => captured!(CRITICAL));
+      await deliver(DEGRADED);
+      await deliver(CRITICAL);
 
       const [warning, critical] = notifyMock.mock.calls.map(([p]) => p);
       expect(warning.historyId).toContain("episode-1");
       expect(critical.historyId).toContain("episode-1");
       expect(critical.historyId).not.toBe(warning.historyId);
-      expect(noticeShownMock.mock.calls).toEqual([
-        [{ episodeId: "episode-1", surface: "inbox-warning" }],
-        [{ episodeId: "episode-1", surface: "inbox-critical" }],
+      expect(claimMock.mock.calls.map(([c]) => c.surface)).toEqual([
+        "inbox-warning",
+        "inbox-critical",
+        "critical-toast",
       ]);
     });
 
@@ -429,36 +469,14 @@ describe("useSystemMemoryPressureNotice", () => {
       await mountAndCapture();
       const store = await noticeStore();
 
-      act(() => captured!({ ...DEGRADED, fileInbox: false }));
+      await deliver({ ...DEGRADED, fileInbox: false });
 
       expect(store.getState().notice?.reading).toContain("Swap is 91% full");
       expect(notifyMock).not.toHaveBeenCalled();
-      expect(noticeShownMock).not.toHaveBeenCalled();
+      expect(claimMock).not.toHaveBeenCalled();
     });
 
-    it("never brings back a row the user dismissed in another view", async () => {
-      await mountAndCapture();
-      const history = await historyStore();
-      notifyMock.mockImplementation((payload: { historyId?: string; message: string }) => {
-        history
-          .getState()
-          .addEntry({ id: payload.historyId, type: "warning", message: payload.message });
-        return "";
-      });
-
-      act(() => captured!(DEGRADED));
-      const filed = notifyMock.mock.calls[0]![0].historyId as string;
-      expect(history.getState().entries.some((e) => e.id === filed)).toBe(true);
-      act(() => history.getState().dismissEntry(filed));
-      // A repeat delivery: a reveal after a sibling reported filing, or a worsening.
-      act(() => captured!({ ...DEGRADED, fileInbox: false, swapUsedPercent: 95 }));
-      act(() => captured!({ ...DEGRADED, swapUsedPercent: 96 }));
-
-      expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(history.getState().entries.some((e) => e.id === filed)).toBe(false);
-    });
-
-    it("answers recovery in a view that holds the episode's row but never heard the episode", async () => {
+    it("refreshes a row a sibling filed, in place", async () => {
       await mountAndCapture();
       const history = await historyStore();
       history.getState().addEntry({
@@ -468,14 +486,123 @@ describe("useSystemMemoryPressureNotice", () => {
         supersedeKey: "system-memory-pressure",
       });
 
-      act(() => captured!(NORMAL));
+      await deliver({ ...DEGRADED, fileInbox: false, swapUsedPercent: 95 });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+      expect(
+        history.getState().entries.find((e) => e.id === "system-memory-pressure:episode-1:warning")
+          ?.message
+      ).toContain("Swap is 95% full");
+    });
+
+    it("never brings back a row the user dismissed, even from a delivery replayed late", async () => {
+      await mountAndCapture();
+      const history = await fileRow();
+
+      await deliver(DEGRADED);
+      const filed = String(notifyMock.mock.calls[0]![0].historyId);
+      expect(history.getState().entries.some((e) => e.id === filed)).toBe(true);
+      act(() => history.getState().dismissEntry(filed));
+      // Still asking to file: Main sent it before any view had claimed the row.
+      await deliver({ ...DEGRADED, swapUsedPercent: 96 });
+      await deliver({ ...DEGRADED, fileInbox: false, swapUsedPercent: 97 });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(history.getState().entries.some((e) => e.id === filed)).toBe(false);
+    });
+
+    it("toasts critical in the view the user is looking at, keeping it out of the inbox, when another view filed the row", async () => {
+      await mountAndCapture();
+
+      await deliver({ ...CRITICAL, fileInbox: false });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock.mock.calls[0]![0]).toMatchObject({
+        priority: "high",
+        transient: true,
+        title: "Critical system memory pressure",
+      });
+      expect(notifyMock.mock.calls[0]![0].historyId).toBeUndefined();
+    });
+
+    it("files the critical row quietly from a window behind, leaving the toast to the attended view", async () => {
+      await mountAndCapture();
+      attended = false;
+
+      await deliver(CRITICAL);
+
+      expect(notifyMock.mock.calls[0]![0].priority).toBe("low");
+      expect(claimMock.mock.calls.map(([c]) => c.surface)).toEqual(["inbox-critical"]);
+    });
+
+    it("hands the toast back when notify held it back", async () => {
+      await mountAndCapture();
+      notifyMock.mockReturnValue("");
+
+      await deliver(CRITICAL);
+
+      expect(releaseMock).toHaveBeenCalledWith({
+        episodeId: "episode-1",
+        surface: "critical-toast",
+      });
+    });
+
+    it("drops what Main granted after the episode recovered meanwhile", async () => {
+      await mountAndCapture();
+      let answer: (granted: boolean) => void = () => {};
+      claimMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+      );
+
+      let pending!: Promise<void>;
+      act(() => {
+        pending = captured!({ ...CRITICAL, fileInbox: false });
+      });
+      await deliver(NORMAL);
+      await act(async () => {
+        answer(true);
+        await pending;
+      });
+
+      expect(notifyMock.mock.calls.map(([p]) => p.type)).toEqual(["success"]);
+      expect(releaseMock).toHaveBeenCalledWith({
+        episodeId: "episode-1",
+        surface: "critical-toast",
+      });
+    });
+
+    it("retires every row of the episode on recovery, the launch bar's included", async () => {
+      await mountAndCapture();
+      const history = await historyStore();
+      const ids = ["system-memory-pressure:episode-1:warning", "launch-row"];
+      history.getState().addEntry({
+        id: ids[0],
+        type: "warning",
+        message: "Swap is 91% full.",
+        supersedeKey: "system-memory-pressure",
+      });
+      history.getState().addEntry({
+        id: ids[1],
+        type: "warning",
+        message: "Swap is 91% full.",
+        supersedeKey: "system-memory-launch",
+      });
+
+      // A view that holds the rows but never heard the episode still answers.
+      await deliver(NORMAL);
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
       expect(notifyMock.mock.calls[0]![0]).toMatchObject({
         type: "success",
-        supersedeKey: "system-memory-pressure",
         historyId: expect.stringContaining("episode-1"),
       });
+      const entries = history.getState().entries;
+      for (const id of ids) {
+        expect(entries.find((e) => e.id === id)?.archivedAt).toEqual(expect.any(Number));
+      }
     });
   });
 });

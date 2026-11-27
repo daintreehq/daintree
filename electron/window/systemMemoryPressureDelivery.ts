@@ -15,17 +15,18 @@ type EpisodePhase = "warning" | "critical";
 let openEpisode: SystemMemoryPressurePayload | null = null;
 let openEpisodeId: string | null = null;
 /**
- * The level whose inbox row a view has reported filing. Each project view is
- * its own renderer over one shared inbox, so once one view has filed a level's
- * row the rest leave it alone: a row the user dismissed in one project then
- * stays dismissed in every other (#18274). Until a view reports it, every
- * delivery asks for it, so a send the renderer never handled can't lose it, and
- * the views asked together file one row under one id, with only the focused
- * one toasting. The first critical publish is a new level, so it still files
- * and toasts once (#13529).
+ * The level whose inbox row a view has claimed. Each project view is its own
+ * renderer over one shared inbox, so only the first view to claim a level's
+ * row files it and the rest leave it alone: a row the user dismissed in one
+ * project then stays dismissed in every other (#18274). A view claims when it
+ * handles the delivery, not when Main sends it, so a delivery its renderer
+ * replays late can't file a row the user has dismissed since. The first
+ * critical publish is a new level, so it still files once (#13529).
  */
 let filedPhase: EpisodePhase | null = null;
-/** A view raised the launch grid bar this episode (#18274). */
+/** An attended view showed the critical toast this episode. */
+let criticalToastShown = false;
+/** A view raised the launch grid bar this episode. */
 let launchNoticeShown = false;
 /**
  * WebContents that have been sent the open episode. Keyed by the renderer, not
@@ -57,7 +58,7 @@ function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void 
   try {
     wc.send(
       CHANNELS.EVENTS_PUSH,
-      envelope({ ...openEpisode, episodeId: openEpisodeId, fileInbox, launchNoticeShown })
+      envelope({ ...openEpisode, episodeId: openEpisodeId, fileInbox })
     );
     notifiedWebContentsIds.add(wc.id);
     // A load discards the renderer's copy of the notice, so the latch must not
@@ -69,12 +70,6 @@ function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void 
     }
   } catch {
     // Retried on the window's next view load.
-  }
-}
-
-function deliverToVisibleViews(windows: BrowserWindow[]): void {
-  for (const win of windows) {
-    if (!win.isDestroyed()) deliver(win, getAppWebContents(win), false);
   }
 }
 
@@ -93,46 +88,72 @@ export function publishSystemMemoryPressure(
   notifiedWebContentsIds.clear();
   if (payload.status === "normal") {
     const closed = openEpisodeId;
-    openEpisode = null;
-    openEpisodeId = null;
-    filedPhase = null;
-    launchNoticeShown = false;
+    resetEpisode();
     broadcastToRenderer(
       CHANNELS.EVENTS_PUSH,
-      envelope({ ...payload, episodeId: closed, fileInbox: false, launchNoticeShown: false })
+      envelope({ ...payload, episodeId: closed, fileInbox: false })
     );
     return;
   }
   if (openEpisode === null) {
+    resetEpisode();
     openEpisodeId = randomUUID();
-    filedPhase = null;
-    launchNoticeShown = false;
   }
   openEpisode = payload;
-  deliverToVisibleViews(windows);
+  for (const win of windows) {
+    if (!win.isDestroyed()) deliver(win, getAppWebContents(win), false);
+  }
+}
+
+function resetEpisode(): void {
+  openEpisode = null;
+  openEpisodeId = null;
+  filedPhase = null;
+  criticalToastShown = false;
+  launchNoticeShown = false;
 }
 
 /**
- * A view showed one of the episode's once-only surfaces (#18274). Reports for
- * an episode that has closed, or for a level the episode has since passed, are
- * stale and dropped. A launch bar reaches every view, the visible ones now and
- * cached ones on reveal, so none raises a second.
+ * A view asks to show one of the episode's once-only surfaces (#18274); true
+ * means it is the one to show it. A claim for an episode that has closed, or
+ * for a level the episode has since passed, is stale and refused.
  */
-export function noteSystemMemoryNoticeShown(
+export function claimSystemMemoryNotice(
   episodeId: string,
-  surface: SystemMemoryNoticeSurface,
-  windows: BrowserWindow[]
-): void {
-  if (openEpisode === null || episodeId !== openEpisodeId) return;
-  if (surface === "launch-bar") {
-    if (launchNoticeShown) return;
-    launchNoticeShown = true;
-    notifiedWebContentsIds.clear();
-    deliverToVisibleViews(windows);
-    return;
+  surface: SystemMemoryNoticeSurface
+): boolean {
+  if (openEpisode === null || episodeId !== openEpisodeId) return false;
+  const phase = phaseOf(openEpisode);
+  switch (surface) {
+    case "inbox-warning":
+    case "inbox-critical": {
+      const claimed: EpisodePhase = surface === "inbox-critical" ? "critical" : "warning";
+      if (claimed !== phase || filedPhase === phase) return false;
+      filedPhase = phase;
+      return true;
+    }
+    case "critical-toast":
+      if (phase !== "critical" || criticalToastShown) return false;
+      criticalToastShown = true;
+      return true;
+    case "launch-bar":
+      if (launchNoticeShown) return false;
+      launchNoticeShown = true;
+      return true;
   }
-  const phase: EpisodePhase = surface === "inbox-critical" ? "critical" : "warning";
-  if (phase === phaseOf(openEpisode)) filedPhase = phase;
+}
+
+/**
+ * The claimant couldn't show its toast or bar after all (quiet hours, a mute),
+ * so the next view to try may.
+ */
+export function releaseSystemMemoryNotice(
+  episodeId: string,
+  surface: SystemMemoryNoticeSurface
+): void {
+  if (episodeId !== openEpisodeId) return;
+  if (surface === "critical-toast") criticalToastShown = false;
+  if (surface === "launch-bar") launchNoticeShown = false;
 }
 
 /** The episode now open, as last published; null when none is. */
@@ -146,9 +167,6 @@ export function deliverOpenSystemMemoryPressure(win: BrowserWindow, wc: WebConte
 }
 
 export function resetSystemMemoryPressureDeliveryForTesting(): void {
-  openEpisode = null;
-  openEpisodeId = null;
-  filedPhase = null;
-  launchNoticeShown = false;
+  resetEpisode();
   notifiedWebContentsIds.clear();
 }
