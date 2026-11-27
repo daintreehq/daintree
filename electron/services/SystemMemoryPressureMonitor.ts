@@ -292,27 +292,35 @@ export function createSystemMemoryPressureMonitor(
   let swapPressureConfirmed = false;
   let lastSwapSampleAt = Number.NEGATIVE_INFINITY;
   /** The last swap reading growth is measured from; null rebaselines. */
-  let swapBaseline: { usedMb: number; at: number } | null = null;
-  /** Swap is a cause of the open episode, so it is held by the lower band. */
+  let swapBaseline: { usedMb: number; wallAt: number; monoAt: number } | null = null;
+  /**
+   * Swap has been a cause of the open episode, so the lower band holds it
+   * until the episode recovers: one easing sample does not drop the hold.
+   */
   let swapHoldsEpisode = false;
 
   /**
    * Swap growth in MB per minute since the previous reading, or null when it
-   * cannot be measured: a failed reading, the first after one, a probe that
-   * straddled a sleep, or a gap too long for the two to be consecutive.
+   * cannot be measured: the first reading after a failed one, a probe that
+   * straddled a sleep, or a gap too long for the two to be consecutive. The
+   * rate divides by the longer of the wall and monotonic gaps, so neither a
+   * wall clock stepping back nor a monotonic clock stopped by sleep inflates it.
    */
-  function measureSwapGrowth(swap: SwapUsage | null, startedAt: number): number | null {
-    const probeMs = wallNow() - startedAt;
+  function measureSwapGrowth(swap: SwapUsage, wallAt: number, monoAt: number): number | null {
+    const probeMs = wallNow() - wallAt;
     const baseline = swapBaseline;
-    swapBaseline = swap === null ? null : { usedMb: swap.usedMb, at: startedAt };
-    if (swap === null || baseline === null) return null;
     if (probeMs < 0 || probeMs > PROBE_TIMEOUT_MS * 2) {
+      // Its figures predate the wake, so it cannot anchor the next one either.
       swapBaseline = null;
       return null;
     }
-    const gapMs = startedAt - baseline.at;
-    if (gapMs <= 0 || gapMs > SWAP_PRESSURE_STALE_MS) return null;
-    return ((swap.usedMb - baseline.usedMb) * 60_000) / gapMs;
+    swapBaseline = { usedMb: swap.usedMb, wallAt, monoAt };
+    if (baseline === null) return null;
+    const wallGapMs = wallAt - baseline.wallAt;
+    const monoGapMs = monoAt - baseline.monoAt;
+    if (wallGapMs <= 0 || wallGapMs > SWAP_PRESSURE_STALE_MS) return null;
+    if (monoGapMs <= 0 || monoGapMs > SWAP_PRESSURE_STALE_MS) return null;
+    return ((swap.usedMb - baseline.usedMb) * 60_000) / Math.max(wallGapMs, monoGapMs);
   }
 
   /**
@@ -360,32 +368,35 @@ export function createSystemMemoryPressureMonitor(
   /** The payload this sample publishes, if any; the caller attaches workloads. */
   function record(
     sample: SystemMemorySample,
-    startedAt: number
+    startedAt: number,
+    startedMono: number
   ): Omit<SystemMemoryPressurePayload, "workloads"> | null {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
     const swapPercentOver =
       swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
-    // Null where this sample cannot say whether swap is a cause.
+    recordSwapPressureSample(sample, swapUsedPercent, startedAt);
+    // Null where this sample cannot say whether swap is a cause. On Darwin a
+    // reading with nothing to measure growth against shows none: it cannot
+    // open an episode, and it must not hold back recovery either.
     let swapCause: boolean | null;
-    if (deps.isDarwin) {
-      const growth = measureSwapGrowth(swap, startedAt);
+    if (swap === null) {
+      swapBaseline = null;
+      swapCause = null;
+    } else if (deps.isDarwin) {
+      const growth = measureSwapGrowth(swap, startedAt, startedMono);
       swapCause =
-        growth === null
-          ? null
-          : growth >=
-            (swapHoldsEpisode ? SWAP_GROWTH_HOLD_MB_PER_MIN : SWAP_GROWTH_OPEN_MB_PER_MIN);
+        growth !== null &&
+        growth >= (swapHoldsEpisode ? SWAP_GROWTH_HOLD_MB_PER_MIN : SWAP_GROWTH_OPEN_MB_PER_MIN);
     } else {
       swapCause =
-        swapUsedPercent === null
-          ? null
-          : swapUsedPercent > (swapHoldsEpisode ? SWAP_CLEAR_PERCENT : SWAP_USED_PERCENT_THRESHOLD);
+        swapUsedPercent !== null &&
+        swapUsedPercent > (swapHoldsEpisode ? SWAP_CLEAR_PERCENT : SWAP_USED_PERCENT_THRESHOLD);
     }
     const swapOver = swapCause === true;
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
-    recordSwapPressureSample(sample, swapUsedPercent, startedAt);
     if (deps.onWatchdogPressure) {
       const heavySwap =
         swapPercentOver &&
@@ -431,8 +442,7 @@ export function createSystemMemoryPressureMonitor(
           (fseventsdOver && published.fseventsdRssMb === null) ||
           (kernelPressureLevel !== null &&
             kernelPressureLevel > (published.kernelPressureLevel ?? 1)));
-      // A failed swap reading keeps the hold as it was.
-      swapHoldsEpisode = (episodeOpen || episodeOpening) && (swapCause ?? swapHoldsEpisode);
+      if ((episodeOpen || episodeOpening) && swapOver) swapHoldsEpisode = true;
       if (!episodeOpening && !escalating) return null;
       if (escalating) logWarn("system-health", { state: "escalated", ...figures });
       episodeOpen = true;
@@ -459,9 +469,8 @@ export function createSystemMemoryPressureMonitor(
       };
     }
 
-    if (swapCause !== null) swapHoldsEpisode = false;
     const fullyObserved =
-      swapCause !== null &&
+      swap !== null &&
       (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An
@@ -480,6 +489,7 @@ export function createSystemMemoryPressureMonitor(
     const wasOpen = episodeOpen;
     elevated = false;
     episodeOpen = false;
+    swapHoldsEpisode = false;
     clearStreak = 0;
     seenCauses = null;
     published = null;
@@ -514,13 +524,14 @@ export function createSystemMemoryPressureMonitor(
 
   async function takeSample(): Promise<void> {
     const startedAt = wallNow();
+    const startedMono = now();
     const [swap, fseventsdRssMb, kernelPressureLevel] = await Promise.all([
       deps.readSwap().catch(() => null),
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
       deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
     deps.onKernelPressureLevel?.(kernelPressureLevel);
-    const payload = record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
+    const payload = record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt, startedMono);
     if (!payload) return;
     // Samples are serialised, so a recovery can never overtake this read.
     const workloads = payload.status === "degraded" ? await readWorkloads() : null;

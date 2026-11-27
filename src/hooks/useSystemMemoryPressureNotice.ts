@@ -52,8 +52,15 @@ function formatGb(mb: number): string {
   return gb >= 10 ? `${Math.round(gb)} GB` : `${gb.toFixed(1)} GB`;
 }
 
-/** States only what was measured over threshold — never a cause (#12462). */
-export function describeSystemMemoryReadings(payload: SystemMemoryPressurePayload): string | null {
+/**
+ * States only what was measured over threshold — never a cause (#12462). On
+ * macOS swap is published only while it grows (#18273), so it says so rather
+ * than presenting the occupancy of a dynamically sized swap as the reading.
+ */
+export function describeSystemMemoryReadings(
+  payload: SystemMemoryPressurePayload,
+  mac: boolean = isMac()
+): string | null {
   const observed: string[] = [];
   if (payload.kernelPressureLevel !== null) {
     observed.push(
@@ -66,7 +73,9 @@ export function describeSystemMemoryReadings(payload: SystemMemoryPressurePayloa
     observed.push(
       payload.swapKind === "commit"
         ? `committed memory is at ${payload.swapUsedPercent}% of its limit`
-        : `swap is ${payload.swapUsedPercent}% full`
+        : mac
+          ? `swap in use grew to ${payload.swapUsedPercent}% of the swap macOS had allocated`
+          : `swap is ${payload.swapUsedPercent}% full`
     );
   }
   if (payload.fseventsdRssMb !== null) {
@@ -84,11 +93,13 @@ export function formatSystemMemoryPressureMessage(
   payload: SystemMemoryPressurePayload,
   mac: boolean
 ): string | null {
-  const text = describeSystemMemoryReadings(payload);
+  const text = describeSystemMemoryReadings(payload, mac);
   if (text === null) return null;
-  // The restart advice covers what a reboot resets — swap and a grown
+  // The restart advice covers what a reboot resets — swap in use and a grown
   // fseventsd — not a pressure level, which reflects whatever is running now.
-  if (payload.swapUsedPercent === null && payload.fseventsdRssMb === null) return text;
+  // Swap on macOS is reported for growing, which a restart does not stop.
+  const swapResets = payload.swapUsedPercent !== null && !mac;
+  if (!swapResets && payload.fseventsdRssMb === null) return text;
   return `${text} Restarting your ${mac ? "Mac" : "computer"} clears this.`;
 }
 
@@ -179,8 +190,9 @@ async function applySystemMemoryPressure(payload: SystemMemoryPressureDelivery):
     return;
   }
 
-  const reading = describeSystemMemoryReadings(payload);
-  const readingMessage = formatSystemMemoryPressureMessage(payload, isMac());
+  const mac = isMac();
+  const reading = describeSystemMemoryReadings(payload, mac);
+  const readingMessage = formatSystemMemoryPressureMessage(payload, mac);
   if (!reading || !readingMessage || !payload.episodeId) return;
   const episodeId = payload.episodeId;
   setSystemMemoryEpisode({ episodeId, reading, workloads: payload.workloads });

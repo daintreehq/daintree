@@ -96,7 +96,7 @@ describe("formatSystemMemoryPressureMessage", () => {
     const { formatSystemMemoryPressureMessage } = await load();
 
     expect(formatSystemMemoryPressureMessage(DEGRADED, true)).toBe(
-      "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this."
+      "Swap in use grew to 91% of the swap macOS had allocated and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this."
     );
     expect(formatSystemMemoryPressureMessage({ ...DEGRADED, swapUsedPercent: null }, true)).toBe(
       "The fseventsd process is using 36 GB of memory. Restarting your Mac clears this."
@@ -115,6 +115,9 @@ describe("formatSystemMemoryPressureMessage", () => {
         false
       )
     ).toBe("Committed memory is at 91% of its limit. Restarting your computer clears this.");
+    expect(formatSystemMemoryPressureMessage({ ...DEGRADED, fseventsdRssMb: null }, false)).toBe(
+      "Swap is 91% full. Restarting your computer clears this."
+    );
   });
 
   it("states the kernel's reported level first, without the restart note when alone (#12799)", async () => {
@@ -132,7 +135,7 @@ describe("formatSystemMemoryPressureMessage", () => {
         true
       )
     ).toBe(
-      "macOS reports memory pressure at its warning level and swap is 91% full. Restarting your Mac clears this."
+      "macOS reports memory pressure at its warning level and swap in use grew to 91% of the swap macOS had allocated."
     );
   });
 
@@ -231,9 +234,10 @@ describe("useSystemMemoryPressureNotice", () => {
     await deliver(DEGRADED);
 
     expect(store.getState().notice).toMatchObject({
-      reading: "Swap is 91% full and the fseventsd process is using 36 GB of memory.",
+      reading:
+        "Swap in use grew to 91% of the swap macOS had allocated and the fseventsd process is using 36 GB of memory.",
       detail:
-        "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this.",
+        "Swap in use grew to 91% of the swap macOS had allocated and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this.",
       critical: false,
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -266,7 +270,7 @@ describe("useSystemMemoryPressureNotice", () => {
     });
 
     expect(store.getState().notice?.detail).toBe(
-      "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this. App's terminals (3 terminals) use 9.0 GB. Daintree itself uses 1.0 GB."
+      "Swap in use grew to 91% of the swap macOS had allocated and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this. App's terminals (3 terminals) use 9.0 GB. Daintree itself uses 1.0 GB."
     );
     expect(notifyMock.mock.calls[0]![0].message).toBe(store.getState().notice?.detail);
     // The one-line reading stays the measurement alone.
@@ -313,7 +317,7 @@ describe("useSystemMemoryPressureNotice", () => {
 
     expect(store.getState().notice).toMatchObject({
       reading:
-        "macOS reports memory pressure at its critical level and swap is 91% full and the fseventsd process is using 36 GB of memory.",
+        "macOS reports memory pressure at its critical level and swap in use grew to 91% of the swap macOS had allocated and the fseventsd process is using 36 GB of memory.",
       critical: true,
     });
     expect(notifyMock).toHaveBeenCalledTimes(2);

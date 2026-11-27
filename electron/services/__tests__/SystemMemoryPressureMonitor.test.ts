@@ -1212,14 +1212,160 @@ describe("createSystemMemoryPressureMonitor", () => {
 
     it("leaves the watchdog's heavy-swap reading on the percentage", async () => {
       const onWatchdogPressure = vi.fn();
+      let totalMb = 6400;
       const { tick } = makeMonitor({
-        swap: () => ({ usedMb: 6000, totalMb: 6400 }),
+        swap: () => ({ usedMb: 6000, totalMb }),
         onWatchdogPressure,
       });
 
-      await tick(2);
-      expect(onWatchdogPressure.mock.calls.map(([elevated]) => elevated)).toEqual([true, true]);
+      await tick(EPISODE_OPEN_SAMPLES);
+      totalMb = 8192;
+      await tick(1);
+      expect(onWatchdogPressure.mock.calls.map(([elevated]) => elevated)).toEqual([
+        ...Array<boolean>(EPISODE_OPEN_SAMPLES).fill(true),
+        false,
+      ]);
       expect(publish).not.toHaveBeenCalled();
+    });
+
+    /** Swap used grows by `rate()` MB per one-minute sample. */
+    function swapGrowingAt(rate: () => number): () => SwapUsage {
+      let usedMb = 1024;
+      return () => {
+        usedMb += rate();
+        return { usedMb, totalMb: usedMb };
+      };
+    }
+
+    it("keeps the hold through one easing sample until the episode recovers", async () => {
+      const rates = [
+        ...Array<number>(EPISODE_OPEN_SAMPLES + 1).fill(SWAP_GROWTH_OPEN_MB_PER_MIN),
+        SWAP_GROWTH_HOLD_MB_PER_MIN - 1,
+        90,
+        90,
+        90,
+      ];
+      const { tick } = makeMonitor({ swap: swapGrowingAt(() => rates.shift() ?? 90) });
+
+      await tick(EPISODE_OPEN_SAMPLES + 6);
+      expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded"]);
+    });
+
+    it("keeps the hold while another cause carries a sample swap eased on", async () => {
+      let level: KernelPressureLevel = 1;
+      const rates = [
+        ...Array<number>(EPISODE_OPEN_SAMPLES + 1).fill(SWAP_GROWTH_OPEN_MB_PER_MIN),
+        0,
+      ];
+      const { tick } = makeMonitor({
+        swap: swapGrowingAt(() => rates.shift() ?? 90),
+        kernelPressureLevel: () => level,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES + 1);
+      level = 2;
+      await tick(1);
+      level = 1;
+      await tick(EPISODE_CLEAR_SAMPLES + 1);
+      expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded", "degraded"]);
+    });
+
+    it("does not read a wall clock stepping back as faster growth", async () => {
+      let mono = 0;
+      let wall = 1_000_000;
+      let usedMb = 1024;
+      const monitor = createSystemMemoryPressureMonitor({
+        isDarwin: true,
+        swapKind: "swap",
+        readSwap: async () => {
+          usedMb += 80;
+          return { usedMb, totalMb: usedMb };
+        },
+        readFseventsdRssMb: async () => 100,
+        readKernelPressureLevel: async () => 1,
+        publish,
+        now: () => mono,
+        wallNow: () => wall,
+      });
+
+      // 80 MB a minute; each minute the wall clock is corrected back 30s.
+      for (let i = 0; i < EPISODE_OPEN_SAMPLES + 3; i++) {
+        await monitor.sample();
+        mono += 60_000;
+        wall += 30_000;
+      }
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    it("does not let a kernel episode hold swap to the lower rate", async () => {
+      let level: KernelPressureLevel = 2;
+      const { tick } = makeMonitor({
+        swap: swapGrowingAt(() => SWAP_GROWTH_HOLD_MB_PER_MIN),
+        kernelPressureLevel: () => level,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES + 1);
+      level = 1;
+      await tick(EPISODE_CLEAR_SAMPLES);
+      expect(publish.mock.calls.map(([p]) => [p.status, p.swapUsedPercent])).toEqual([
+        ["degraded", null],
+        ["normal", null],
+      ]);
+    });
+
+    it("escalates an fseventsd episode once swap starts growing", async () => {
+      let rate = 0;
+      const { tick } = makeMonitor({
+        swap: swapGrowingAt(() => rate),
+        fseventsdRssMb: () => FSEVENTSD_RSS_THRESHOLD_MB + 1,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      rate = SWAP_GROWTH_OPEN_MB_PER_MIN;
+      await tick(3);
+      expect(publish.mock.calls.map(([p]) => [p.swapUsedPercent, p.escalated])).toEqual([
+        [null, false],
+        [100, true],
+      ]);
+    });
+
+    it("ignores growth across a probe that straddled a sleep, the first one included", async () => {
+      const grow = swapGrowingAt(() => 1024);
+      const delayed = new Set([0]);
+      let call = 0;
+      const { tick } = makeMonitor({
+        swap: () => {
+          // The wall clock jumps while this probe is out, as across a sleep.
+          if (delayed.has(call++)) now += 10_001;
+          return grow();
+        },
+      });
+
+      // Sample 0 is delayed and sample 1 has no baseline, so the run starts at 2.
+      await tick(EPISODE_OPEN_SAMPLES + 1);
+      expect(publish).not.toHaveBeenCalled();
+      await tick(1);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(systemHealthRecords(logWarn, "over")).toHaveLength(2);
+    });
+
+    it("does not hold a recovery back over long gaps or a reading with no baseline", async () => {
+      let level: KernelPressureLevel = 2;
+      const readings: Array<SwapUsage | null> = [];
+      const { monitor, tick } = makeMonitor({
+        swap: () => (readings.length > 0 ? readings.shift()! : FULL_SWAP),
+        kernelPressureLevel: () => level,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      level = 1;
+      readings.push(null);
+      await tick(1);
+      for (let i = 0; i < EPISODE_CLEAR_SAMPLES; i++) {
+        await monitor.sample();
+        now += SWAP_PRESSURE_STALE_MS + 1;
+      }
+      expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded", "normal"]);
     });
   });
 
@@ -1236,6 +1382,19 @@ describe("createSystemMemoryPressureMonitor", () => {
     await tick(readings.length);
     expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded", "normal"]);
     expect(systemHealthRecords(logInfo, "recovered")).toHaveLength(1);
+  });
+
+  it("keeps the hold off Darwin through one sample at the hold line (#18273)", async () => {
+    const readings: SwapUsage[] = [
+      ...Array<SwapUsage>(EPISODE_OPEN_SAMPLES).fill(swapAt(SWAP_USED_PERCENT_THRESHOLD + 1)),
+      swapAt(SWAP_CLEAR_PERCENT),
+      swapAt(SWAP_CLEAR_PERCENT + 9),
+      swapAt(SWAP_CLEAR_PERCENT + 9),
+    ];
+    const { tick } = makeMonitor({ isDarwin: false, swap: sequence(readings, HEALTHY_SWAP) });
+
+    await tick(readings.length);
+    expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded"]);
   });
 
   it("needs the full threshold off Darwin to open, not the hold line", async () => {
