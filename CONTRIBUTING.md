@@ -56,6 +56,7 @@ Be kind, be specific, assume good faith. Harassment, personal attacks, and bad-f
 ## Questions
 
 - **Found a bug?** Open an issue with a reproduction.
+- **Found a security vulnerability?** Don't open an issue. Email greg@daintree.org instead; see [`SECURITY.md`](SECURITY.md).
 - **Have a feature idea?** Open an issue describing the problem first, not the solution.
 - **Not sure if something belongs in Daintree?** See [`docs/feature-curation.md`](docs/feature-curation.md), then ask on an issue.
 - **Stuck on something in this guide?** Open an issue saying what tripped you up and the guide gets fixed.
