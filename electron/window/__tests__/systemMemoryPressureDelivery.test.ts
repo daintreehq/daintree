@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWindow, WebContents } from "electron";
-import type { SystemMemoryPressurePayload } from "../../../shared/types/ipc/system.js";
+import type {
+  SystemMemoryPressureDelivery,
+  SystemMemoryPressurePayload,
+} from "../../../shared/types/ipc/system.js";
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
@@ -16,6 +19,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import {
   deliverOpenSystemMemoryPressure,
   getOpenSystemMemoryPressure,
+  noteSystemMemoryNoticeShown,
   publishSystemMemoryPressure,
   resetSystemMemoryPressureDeliveryForTesting,
 } from "../systemMemoryPressureDelivery.js";
@@ -82,10 +86,26 @@ function makeWindow(id: number, view: FakeWebContents): BrowserWindow {
   return win;
 }
 
-const pushed = (payload: SystemMemoryPressurePayload) => [
+const pushed = (
+  payload: SystemMemoryPressurePayload,
+  delivery: Partial<SystemMemoryPressureDelivery> = {}
+) => [
   CHANNELS.EVENTS_PUSH,
-  { name: "system:memory-pressure", payload },
+  {
+    name: "system:memory-pressure",
+    payload: {
+      ...payload,
+      episodeId: expect.any(String),
+      fileInbox: payload.status === "degraded",
+      launchNoticeShown: false,
+      ...delivery,
+    },
+  },
 ];
+
+function lastDelivery(send: ReturnType<typeof vi.fn>): SystemMemoryPressureDelivery {
+  return (send.mock.calls.at(-1)?.[1] as { payload: SystemMemoryPressureDelivery }).payload;
+}
 
 describe("systemMemoryPressureDelivery", () => {
   beforeEach(() => {
@@ -228,5 +248,128 @@ describe("systemMemoryPressureDelivery", () => {
 
     publishSystemMemoryPressure(NORMAL, [win]);
     expect(getOpenSystemMemoryPressure()).toBeNull();
+  });
+
+  describe("once-per-episode surfaces (#18274)", () => {
+    const CRITICAL: SystemMemoryPressurePayload = {
+      ...DEGRADED,
+      kernelPressureLevel: "critical",
+      escalated: true,
+    };
+
+    it("keeps one episode id through escalations and gives a reopened episode a new one", () => {
+      const view = makeWebContents();
+      const win = makeWindow(1, view);
+
+      publishSystemMemoryPressure(DEGRADED, [win]);
+      const first = lastDelivery(view.send).episodeId;
+      publishSystemMemoryPressure(CRITICAL, [win]);
+      expect(lastDelivery(view.send).episodeId).toBe(first);
+
+      publishSystemMemoryPressure(NORMAL, [win]);
+      // The closing edge names the episode it closes.
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        ...pushed(NORMAL, { episodeId: first, fileInbox: false })
+      );
+
+      publishSystemMemoryPressure(DEGRADED, [win]);
+      const reopened = lastDelivery(view.send).episodeId;
+      expect(reopened).toEqual(expect.any(String));
+      expect(reopened).not.toBe(first);
+    });
+
+    it("asks every view to file the inbox row until one reports it, then no view shown later files it", () => {
+      const a = makeWebContents();
+      const b = makeWebContents();
+      const winA = makeWindow(1, a);
+      const winB = makeWindow(2, b);
+
+      // Both visible views are asked, so the attended one can toast.
+      publishSystemMemoryPressure(DEGRADED, [winA, winB]);
+      expect(lastDelivery(a.send).fileInbox).toBe(true);
+      expect(lastDelivery(b.send).fileInbox).toBe(true);
+      const { episodeId } = lastDelivery(a.send);
+
+      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [winA, winB]);
+
+      // A project switched to later, a reload, and a replacement view all leave
+      // the row as the user left it in the shared inbox.
+      const cached = makeWebContents();
+      deliverOpenSystemMemoryPressure(winA, cached.wc);
+      expect(cached.send).toHaveBeenCalledWith(...pushed(DEGRADED, { fileInbox: false }));
+      a.startLoading();
+      a.setLoading(false);
+      deliverOpenSystemMemoryPressure(winA, a.wc);
+      expect(lastDelivery(a.send).fileInbox).toBe(false);
+
+      // A worsening at the same level refreshes the row rather than filing one.
+      publishSystemMemoryPressure({ ...DEGRADED, swapUsedPercent: 95, escalated: true }, [winA]);
+      expect(lastDelivery(a.send).fileInbox).toBe(false);
+    });
+
+    it("files the first critical level once more, and drops a report for a level the episode passed", () => {
+      const view = makeWebContents();
+      const win = makeWindow(1, view);
+
+      publishSystemMemoryPressure(DEGRADED, [win]);
+      const { episodeId } = lastDelivery(view.send);
+      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [win]);
+
+      publishSystemMemoryPressure(CRITICAL, [win]);
+      expect(lastDelivery(view.send).fileInbox).toBe(true);
+
+      // A warning-level report landing after the critical publish is stale.
+      noteSystemMemoryNoticeShown(episodeId!, "inbox-warning", [win]);
+      const late = makeWebContents();
+      deliverOpenSystemMemoryPressure(makeWindow(2, late), late.wc);
+      expect(lastDelivery(late.send).fileInbox).toBe(true);
+
+      noteSystemMemoryNoticeShown(episodeId!, "inbox-critical", [win]);
+      const later = makeWebContents();
+      deliverOpenSystemMemoryPressure(makeWindow(3, later), later.wc);
+      expect(lastDelivery(later.send).fileInbox).toBe(false);
+    });
+
+    it("tells every view once a launch bar was shown, visible ones now and cached ones on reveal", () => {
+      const a = makeWebContents();
+      const b = makeWebContents();
+      const winA = makeWindow(1, a);
+      const winB = makeWindow(2, b);
+      publishSystemMemoryPressure(DEGRADED, [winA, winB]);
+      const { episodeId } = lastDelivery(a.send);
+
+      noteSystemMemoryNoticeShown(episodeId!, "launch-bar", [winA, winB]);
+
+      expect(a.send).toHaveBeenCalledTimes(2);
+      expect(lastDelivery(a.send).launchNoticeShown).toBe(true);
+      expect(lastDelivery(b.send).launchNoticeShown).toBe(true);
+      const cached = makeWebContents();
+      deliverOpenSystemMemoryPressure(winA, cached.wc);
+      expect(lastDelivery(cached.send).launchNoticeShown).toBe(true);
+
+      // A repeat report sends nothing new.
+      noteSystemMemoryNoticeShown(episodeId!, "launch-bar", [winA, winB]);
+      expect(a.send).toHaveBeenCalledTimes(2);
+    });
+
+    it("ignores a report for an episode that has closed, and re-arms every surface for the next", () => {
+      const view = makeWebContents();
+      const win = makeWindow(1, view);
+      publishSystemMemoryPressure(DEGRADED, [win]);
+      const { episodeId: closed } = lastDelivery(view.send);
+      noteSystemMemoryNoticeShown(closed!, "inbox-warning", [win]);
+      noteSystemMemoryNoticeShown(closed!, "launch-bar", [win]);
+      publishSystemMemoryPressure(NORMAL, [win]);
+
+      publishSystemMemoryPressure(DEGRADED, [win]);
+      noteSystemMemoryNoticeShown(closed!, "inbox-warning", [win]);
+      noteSystemMemoryNoticeShown(closed!, "launch-bar", [win]);
+      const late = makeWebContents();
+      deliverOpenSystemMemoryPressure(makeWindow(2, late), late.wc);
+
+      expect(late.send).toHaveBeenCalledWith(
+        ...pushed(DEGRADED, { fileInbox: true, launchNoticeShown: false })
+      );
+    });
   });
 });

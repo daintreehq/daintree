@@ -14,7 +14,16 @@ const utilsMock = vi.hoisted(() => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
-  typedHandleValidated: vi.fn(),
+  typedHandleValidated: (
+    channel: string,
+    schema: { parse: (v: unknown) => unknown },
+    handler: unknown
+  ) => {
+    ipcMainMock.handle(channel, (_e: unknown, payload: unknown) =>
+      (handler as (p: unknown) => unknown)(schema.parse(payload))
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
   typedHandleWithContext: vi.fn(),
   typedHandleWithContextValidated: vi.fn(),
 }));
@@ -24,6 +33,11 @@ vi.mock("../../utils.js", () => utilsMock);
 const checkKernelPressureCriticalMock = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 vi.mock("../../../services/SystemMemoryPressureMonitor.js", () => ({
   checkKernelPressureCritical: checkKernelPressureCriticalMock,
+}));
+
+const noteShownMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../window/systemMemoryPressureDelivery.js", () => ({
+  noteSystemMemoryNoticeShown: noteShownMock,
 }));
 
 import { registerMemoryPressureHandlers } from "../memoryPressure.js";
@@ -48,9 +62,30 @@ describe("registerMemoryPressureHandlers", () => {
     expect(checkKernelPressureCriticalMock).toHaveBeenCalledTimes(1);
   });
 
-  it("unregisters its channel on dispose", () => {
+  it("passes a shown notice surface to the delivery with every window (#18274)", () => {
+    const win = { id: 1 };
+    registerMemoryPressureHandlers({
+      windowRegistry: { all: () => [{ browserWindow: win }] },
+    } as never);
+
+    getHandler("system:note-memory-notice-shown")({ episodeId: "episode-1", surface: "launch-bar" });
+
+    expect(noteShownMock).toHaveBeenCalledWith("episode-1", "launch-bar", [win]);
+  });
+
+  it("refuses a surface it doesn't know", () => {
+    registerMemoryPressureHandlers({} as never);
+
+    expect(() =>
+      getHandler("system:note-memory-notice-shown")({ episodeId: "episode-1", surface: "toast" })
+    ).toThrow();
+    expect(noteShownMock).not.toHaveBeenCalled();
+  });
+
+  it("unregisters its channels on dispose", () => {
     const dispose = registerMemoryPressureHandlers({} as never);
     dispose();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:is-memory-pressure-critical");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("system:note-memory-notice-shown");
   });
 });
