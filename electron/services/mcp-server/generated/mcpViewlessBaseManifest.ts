@@ -809,7 +809,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "help",
     danger: "safe",
     description:
-      "List the other Daintree Assistants running in this project, its vacant slots and the global one. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
+      "List this project's other Assistants, vacant slots and the global one; self is you. Message one by terminalId with its generation.",
     enabled: true,
     id: "assistant.list",
     inputSchema: {
@@ -832,6 +832,19 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       properties: {
         projectId: {
           type: "string",
+        },
+        self: {
+          type: "object",
+          properties: {
+            slot: {
+              type: "number",
+            },
+            agentId: {
+              type: "string",
+            },
+          },
+          required: ["slot", "agentId"],
+          additionalProperties: false,
         },
         assistants: {
           type: "array",

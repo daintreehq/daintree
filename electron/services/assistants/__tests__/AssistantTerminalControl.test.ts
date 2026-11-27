@@ -163,6 +163,7 @@ describe("AssistantTerminalControl (#13496)", () => {
 
       const listed = await control.list(LOCAL);
       expect(listed.projectId).toBe(PROJECT);
+      expect(listed.self).toEqual({ slot: 0, agentId: "codex" });
       expect(listed.assistants).toEqual([
         {
           terminalId: "t-one",
@@ -191,6 +192,46 @@ describe("AssistantTerminalControl (#13496)", () => {
         Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter((slot) => slot > 2)
       );
       expect(listed.keptSlots).toEqual([]);
+    });
+
+    it("names the caller's own lane as self, with its run's agent (#18276)", async () => {
+      addLane(3, "t-hub", {
+        sessionId: "hub-session",
+        record: atPrompt({ detectedAgentId: "claude" }),
+      });
+      addLane(1, "t-one");
+
+      const listed = await control.list(LOCAL);
+      expect(listed.self).toEqual({ slot: 3, agentId: "claude" });
+      expect(listed.assistants.map((entry) => entry.slot)).toEqual([1]);
+      expect(listed.vacantSlots).not.toContain(3);
+    });
+
+    it("takes self's agent from the run it detected, then launched, then the lane (#18276)", async () => {
+      const hub = addLane(3, "t-hub", {
+        sessionId: "hub-session",
+        record: atPrompt({ detectedAgentId: "claude", launchAgentId: "codex" }),
+      });
+      expect((await control.list(LOCAL)).self?.agentId).toBe("claude");
+
+      hub.record = { launchAgentId: "claude" } as AssistantTerminalRecord;
+      expect((await control.list(LOCAL)).self?.agentId).toBe("claude");
+
+      hub.lane.agentId = "gemini";
+      hub.record = undefined as unknown as AssistantTerminalRecord;
+      expect((await control.list(LOCAL)).self).toEqual({ slot: 3, agentId: "gemini" });
+    });
+
+    it("names no self for a caller that isn't one of the project's lanes (#18276)", async () => {
+      // A relay caller's session id belongs to another machine, even when it
+      // matches a lane's here: that lane is listed, never taken as self.
+      addLane(0, "t-zero", { sessionId: "shell-help" });
+      addLane(1, "t-one");
+
+      const relayed = await control.list(RELAY);
+      expect(relayed).not.toHaveProperty("self");
+      expect(relayed.assistants.map((entry) => entry.slot)).toEqual([0, 1]);
+      expect(await control.list({ ...LOCAL, helpSessionId: "gone" })).not.toHaveProperty("self");
     });
 
     it("lists a stopped lane's kept conversation apart, and never as vacant (#16763)", async () => {

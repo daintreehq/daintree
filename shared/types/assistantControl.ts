@@ -90,8 +90,17 @@ export const KeptAssistantSlotSchema = z.object({
 });
 export type KeptAssistantSlot = z.infer<typeof KeptAssistantSlotSchema>;
 
+/** The calling lane itself, which `assistants` leaves out (#18276). */
+export const AssistantSelfSchema = z.object({
+  slot: z.number(),
+  agentId: z.string(),
+});
+export type AssistantSelf = z.infer<typeof AssistantSelfSchema>;
+
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
+  /** Absent when the caller isn't one of this project's lanes. */
+  self: AssistantSelfSchema.optional(),
   assistants: z.array(AssistantEntrySchema),
   vacantSlots: z.array(z.number()).describe("Slots a start may use."),
   keptSlots: z

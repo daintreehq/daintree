@@ -31,7 +31,7 @@ export function registerAssistantControlActions(actions: ActionRegistry): void {
     id: "assistant.list",
     title: "List assistants",
     description:
-      "List the other Daintree Assistants running in this project, its vacant slots and the global one. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
+      "List this project's other Assistants, vacant slots and the global one; self is you. Message one by terminalId with its generation.",
     category: "help",
     kind: "query",
     danger: "safe",

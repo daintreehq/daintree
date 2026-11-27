@@ -222,6 +222,14 @@ describe("help prompt outputs", () => {
       expect(body).not.toMatch(/parallel batches of up to 4/);
     });
 
+    // #18276: a lane on another agent never shows in this agent's own session
+    // listing, so the prompt has to name the tool that lists every lane.
+    it.each(ALL_GENERATED)("%s points a lane at its sibling lanes", (_name, body) => {
+      expect(section(body, "## Common Tasks")).toMatch(
+        /Other lanes may run here on any agent: see them via `assistant\.list` \(`self` is you\) before acting alone\./
+      );
+    });
+
     // Provisioning fills this slot with the runbook rule when runbooks are on;
     // it sits above the orientation so the rule is read first.
     it.each(ALL_GENERATED)(

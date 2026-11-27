@@ -6,6 +6,7 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   type AssistantEntry,
   type AssistantListResult,
+  type AssistantSelf,
   type AssistantResumeArgs,
   type AssistantStartArgs,
   type AssistantStartResult,
@@ -465,6 +466,7 @@ export class AssistantTerminalControl {
     // the other one acts on no worker, so it isn't the global assistant to reach.
     const coordinator = (await this.deps.globalCoordinatorSlot?.().catch(() => null)) ?? null;
     let globalLane: RunningLane | null = null;
+    let self: AssistantSelf | undefined;
     for (const lane of this.deps.listRunningLanes()) {
       if (lane.projectId !== caller.projectId || isGlobalAssistantId(lane.projectId)) {
         if (
@@ -480,7 +482,14 @@ export class AssistantTerminalControl {
       occupied.add(lane.slot);
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (!running) continue;
-      if (caller.kind === "local" && running.sessionId === caller.helpSessionId) continue;
+      if (caller.kind === "local" && running.sessionId === caller.helpSessionId) {
+        const record = await this.deps.getTerminal(running.terminalId).catch(() => null);
+        self = {
+          slot: lane.slot,
+          agentId: record?.detectedAgentId ?? record?.launchAgentId ?? lane.agentId,
+        };
+        continue;
+      }
       const entry = await this.entryFor(
         {
           scope: "project",
@@ -507,7 +516,14 @@ export class AssistantTerminalControl {
       (slot) => !occupied.has(slot) && !kept.has(slot)
     );
     const global = globalLane === null ? null : await this.globalEntryFor(globalLane);
-    return { projectId: caller.projectId, assistants, vacantSlots, keptSlots, global };
+    return {
+      projectId: caller.projectId,
+      ...(self ? { self } : {}),
+      assistants,
+      vacantSlots,
+      keptSlots,
+      global,
+    };
   }
 
   /** The global Assistant's lane as a listing shows it; null while its run has no generation. */
