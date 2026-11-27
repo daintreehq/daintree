@@ -263,6 +263,7 @@ export class SessionHost {
   private readonly states = new Map<string, SessionState>();
   private readonly openedListeners = new Set<EndpointOpenedListener>();
   private readonly transportListeners = new Set<TransportChangeListener>();
+  private readonly resyncListeners = new Set<(endpoints: RemoteViewEndpoint[]) => void>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly highWaterBytes: number;
   private readonly graceMs: number;
@@ -298,6 +299,16 @@ export class SessionHost {
   onTransportChange(listener: TransportChangeListener): () => void {
     this.transportListeners.add(listener);
     return () => this.transportListeners.delete(listener);
+  }
+
+  /**
+   * Seam for standing state a view can't refetch itself: called once a Shell
+   * has been told to repaint views whose events were dropped, overflowed or
+   * posted while its link was down, so what they missed can be sent again.
+   */
+  onEndpointsResynced(listener: (endpoints: RemoteViewEndpoint[]) => void): () => void {
+    this.resyncListeners.add(listener);
+    return () => this.resyncListeners.delete(listener);
   }
 
   /** Shells with a live link, a view open through it, and recent use of it. */
@@ -441,6 +452,7 @@ export class SessionHost {
     for (const sessionId of [...this.states.keys()]) this.expire(sessionId, "host-shutdown");
     this.openedListeners.clear();
     this.transportListeners.clear();
+    this.resyncListeners.clear();
     this.publishFrontendCount();
     if (this.activityTimer) clearTimeout(this.activityTimer);
     this.activityTimer = null;
@@ -918,6 +930,7 @@ export class SessionHost {
     };
     state.stale.clear();
     if (payload.endpointIds.length === 0) return;
+    const resynced = payload.endpointIds.map((id) => state.endpoints.get(id)!);
     void link.call(LinkMethod.ENDPOINT_RESYNC, payload).catch(() => {
       // Keep the Shell owing a resync: retried on the next write pass while
       // this link lives, and announced on reattach if it doesn't.
@@ -925,6 +938,13 @@ export class SessionHost {
       for (const id of payload.endpointIds) if (state.endpoints.has(id)) state.stale.add(id);
       state.staleReason = payload.reason;
     });
+    for (const listener of [...this.resyncListeners]) {
+      try {
+        listener(resynced);
+      } catch (error) {
+        console.error("[SessionHost] resync listener failed:", error);
+      }
+    }
   }
 
   private announce(state: SessionState, answer: EndpointAnswer): void {

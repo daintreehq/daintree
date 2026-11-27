@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
-import { acceptHostPush, acceptLocalPushForRemoteView } from "../eventsPush.js";
+import {
+  acceptHostPush,
+  acceptLocalPushForRemoteView,
+  systemMemoryEpisodeOf,
+} from "../eventsPush.js";
 
 const copiesToast = {
   type: "warning",
@@ -48,5 +52,63 @@ describe("toast routing for a remote-bound view (#16409)", () => {
     [null],
   ])("won't let %j pass from a host as a duplicate-install toast", (payload) => {
     expect(acceptHostPush(CHANNELS.NOTIFICATION_SHOW_TOAST, [payload])).toBe(false);
+  });
+});
+
+describe("memory episode routing for a remote-bound view (#18275)", () => {
+  const episode = {
+    name: "system:memory-pressure",
+    payload: {
+      status: "degraded",
+      swapUsedPercent: 85,
+      swapKind: "swap",
+      fseventsdRssMb: null,
+      kernelPressureLevel: null,
+      escalated: false,
+      workloads: null,
+    },
+  };
+
+  // Carried on the same channel, and still this machine's to say.
+  const wake = { name: "system:wake", payload: {} };
+
+  const recovery = { ...episode, payload: { ...episode.payload, status: "normal" } };
+
+  it("takes the host's episode, which describes the machine the view's project runs on", () => {
+    expect(acceptHostPush(CHANNELS.EVENTS_PUSH, [episode])).toBe(true);
+    expect(acceptHostPush(CHANNELS.EVENTS_PUSH, [recovery])).toBe(true);
+    expect(acceptHostPush(CHANNELS.EVENTS_PUSH, [wake])).toBe(false);
+  });
+
+  it("withholds this machine's episode, which isn't the host's", () => {
+    expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, [episode])).toBe(false);
+    expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, [recovery])).toBe(false);
+    expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, [wake])).toBe(true);
+  });
+
+  it("picks the episode out of the push that carries it, and nothing else", () => {
+    const recovered = { ...episode.payload, status: "normal", episodeId: "ep-1", extra: 1 };
+    expect(systemMemoryEpisodeOf(CHANNELS.EVENTS_PUSH, [episode])).toBe(episode.payload);
+    expect(systemMemoryEpisodeOf(CHANNELS.EVENTS_PUSH, [{ ...episode, payload: recovered }])).toBe(
+      recovered
+    );
+    expect(
+      systemMemoryEpisodeOf(CHANNELS.EVENTS_PUSH, [{ name: "agent:detected", payload: {} }])
+    ).toBeNull();
+    expect(systemMemoryEpisodeOf(CHANNELS.NOTIFICATION_SHOW_TOAST, [episode])).toBeNull();
+  });
+
+  it("marks an episode it can't read, so none reaches a view unnamed", () => {
+    for (const payload of [
+      { status: "unknown" },
+      null,
+      "degraded",
+      { ...episode.payload, workloads: {} },
+      { ...episode.payload, swapUsedPercent: "85" },
+    ]) {
+      expect(
+        systemMemoryEpisodeOf(CHANNELS.EVENTS_PUSH, [{ name: "system:memory-pressure", payload }])
+      ).toBe("unsupported");
+    }
   });
 });

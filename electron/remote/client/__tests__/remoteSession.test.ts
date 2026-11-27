@@ -71,6 +71,12 @@ import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
+import type { SystemMemoryPressurePayload } from "../../../../shared/types/ipc/system.js";
+import {
+  publishSystemMemoryPressure,
+  replaySystemMemoryPressureToEndpoint,
+  resetSystemMemoryPressureDeliveryForTesting,
+} from "../../../window/systemMemoryPressureDelivery.js";
 import { HostServer } from "../../host/HostServer.js";
 import { hostSocketLocation } from "../../host/hostSocketPath.js";
 import { SessionHost, type SessionHostOptions } from "../../host/SessionHost.js";
@@ -138,6 +144,7 @@ function recordingSink() {
   const delivered = new Map<number, Array<{ channel: string; args: unknown[] }>>();
   const resyncs: Array<{ webContentsId: number; reason: string }> = [];
   const activated: number[] = [];
+  const memoryEpisodes: Array<{ hostId: string; payload: SystemMemoryPressurePayload }> = [];
   const goneListeners = new Map<number, () => void>();
   const hosts = new Map<number, string | null>();
   const sink: ViewSink = {
@@ -157,10 +164,11 @@ function recordingSink() {
     // Views default to the host the test talks to; a test can move one away.
     hostOf: (webContentsId) => (hosts.has(webContentsId) ? hosts.get(webContentsId)! : HOST_ID),
     agentActivated: (webContentsId) => activated.push(webContentsId),
+    memoryEpisode: (hostId, payload) => memoryEpisodes.push({ hostId, payload }),
   };
   /** The view was destroyed. */
   const gone = (webContentsId: number) => goneListeners.get(webContentsId)?.();
-  return { sink, delivered, resyncs, activated, gone, hosts };
+  return { sink, delivered, resyncs, activated, memoryEpisodes, gone, hosts };
 }
 
 interface Harness {
@@ -170,6 +178,7 @@ interface Harness {
   frontendCounts: number[];
   manager: RemoteHostManager;
   sink: ReturnType<typeof recordingSink>;
+  registry: HostRegistry;
   sockets: net.Socket[];
   allowConnect: { value: boolean; hostModeOff?: boolean };
 }
@@ -260,7 +269,7 @@ async function startHarness(
   });
   getIpcDispatcher().setRemoteRouter(router);
 
-  h = { dir, server, sessionHost, frontendCounts, manager, sink, sockets, allowConnect };
+  h = { dir, server, sessionHost, frontendCounts, manager, sink, registry, sockets, allowConnect };
   cleanups.push(async () => {
     getIpcDispatcher().setRemoteRouter(null);
     await manager.disposeAll();
@@ -388,6 +397,50 @@ describe("remote session wiring", () => {
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
     expect(crossed).toEqual([EVENT_CHANNEL]);
+  });
+
+  it("hands a windowless host's memory episode to this Shell once, named as that host (#18275)", async () => {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    cleanups.push(resetSystemMemoryPressureDeliveryForTesting);
+    h.registry.update({ hostId: HOST_ID, name: "Studio" });
+    const episode: SystemMemoryPressurePayload = {
+      status: "degraded",
+      swapUsedPercent: 85,
+      swapKind: "swap",
+      fseventsdRssMb: null,
+      kernelPressureLevel: null,
+      escalated: false,
+      workloads: { appMemoryMb: 700, projects: [], agentsRunning: 6, memoryTotalMb: 32768 },
+    };
+
+    // One this build can't read goes nowhere, never to a view unnamed.
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "system:memory-pressure",
+      payload: { ...episode, workloads: {} },
+    });
+    // The host's own monitor, on a machine with no windows of its own.
+    publishSystemMemoryPressure(episode, []);
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "after");
+    await waitFor(() => (h.sink.delivered.get(VIEW_B)?.length ?? 0) === 1);
+
+    expect(h.sink.memoryEpisodes).toEqual([
+      {
+        hostId: HOST_ID,
+        payload: {
+          ...episode,
+          episodeId: expect.any(String),
+          // Its OS too, as the handshake reported it, for how its swap reads (#18273).
+          host: { id: HOST_ID, name: "Studio", platform: "darwin" },
+        },
+      },
+    ]);
+    // Never per view: the Shell shows it once per window, as it does its own.
+    expect(h.sink.delivered.get(VIEW_A)).toEqual([
+      { channel: EVENT_CHANNEL, args: ["term-all", "after"] },
+    ]);
   });
 
   it("still drops a Shell-owned push a host on another build sends", async () => {
@@ -658,6 +711,48 @@ describe("remote session wiring", () => {
     await waitFor(() =>
       (h.sink.delivered.get(VIEW_A) ?? []).some((event) => event.args[0] === "after")
     );
+  });
+
+  it("repeats a host's memory episode to a view whose events overflowed (#18275)", async () => {
+    await startHarness({ eventsLimits: { high: 4 * 1024, cap: 16 * 1024 } });
+    cleanups.push(resetSystemMemoryPressureDeliveryForTesting);
+    const resynced: string[] = [];
+    // As the host listener wires it.
+    cleanups.push(
+      h.sessionHost.onEndpointsResynced((endpoints) => {
+        for (const endpoint of endpoints) {
+          resynced.push(endpoint.endpointId);
+          replaySystemMemoryPressureToEndpoint(endpoint);
+        }
+      })
+    );
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    const endpoint = getEndpointRegistry().getRemote()[0]!;
+
+    const chunk = "x".repeat(1024);
+    for (let i = 0; i < 200; i++)
+      broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, `t${i}`, chunk);
+    publishSystemMemoryPressure(
+      {
+        status: "degraded",
+        swapUsedPercent: 85,
+        swapKind: "swap",
+        fseventsdRssMb: null,
+        kernelPressureLevel: null,
+        escalated: false,
+        workloads: null,
+      },
+      []
+    );
+    await waitFor(() => h.sink.resyncs.length === 1 && h.sink.memoryEpisodes.length > 0);
+
+    expect(h.sink.resyncs[0]).toEqual({ webContentsId: VIEW_A, reason: "overflow" });
+    expect(resynced).toEqual([endpoint.endpointId]);
+    expect(h.sink.memoryEpisodes.at(-1)!.payload).toMatchObject({
+      status: "degraded",
+      swapUsedPercent: 85,
+    });
   });
 
   it("routes nothing to a host on a different link protocol", async () => {

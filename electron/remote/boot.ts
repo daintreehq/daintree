@@ -8,6 +8,7 @@ import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDis
 import { getPtyClient } from "../window/serviceRefs.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
+import { setSystemMemoryPressureRoute } from "../window/systemMemoryPressureDelivery.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { isRemoteHostSupported } from "./buildGate.js";
@@ -192,6 +193,8 @@ function startClient(options: StartRemoteHostsOptions): void {
           hostForView(webContentsId) === null || acceptLocalPushForRemoteView(channel, args)
       )
     );
+    // A remote view's memory notice is its host's, not this machine's (#18275).
+    teardowns.push(setSystemMemoryPressureRoute((webContentsId) => hostForView(webContentsId)));
     teardowns.push(
       setRemoteViewHooks({
         isRemoteView: (wc) => hostForView(wc.id) !== null,

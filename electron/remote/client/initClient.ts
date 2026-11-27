@@ -36,6 +36,11 @@ import {
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import {
+  forgetHostSystemMemoryPressure,
+  publishHostSystemMemoryPressure,
+  refreshSystemMemoryPressure,
+} from "../../window/systemMemoryPressureDelivery.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
@@ -224,6 +229,15 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
       sink.send(webContentsId, CHANNELS.REMOTE_HOSTS_EVENT, [event]);
     },
     hostOf,
+    memoryEpisode(hostId, payload) {
+      publishHostSystemMemoryPressure(
+        hostId,
+        payload,
+        getWindowRegistry()
+          ?.all()
+          .map((ctx) => ctx.browserWindow) ?? []
+      );
+    },
     agentActivated(webContentsId) {
       const wc = resolveLiveWebContents(webContentsId);
       const win = wc ? getWindowForWebContents(wc) : null;
@@ -757,6 +771,7 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   },
   // Before the views hear: whatever they read after that is the new machine's.
   { name: "load history", run: (hostId) => getRemoteService("hostMetrics")?.forgetHistory(hostId) },
+  { name: "memory episode", run: forgetHostSystemMemoryPressure },
   {
     name: "view storage",
     run: (hostId) => broadcastLocal({ type: "host-forgotten", hostId }),
@@ -966,6 +981,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   });
   const stopWakeWatch = sleep.onWake(() => manager.systemResumed());
   const bindings = new WindowHostBinding();
+  // A view with no project follows its window's binding, so the memory notice
+  // it shows must follow it to the machine the window now shows (#18275).
+  const stopMemoryNoticeRebind = bindings.onChange((windowId) => {
+    const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+    if (win && !win.isDestroyed()) refreshSystemMemoryPressure(win, getAppWebContents(win));
+  });
   const onWindowFocus = (_event: Event, window: BrowserWindow) => {
     if (window.isDestroyed()) return;
     const hostId = bindings.get(window.id);
@@ -1317,6 +1338,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     idleTimePicked: (hostId, settings) => cloudLifecycle?.idleTimePicked(hostId, settings),
     async dispose() {
       stopWakeWatch();
+      stopMemoryNoticeRebind();
       app.off("browser-window-focus", onWindowFocus);
       stopStartRechecks();
       stopOwnedHostCleanup();

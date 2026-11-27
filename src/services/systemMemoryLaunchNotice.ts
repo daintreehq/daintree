@@ -1,4 +1,8 @@
-import type { SystemMemoryNoticeSurface, SystemMemoryWorkloads } from "@shared/types/ipc/system";
+import type {
+  SystemMemoryEpisodeHost,
+  SystemMemoryNoticeSurface,
+  SystemMemoryWorkloads,
+} from "@shared/types/ipc/system";
 import { systemClient } from "@/clients/systemClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
@@ -13,6 +17,8 @@ interface OpenEpisode {
   /** `describeSystemMemoryReadings` for the episode's latest publish. */
   reading: string;
   workloads: SystemMemoryWorkloads | null;
+  /** The remote host the episode is on; absent for this machine (#18275). */
+  host?: SystemMemoryEpisodeHost;
 }
 
 let episode: OpenEpisode | null = null;
@@ -57,21 +63,29 @@ export function releaseSystemMemoryNotice(
   }
 }
 
-/** The readings, then what the host held when they were taken. Figures only (#12462). */
+/** The bar's key for a machine: each machine's under one of its own (#18275). */
+export function systemMemoryLaunchNoticeKey(host: SystemMemoryEpisodeHost | undefined): string {
+  return host ? `${NOTICE_KEY}:${host.id}` : NOTICE_KEY;
+}
+
+/** The readings, then what the machine held when they were taken. Figures only (#12462). */
 export function describeLaunchDuringMemoryEpisode(
-  open: Pick<OpenEpisode, "reading" | "workloads">
+  open: Pick<OpenEpisode, "reading" | "workloads" | "host">
 ): string {
   const agents = open.workloads?.agentsRunning ?? null;
   const total = open.workloads?.memoryTotalMb ?? null;
-  const host =
+  // The machine the readings were taken on: a remote host by name (#18275).
+  const where = open.host ? open.host.name : "this host";
+  const subject = open.host ? open.host.name : "This host";
+  const held =
     agents !== null && total !== null
-      ? `When that was measured, ${pluralize(agents, "agent was", "agents were")} running on this host, which has ${formatTotal(total)} of memory.`
+      ? `When that was measured, ${pluralize(agents, "agent was", "agents were")} running on ${where}, which has ${formatTotal(total)} of memory.`
       : agents !== null
-        ? `When that was measured, ${pluralize(agents, "agent was", "agents were")} running on this host.`
+        ? `When that was measured, ${pluralize(agents, "agent was", "agents were")} running on ${where}.`
         : total !== null
-          ? `This host has ${formatTotal(total)} of memory.`
+          ? `${subject} has ${formatTotal(total)} of memory.`
           : null;
-  return host ? `${open.reading} ${host}` : open.reading;
+  return held ? `${open.reading} ${held}` : open.reading;
 }
 
 /**
@@ -79,15 +93,19 @@ export function describeLaunchDuringMemoryEpisode(
  * refreshes the figures without re-arming the bar; recovery takes it down.
  */
 export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
-  // A new episode re-arms the bar even if this view missed the last recovery.
-  if (next !== null && episode !== null && next.episodeId !== episode.episodeId) {
+  const previous = episode;
+  episode = next;
+  if (next !== null) {
+    if (previous === null || previous.episodeId === next.episodeId) return;
+    // A new episode re-arms the bar even if this view missed the last recovery.
+    claiming = false;
+    shownThisEpisode = false;
+    // Another machine's episode doesn't inherit this one's bar.
+    if (previous.host?.id === next.host?.id) return;
+  } else {
     claiming = false;
     shownThisEpisode = false;
   }
-  episode = next;
-  if (next !== null) return;
-  claiming = false;
-  shownThisEpisode = false;
   if (noticeId !== null) {
     useNotificationStore.getState().dismissNotification(noticeId);
     noticeId = null;
@@ -129,10 +147,10 @@ function raiseLaunchNotice(open: OpenEpisode, episodeId: string): void {
     urgent: false,
     countable: false,
     duration: 0,
-    title: "High system memory use",
+    title: open.host ? `High memory use on ${open.host.name}` : "High system memory use",
     message,
-    replaceKey: NOTICE_KEY,
-    supersedeKey: NOTICE_KEY,
+    replaceKey: systemMemoryLaunchNoticeKey(open.host),
+    supersedeKey: systemMemoryLaunchNoticeKey(open.host),
     context: { eventKind: "host" },
   });
   // A notice the quiet period or a mute swallowed leaves the next launch, in

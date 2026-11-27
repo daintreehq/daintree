@@ -65,6 +65,7 @@ import {
   onHelpAssistantSettingsChanged,
 } from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { replaySystemMemoryPressureToEndpoint } from "../../window/systemMemoryPressureDelivery.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
@@ -113,6 +114,7 @@ function replaySnapshots(endpoint: RemoteViewEndpoint): void {
   // What a local view gets on onViewReady; a remote view has no such hook.
   getProjectStatsService()?.pushSnapshotToEndpoint(endpoint);
   getFleetSnapshotService()?.pushSnapshotToEndpoint(endpoint);
+  replaySystemMemoryPressureToEndpoint(endpoint);
   // Plugin contributions, badges, panel menus and running actions: what a local
   // view's did-finish-load replay gives it.
   void import("../../services/PluginService.js")
@@ -422,6 +424,26 @@ async function buildHostListener(
       }
       replaySnapshots(endpoint);
       notify();
+    })
+  );
+
+  // A view's resync refetches what it can ask for, but not the memory episode
+  // (#18275): one that opened or ended while its events were being dropped, or
+  // while its link was down, would otherwise never reach it.
+  // One copy per session: the Shell spreads a host's episode to each of its
+  // views of the host. Never re-entered: a replay it couldn't post marks the
+  // view stale, which must not resync again on the same stack.
+  let replayingMemory = false;
+  teardowns.push(
+    host.sessionHost.onEndpointsResynced((endpoints) => {
+      const endpoint = endpoints.find((candidate) => !candidate.isClosed());
+      if (!endpoint || replayingMemory) return;
+      replayingMemory = true;
+      try {
+        replaySystemMemoryPressureToEndpoint(endpoint);
+      } finally {
+        replayingMemory = false;
+      }
     })
   );
 

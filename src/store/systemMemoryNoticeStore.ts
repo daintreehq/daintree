@@ -9,6 +9,8 @@ export interface SystemMemoryNotice {
   action: NotificationAction | null;
   /** The kernel reported its critical level on the latest publish. */
   critical: boolean;
+  /** The remote host the readings were taken on; absent for this machine (#18275). */
+  hostName?: string;
 }
 
 interface SystemMemoryNoticeState {

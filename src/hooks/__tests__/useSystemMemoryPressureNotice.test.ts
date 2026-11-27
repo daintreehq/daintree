@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { SystemMemoryPressureDelivery } from "@shared/types/ipc/system";
+import type { Notification } from "@/store/notificationStore";
 
 const notifyMock = vi.fn();
 let attended = true;
@@ -635,6 +636,204 @@ describe("useSystemMemoryPressureNotice", () => {
       for (const id of ids) {
         expect(entries.find((e) => e.id === id)?.archivedAt).toEqual(expect.any(Number));
       }
+    });
+  });
+
+  describe("a remote host's episode (#18275)", () => {
+    const STUDIO = { id: "host-studio", name: "Studio" };
+    const HOST_EPISODE: SystemMemoryPressureDelivery = {
+      ...DEGRADED,
+      fseventsdRssMb: null,
+      workloads: { appMemoryMb: 700, projects: [], agentsRunning: 6, memoryTotalMb: 32768 },
+      host: STUDIO,
+      episodeId: "studio-episode-1",
+    };
+    const HOST_CRITICAL: SystemMemoryPressureDelivery = {
+      ...HOST_EPISODE,
+      kernelPressureLevel: "critical",
+      escalated: true,
+    };
+
+    async function notificationStore() {
+      return (await import("@/store/notificationStore")).useNotificationStore;
+    }
+
+    function seedToast(id: string, replaceKey: string): Notification {
+      return { id, type: "warning", priority: "high", message: "m", replaceKey };
+    }
+
+    it("names the host it was measured on, and never this machine", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+      const { noteVisibleAgentLaunch } = await import("@/services/systemMemoryLaunchNotice");
+
+      await deliver(HOST_EPISODE);
+
+      expect(store.getState().notice).toMatchObject({
+        reading: "On Studio, swap is 91% full.",
+        detail:
+          "On Studio, swap is 91% full. Restarting Studio clears this. Daintree on Studio uses 700 MB.",
+        hostName: "Studio",
+        action: null,
+      });
+      const payload = notifyMock.mock.calls[0]![0];
+      expect(payload.title).toBe("High memory use on Studio");
+      expect(payload.message).toBe(store.getState().notice?.detail);
+      // The breakdown reads this machine's processes.
+      expect(payload.actions).toBeUndefined();
+
+      noteVisibleAgentLaunch();
+      await vi.waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(2));
+      expect(notifyMock.mock.calls[1]![0]).toMatchObject({
+        title: "High memory use on Studio",
+        message:
+          "On Studio, swap is 91% full. When that was measured, 6 agents were running on Studio, which has 32 GB of memory.",
+      });
+
+      await deliver(HOST_CRITICAL);
+      expect(notifyMock.mock.calls[2]![0]).toMatchObject({
+        priority: "high",
+        title: "Critical memory pressure on Studio",
+      });
+      expect(notifyMock.mock.calls[2]![0].actions).toBeUndefined();
+    });
+
+    it("describes a Mac host's swap as growth, whatever this machine is", async () => {
+      mac = false;
+      await mountAndCapture();
+      const store = await noticeStore();
+
+      await deliver({ ...HOST_EPISODE, host: { ...STUDIO, platform: "darwin" } });
+
+      expect(store.getState().notice?.detail).toBe(
+        "On Studio, swap in use grew to 91% of the swap macOS had allocated. Daintree on Studio uses 700 MB."
+      );
+    });
+
+    it("keeps the kernel's own casing, and no restart advice, for a kernel-only reading", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+
+      await deliver({
+        ...NORMAL,
+        status: "degraded",
+        kernelPressureLevel: "warn",
+        host: STUDIO,
+        episodeId: "studio-episode-1",
+        fileInbox: true,
+      });
+
+      expect(store.getState().notice?.detail).toBe(
+        "On Studio, macOS reports memory pressure at its warning level."
+      );
+    });
+
+    it("files each machine's notices under keys of its own, whatever its name", async () => {
+      await mountAndCapture();
+      const twin = { id: "host-studio-2", name: "Studio" };
+
+      await deliver(DEGRADED);
+      await deliver(HOST_EPISODE);
+      await deliver({ ...HOST_EPISODE, host: twin, episodeId: "twin-episode-1" });
+
+      const warnings = notifyMock.mock.calls.map(([p]) => p).filter((p) => p.type === "warning");
+      for (const warning of warnings) {
+        expect(warning.replaceKey).toEqual(expect.any(String));
+        expect(warning.supersedeKey).toBe(warning.replaceKey);
+      }
+      const keys = warnings.map((p) => p.supersedeKey);
+      expect(keys).toHaveLength(3);
+      expect(new Set(keys).size).toBe(3);
+    });
+
+    it("names the host when its readings recover, and takes its toast down", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+
+      await deliver(HOST_CRITICAL);
+      await deliver({ ...NORMAL, host: STUDIO, episodeId: "studio-episode-1" });
+
+      expect(store.getState().notice).toBeNull();
+      const [warning, resolution] = notifyMock.mock.calls.map(([p]) => p);
+      expect(warning.priority).toBe("high");
+      expect(resolution).toMatchObject({
+        type: "success",
+        priority: "low",
+        title: "Memory readings on Studio recovered",
+        supersedeKey: warning.supersedeKey,
+        replaceKey: warning.replaceKey,
+      });
+    });
+
+    it("takes the notice and its toast down quietly when the host says none is open", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+      const notifications = await notificationStore();
+      const none = { ...NORMAL, replay: true as const, host: STUDIO, episodeId: null };
+
+      await deliver(none);
+      expect(notifyMock).not.toHaveBeenCalled();
+
+      await deliver(HOST_CRITICAL);
+      notifications.setState({
+        notifications: [seedToast("toast-1", notifyMock.mock.calls[0]![0].replaceKey)],
+      });
+      await deliver(none);
+
+      expect(store.getState().notice).toBeNull();
+      expect(notifications.getState().notifications[0]).toMatchObject({ dismissed: true });
+      // Nothing was measured recovering, so nothing says it did.
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      // Its next episode starts afresh, critical toast included.
+      await deliver({ ...HOST_CRITICAL, episodeId: "studio-episode-2" });
+      expect(notifyMock.mock.calls.map(([p]) => p.priority)).toEqual(["high", "high"]);
+    });
+
+    it("raises a new episode afresh though no recovery came between them", async () => {
+      await mountAndCapture();
+
+      await deliver({ ...HOST_CRITICAL, episodeId: "ep-1" });
+      await deliver({ ...HOST_CRITICAL, episodeId: "ep-1", swapUsedPercent: 95 });
+      await deliver({ ...HOST_CRITICAL, episodeId: "ep-2" });
+
+      // The repeat at the same level only refreshes the row it filed.
+      expect(notifyMock.mock.calls.map(([p]) => [p.type, p.priority])).toEqual([
+        ["warning", "high"],
+        ["warning", "high"],
+      ]);
+    });
+
+    it("retires another machine's notice and only its toast, without calling it recovered", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+      const notifications = await notificationStore();
+
+      await deliver(CRITICAL);
+      notifications.setState({
+        notifications: [
+          seedToast("toast-1", notifyMock.mock.calls[0]![0].replaceKey),
+          seedToast("unrelated", "something-else"),
+        ],
+      });
+
+      await deliver(HOST_EPISODE);
+      await deliver(HOST_CRITICAL);
+
+      const [retired, unrelated] = notifications.getState().notifications;
+      expect(retired).toMatchObject({ dismissed: true });
+      expect(unrelated!.dismissed).toBeFalsy();
+      expect(store.getState().notice?.hostName).toBe("Studio");
+      // The host's own first critical reading still toasts.
+      expect(notifyMock.mock.calls.map(([p]) => [p.type, p.priority])).toEqual([
+        ["warning", "high"],
+        ["warning", "low"],
+        ["warning", "high"],
+      ]);
+      // A view hears a machine only once it shows that machine, so this one has
+      // moved back, and its host's notice goes without a recovery it never had.
+      await deliver(NORMAL);
+      expect(store.getState().notice).toBeNull();
+      expect(notifyMock.mock.calls.some(([p]) => p.type === "success")).toBe(false);
     });
   });
 });
