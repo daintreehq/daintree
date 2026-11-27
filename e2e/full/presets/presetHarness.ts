@@ -129,6 +129,14 @@ export async function readCustomPresets(
   }, agentId);
 }
 
+/** The most recently added custom preset: Add opens it for editing without making it the launch preset. */
+export async function readLastCustomPresetId(
+  page: Page,
+  agentId = "claude"
+): Promise<string | null> {
+  return (await readCustomPresets(page, agentId)).at(-1)?.id ?? null;
+}
+
 export async function readSelectedPresetId(page: Page, agentId = "claude"): Promise<string | null> {
   return page.evaluate(async (id) => {
     const settings = await window.electron.agentSettings.get();

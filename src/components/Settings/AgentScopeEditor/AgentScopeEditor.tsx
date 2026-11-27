@@ -1,10 +1,10 @@
-import { Fragment, useRef } from "react";
+import { Fragment, useRef, type Dispatch, type SetStateAction } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
 import { SettingsSection } from "../SettingsSection";
 import { SETTINGS_CONTROL_WIDTH, SettingsGroup, SettingsRow } from "../SettingsGroup";
-import { useAgentScope } from "./useAgentScope";
+import { useAgentScope, type EditPick } from "./useAgentScope";
 import { ScopeBadge, describeScope } from "./ScopeBanner";
 import { CustomPresetChrome, PresetDeleteRow } from "./CustomPresetChrome";
 import { BehavioralControls } from "./BehavioralControls";
@@ -25,6 +25,8 @@ interface AgentScopeEditorProps {
   presetInventory: PresetInventoryState;
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
+  editPick: EditPick;
+  setEditPick: Dispatch<SetStateAction<EditPick>>;
   editName: string;
   setEditName: (name: string) => void;
   lastEditTimeRef: React.MutableRefObject<number>;
@@ -37,10 +39,10 @@ interface AgentScopeEditorProps {
 /**
  * The preset an agent launches with, and that preset's settings.
  *
- * Choosing a preset here saves it as the agent's launch preset — it is not a view
- * filter — so the picker is the group's first row, labelled for what it does, and every
- * row under it edits (or, for a read-only source, shows) the preset it names. One group:
- * the picker is the parent the rest depends on.
+ * Two pickers with two jobs. "Launch preset" is the only control that saves which preset
+ * new sessions use. "Edit preset" only chooses which preset the rows under it edit (or,
+ * for a read-only source, show); it saves nothing, and marks the launch preset in its
+ * list. One group: the edit picker is the parent the rest depends on.
  */
 export function AgentScopeEditor(props: AgentScopeEditorProps) {
   const scope = useAgentScope(props);
@@ -50,8 +52,10 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
   // The rows below would edit the agent's own settings, which isn't what a
   // launch with the saved preset uses, so they wait for it to load.
   const selectionLoading =
-    savedPresetStatus(props.activeEntry.presetId, scope.allPresets, props.presetInventory) ===
-    "loading";
+    savedPresetStatus(scope.editedPresetId, scope.allPresets, props.presetInventory) === "loading";
+  const launchLoading =
+    savedPresetStatus(scope.launchPresetId, scope.allPresets, props.presetInventory) === "loading";
+  const isLaunchPreset = scope.editedPresetId === scope.launchPresetId;
 
   return (
     <SettingsSection
@@ -73,30 +77,50 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
     >
       <SettingsGroup>
         <SettingsRow
-          label="Preset"
-          accessory={<ScopeBadge scopeKind={scope.scopeKind} />}
+          label="Launch preset"
           description={
-            selectionLoading
+            launchLoading
               ? `New ${agentName} sessions launch with the saved preset once it loads`
-              : describeScope(scope.scopeKind, agentName)
+              : `New ${agentName} sessions launch with this preset. A worktree can still pick a preset of its own.`
           }
           control={({ labelId, descriptionId }) => (
             <div className={SETTINGS_CONTROL_WIDTH.wide}>
               <PresetSelector
-                selectedPresetId={props.activeEntry.presetId ?? undefined}
+                selectedPresetId={scope.launchPresetId ?? undefined}
+                allPresets={scope.allPresets}
+                ccrPresets={scope.ccrPresets ?? []}
+                projectPresets={scope.projectPresets ?? []}
+                customPresets={scope.customPresets ?? []}
+                selectionLoading={launchLoading}
+                onChange={scope.handleLaunchPresetChange}
+                agentColor={agentColor}
+                triggerTestId="launch-preset-selector-trigger"
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+              />
+            </div>
+          )}
+        />
+
+        <SettingsRow
+          label="Edit preset"
+          accessory={<ScopeBadge scopeKind={scope.scopeKind} />}
+          description={
+            selectionLoading
+              ? "The preset's settings appear once it loads"
+              : describeScope(scope.scopeKind, agentName, isLaunchPreset)
+          }
+          control={({ labelId, descriptionId }) => (
+            <div className={SETTINGS_CONTROL_WIDTH.wide}>
+              <PresetSelector
+                selectedPresetId={scope.editedPresetId ?? undefined}
                 allPresets={scope.allPresets}
                 ccrPresets={scope.ccrPresets ?? []}
                 projectPresets={scope.projectPresets ?? []}
                 customPresets={scope.customPresets ?? []}
                 selectionLoading={selectionLoading}
-                onChange={(presetId) => {
-                  void (async () => {
-                    await props.updateAgent(props.agentId, {
-                      presetId: presetId ?? undefined,
-                    } as Partial<AgentSettingsEntry>);
-                    props.onSettingsChange?.();
-                  })();
-                }}
+                launchPresetId={scope.launchPresetId ?? null}
+                onChange={scope.setEditedPresetId}
                 agentColor={agentColor}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
@@ -109,7 +133,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
             fragment rather than a wrapper, so the group's hairlines still fall between
             rows. */}
         {!selectionLoading && (
-          <Fragment key={props.activeEntry.presetId ?? "default"}>
+          <Fragment key={scope.editedPresetId ?? "default"}>
             {scope.scopeKind === "custom" && scope.selectedPreset && (
               <CustomPresetChrome
                 selectedPreset={scope.selectedPreset}

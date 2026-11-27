@@ -16,6 +16,7 @@ import {
   getPresetOptionLabels,
   getPresetRowByName,
   getSelectedPresetLabel,
+  setLaunchPreset,
   writeCcrConfig,
   removeCcrConfig,
   waitForCcrPresets,
@@ -25,6 +26,7 @@ import {
   installPresetAgents,
   closeSettings,
   readCustomPresets,
+  readLastCustomPresetId,
   readSelectedPresetId,
   setAgentPinned,
   setAgentSettings,
@@ -61,8 +63,8 @@ async function openSelectedPresetEditor(): Promise<Locator> {
 async function addNamedPreset(name: string): Promise<string> {
   await goToClaudeSettings();
   await addCustomPreset(ctx.window);
-  const id = await readSelectedPresetId(ctx.window);
-  expect(id, "the added preset is the selected one").not.toBeNull();
+  const id = await readLastCustomPresetId(ctx.window);
+  expect(id, "the added preset exists").not.toBeNull();
   const input = await openSelectedPresetEditor();
   await input.fill(name);
   await input.press("Enter");
@@ -237,7 +239,7 @@ test.describe("Presets: custom preset CRUD", () => {
     test("20. Preset with empty env is valid", async () => {
       await goToClaudeSettings();
       await addCustomPreset(ctx.window);
-      const id = await readSelectedPresetId(ctx.window);
+      const id = await readLastCustomPresetId(ctx.window);
       const added = (await readCustomPresets(ctx.window)).find((p) => p.id === id);
       expect(added?.env ?? {}).toEqual({});
       await expect(section().locator(SEL.preset.customBadge).last()).toBeVisible({
@@ -517,7 +519,7 @@ test.describe("Presets: custom preset CRUD", () => {
         .toContain("Original 42 (copy)");
 
       await getPresetRowByName(ctx.window, "Original 42");
-      await expect.poll(() => readSelectedPresetId(ctx.window)).toBe(originalId);
+      await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe("Original 42");
       await deleteSelectedPreset();
 
       await expect
@@ -651,7 +653,7 @@ test.describe("Presets: custom preset CRUD", () => {
     test("52. Deleting preset while agent running with it does not kill the agent", async () => {
       await goToClaudeSettings();
       await addCustomPreset(ctx.window);
-      const presetId = await readSelectedPresetId(ctx.window);
+      const presetId = await readLastCustomPresetId(ctx.window);
       expect(presetId).not.toBeNull();
 
       const launchesBefore = readFakeAgentLaunchLog(agents.claudeBin).length;
@@ -729,6 +731,7 @@ test.describe("Presets: custom preset CRUD", () => {
       await addNamedPreset("Switch Keep 57");
       await selectPresetByIndex(ctx.window, 0);
       await getPresetRowByName(ctx.window, "Switch Keep 57");
+      await setLaunchPreset(ctx.window, "Switch Keep 57");
       await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe("Switch Keep 57");
 
       await navigateToAgentSettings(ctx.window, "gemini");
@@ -740,6 +743,7 @@ test.describe("Presets: custom preset CRUD", () => {
       await addNamedPreset("Reopen Keep 58");
       await selectPresetByIndex(ctx.window, 0);
       await getPresetRowByName(ctx.window, "Reopen Keep 58");
+      await setLaunchPreset(ctx.window, "Reopen Keep 58");
       await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe("Reopen Keep 58");
 
       await closeSettings(ctx.window);
@@ -775,6 +779,7 @@ test.describe("Presets: custom preset CRUD", () => {
       await addNamedPreset("Stale 71");
       await selectPresetByIndex(ctx.window, 0);
       await getPresetRowByName(ctx.window, "Stale 71");
+      await setLaunchPreset(ctx.window, "Stale 71");
       await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe("Stale 71");
       await expect.poll(() => readSelectedPresetId(ctx.window)).not.toBeNull();
 
@@ -826,7 +831,7 @@ test.describe("Presets: custom preset CRUD", () => {
         const presets = await readCustomPresets(ctx.window);
         expect(presets.length).toBe(beforeAdd + 1);
         const added = presets[presets.length - 1];
-        await expect.poll(() => readSelectedPresetId(ctx.window)).toBe(added.id);
+        await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe(added.name);
 
         await deleteSelectedPreset();
         await expect.poll(async () => (await readCustomPresets(ctx.window)).length).toBe(beforeAdd);
@@ -943,7 +948,7 @@ test.describe("Presets: custom preset CRUD", () => {
       for (let remaining = (await readCustomPresets(ctx.window)).length; remaining > 0;) {
         const target = (await readCustomPresets(ctx.window))[0];
         await getPresetRowByName(ctx.window, target.name);
-        await expect.poll(() => readSelectedPresetId(ctx.window)).toBe(target.id);
+        await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe(target.name);
         await deleteSelectedPreset();
         await expect
           .poll(async () => (await readCustomPresets(ctx.window)).length)

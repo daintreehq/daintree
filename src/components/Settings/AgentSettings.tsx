@@ -30,7 +30,7 @@ import { AgentUsageTrackingSection } from "./AgentUsageTrackingSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
-import { AgentScopeEditor, resolveSkipPermissions } from "./AgentScopeEditor";
+import { AgentScopeEditor, resolveSkipPermissions, type EditPick } from "./AgentScopeEditor";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
@@ -287,6 +287,8 @@ export function AgentSettings({
   // Preset editing state
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  // Which preset Settings is editing when it isn't the launch preset. Never saved.
+  const [editPick, setEditPick] = useState<EditPick>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [addDialogAgentId, setAddDialogAgentId] = useState<string | null>(null);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -299,7 +301,9 @@ export function AgentSettings({
     const id = `user-${crypto.randomUUID()}`;
     const updated = [...existing, { ...presetData, id }];
     try {
-      await updateAgent(addDialogAgentId, { customPresets: updated, presetId: id });
+      // A new preset opens for editing but never becomes the launch preset (#18278).
+      await updateAgent(addDialogAgentId, { customPresets: updated });
+      setEditPick({ agentId: addDialogAgentId, id });
       onSettingsChange?.();
       lastAddTimeRef.current = Date.now();
       setIsAddDialogOpen(false);
@@ -331,7 +335,11 @@ export function AgentSettings({
   useEffect(() => {
     setEditingPresetId(null);
     setEditName("");
-  }, [activeSubtab, activeEntryPresetId]);
+  }, [activeSubtab, activeEntryPresetId, editPick]);
+
+  useEffect(() => {
+    setEditPick(null);
+  }, [activeSubtab]);
 
   useStaleAgentPresetCleanup({
     agentId: activeAgentId,
@@ -698,6 +706,8 @@ export function AgentSettings({
             presetInventory={presetInventory}
             editingPresetId={editingPresetId}
             setEditingPresetId={setEditingPresetId}
+            editPick={editPick}
+            setEditPick={setEditPick}
             editName={editName}
             setEditName={setEditName}
             lastEditTimeRef={lastEditTimeRef}
@@ -763,10 +773,19 @@ export function AgentSettings({
           currentPreset={(() => {
             if (!addDialogAgentId) return null;
             const entry = getAgentSettingsEntry(effectiveSettings, addDialogAgentId);
-            if (!entry.presetId) return null;
             const ccr = ccrPresetsByAgent[addDialogAgentId];
             const project = projectPresetsByAgent[addDialogAgentId];
             const merged = getMergedPresets(addDialogAgentId, entry.customPresets, ccr, project);
+            // The preset being edited, which is the launch preset unless another was picked.
+            const picked =
+              editPick && editPick.agentId === addDialogAgentId && editPick.id !== undefined
+                ? merged.find((f) => f.id === editPick.id)
+                : undefined;
+            if (picked) return picked;
+            if (editPick && editPick.agentId === addDialogAgentId && editPick.id === undefined) {
+              return null;
+            }
+            if (!entry.presetId) return null;
             return merged.find((f) => f.id === entry.presetId) ?? null;
           })()}
           onCreate={handleCreatePreset}
