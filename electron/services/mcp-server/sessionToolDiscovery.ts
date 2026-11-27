@@ -1,4 +1,4 @@
-import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
+import { globalAssistantListsTool } from "../../../shared/config/globalAssistant.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema, McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
@@ -153,7 +153,8 @@ export function registerListToolsHandler(
       .filter(
         (entry) =>
           shouldExposeTool(entry, tier, listSurface) &&
-          (!globalSession || GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+          (!globalSession ||
+            globalAssistantListsTool(entry.id, listSurface.assistantCaller === true))
       )
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);

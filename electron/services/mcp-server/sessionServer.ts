@@ -1,4 +1,7 @@
-import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_TOOL_IDS,
+  globalAssistantListsTool,
+} from "../../../shared/config/globalAssistant.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -442,6 +445,30 @@ function globalTargetRefusal(
     code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
     message:
       "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.",
+  };
+}
+
+/**
+ * What a send between the two global sessions refuses (#18280): anything but
+ * the message itself. A notice or a reply wait would quote the other's
+ * screen, the person's own conversation, and a handback has no status read
+ * on a global session's surface to collect it with.
+ */
+function globalPeerSendRefusal(
+  args: Record<string, unknown>
+): { code: string; message: string } | null {
+  if (
+    args.notify !== true &&
+    args.waitForReply !== true &&
+    args.handback !== true &&
+    args.whenBusy === undefined
+  ) {
+    return null;
+  }
+  return {
+    code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+    message:
+      "A send to the other global session takes no `notify`, `waitForReply`, `handback` or `whenBusy`: it answers with a send of its own. Nothing was sent.",
   };
 }
 
@@ -1084,9 +1111,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
         return control.readReply(target, read.options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES);
       }
-      // A send up to the global answers to the drive rule of the caller's own project.
+      // A send up to the global answers to the drive rule of the caller's own
+      // project; one between the two global sessions changes no project (#18280).
       const driveProjectId = target.scope === "global" ? caller.projectId : target.projectId;
-      const refusal = assistantWriteRefusal(driveProjectId);
+      const refusal = target.scope === "global-peer" ? null : assistantWriteRefusal(driveProjectId);
       if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
       if (ASSISTANT_SEND_TOOLS.has(actionId)) {
         const command = typeof record.command === "string" ? record.command : "";
@@ -2168,6 +2196,37 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         );
         if (globalAssistantIds.size > 0) {
           const refusal = globalTargetRefusal(actionId, args);
+          if (refusal !== null) {
+            outcome = {
+              kind: "result",
+              value: {
+                ok: false,
+                error: {
+                  code: auditCodeForAssistantRefusal(refusal.code),
+                  message: refusal.message,
+                },
+              },
+            };
+            return buildToolError(refusal);
+          }
+        }
+        // A global session's own send reaches the other global session and
+        // nothing else (#18280): no worker, shell or project, whatever id it
+        // names, and with nothing that arms a notice or quotes that screen.
+        if (isGlobalSession() && ASSISTANT_SEND_TOOLS.has(actionId)) {
+          const named = namedTerminalIds(args);
+          const peer =
+            assistantCaller !== null && named.length === 1 && !("terminalIds" in callArgs)
+              ? assistantControl?.resolve(assistantCaller, named[0]!)
+              : undefined;
+          const refusal =
+            peer?.scope !== "global-peer"
+              ? {
+                  code: ASSISTANT_TARGET_REFUSALS.notFound,
+                  message:
+                    "A global session sends only to the other global session, by the `terminalId` and `generation` in `assistant.list`'s `global`. Nothing was sent.",
+                }
+              : globalPeerSendRefusal(callArgs);
           if (refusal !== null) {
             outcome = {
               kind: "result",
@@ -3552,7 +3611,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // The global assistant's report keeps to its own set, as its
             // listing does (#16765), whichever manifest answered.
             const manifest = isGlobalSession()
-              ? resolved.filter((entry) => GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+              ? resolved.filter((entry) =>
+                  globalAssistantListsTool(entry.id, assistantCaller !== null)
+                )
               : resolved;
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather

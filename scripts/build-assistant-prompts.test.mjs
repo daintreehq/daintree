@@ -592,8 +592,10 @@ describe("global assistant prompts (#14546)", () => {
     ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
   ];
 
-  it.each(GLOBAL)("%s carries the routing guidance and its nine tools", (_name, body) => {
+  it.each(GLOBAL)("%s carries the routing guidance and its eleven tools", (_name, body) => {
     for (const tool of [
+      "assistant.list",
+      "terminal.sendCommand",
       "host.list",
       "host.call",
       "host.status",
@@ -609,6 +611,23 @@ describe("global assistant prompts (#14546)", () => {
     }
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
   });
+
+  // #18280 — which side a session is on follows coordination, so it reads it rather than assuming it.
+  it.each(GLOBAL)(
+    "%s tells each global session to read its side and when to brief",
+    (_name, body) => {
+      const section = body.slice(body.indexOf("## Your Two Sessions"));
+      expect(section.startsWith("## Your Two Sessions")).toBe(true);
+      expect(section).toContain("call `assistant.list` at the start of a task");
+      expect(section).toMatch(
+        /\*\*Coordinating[^\n]*Brief the other session only with what needs the person/
+      );
+      expect(section).toMatch(/\*\*The conversation:\*\*[^\n]*arm no fleet watches/);
+      expect(section).toContain(
+        '"From the global Daintree Assistant\'s" is the other session, not the person'
+      );
+    }
+  );
 
   // #16765 — the role is how it sees it reached the server as something else.
   it.each(GLOBAL)("%s says what to do with a role other than its own", (_name, body) => {

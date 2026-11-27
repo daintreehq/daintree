@@ -1150,7 +1150,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // and the trust behind the link; the Host's four no-keys answers share one
   // arm, output-only bounds and patterns were dropped, and the description was
   // trimmed first.
-  const MAX_COHORT_PAYLOAD_BYTES = 210_100;
+  // 210_100 → 210_200 for #18280, measured at 210_161 B (+63 over develop's
+  // 210_098): `assistant.list`'s `self.role`, the side a global session is on.
+  // A global caller's other session reuses the `global` field rather than a
+  // schema of its own, and the field carries no description.
+  const MAX_COHORT_PAYLOAD_BYTES = 210_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

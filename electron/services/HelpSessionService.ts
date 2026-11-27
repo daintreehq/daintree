@@ -3500,6 +3500,7 @@ export class HelpSessionService {
       { extractReply },
       { getPtyClient },
       { projectStore },
+      { globalAssistantCoordinatorSlot },
     ] = await Promise.all([
       this.loadMcpServerModule(),
       import("./assistants/AssistantTerminalControl.js"),
@@ -3507,6 +3508,7 @@ export class HelpSessionService {
       import("./mcp-server/terminalNotify.js"),
       import("../window/serviceRefs.js"),
       import("./ProjectStore.js"),
+      import("./globalAssistant.js"),
     ]);
     if (this.assistantControlWired) return;
     mcpServerService.setAssistantControl({
@@ -3516,6 +3518,9 @@ export class HelpSessionService {
         extractReply,
         projectName: (projectId) => projectStore.getProjectById(projectId)?.name ?? null,
         queue: () => mcpServerService.getWorkerSteerQueue(),
+        // Read synchronously at each call, so resolving a target and stamping
+        // a send see the same side of a handover (#18280).
+        globalCoordinatorSlot: () => globalAssistantCoordinatorSlot(),
       }),
       steer: liveGlobalWorkerSteer({
         pty: () => getPtyClient(),

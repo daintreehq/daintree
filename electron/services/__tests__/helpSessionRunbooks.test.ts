@@ -103,6 +103,10 @@ describe("buildRunbooksAddendum", () => {
       expect(global).toContain("With `host.list` missing, call `mcp.surface`");
       expect(global).toContain("tell the person the `role` you got and use none of its tools");
       expect(global).not.toContain("yours is");
+      // #18280 — its own send reaches only the other global session.
+      expect(global).toContain(
+        "The other global session on this machine is reached with your own `assistant.list` and `terminal.sendCommand`, never through `host.call`"
+      );
       expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
     });
 

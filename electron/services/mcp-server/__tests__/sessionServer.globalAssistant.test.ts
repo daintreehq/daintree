@@ -52,7 +52,12 @@ function installHostRuntime(reachable: boolean): void {
   } as unknown as HostControlRuntimeHandle);
 }
 
-async function serverFor(viewlessProjectId: string, tier: "core" | "full") {
+async function serverFor(
+  viewlessProjectId: string,
+  tier: "core" | "full",
+  control: AssistantControlBinding["control"] | null = null,
+  bound = control !== null
+) {
   const sessionStore = fakeSessionStore(tier);
   const mutable = sessionStore as unknown as { sessionHelpIdMap: Map<string, string> };
   mutable.sessionHelpIdMap = new Map([[SESSION, HELP]]);
@@ -72,10 +77,12 @@ async function serverFor(viewlessProjectId: string, tier: "core" | "full") {
   } as unknown as SessionServerDepsSource;
   const host: SessionServerDepsHost = {
     registry: () => null,
-    assistantControlBinding: () => null,
+    // A live binding makes this session an assistant caller in its own lane's project.
+    assistantControlBinding: () =>
+      control === null || !bound ? null : { control, sessionProject: () => viewlessProjectId },
     helpSessionTerminalResolver: () => null,
     getBearerInfoForSession: () => null,
-    assistantControl: {} as AssistantControlBinding["control"],
+    assistantControl: control ?? ({} as AssistantControlBinding["control"]),
   };
   const role = viewlessProjectId === GLOBAL_ASSISTANT_ID ? "global-assistant" : "project-assistant";
   const deps = createSessionServerDeps(source, host, { sessionId: SESSION, role });
@@ -84,11 +91,42 @@ async function serverFor(viewlessProjectId: string, tier: "core" | "full") {
   return { server, source };
 }
 
-async function listFor(viewlessProjectId: string, tier: "core" | "full") {
-  const { server, source } = await serverFor(viewlessProjectId, tier);
+async function listFor(
+  viewlessProjectId: string,
+  tier: "core" | "full",
+  control: AssistantControlBinding["control"] | null = null
+) {
+  const { server, source } = await serverFor(viewlessProjectId, tier, control);
   const tools = await listBaseTools(server);
   expect(source.requestManifest).not.toHaveBeenCalled();
   return tools;
+}
+
+/** An assistant control whose only target is the other global session (#18280). */
+function peerControl() {
+  const submit = vi.fn(async () => ({
+    sent: true,
+    terminalId: "t-peer",
+    command: "x",
+    submissionToken: "tok",
+  }));
+  const control = {
+    isAssistantTerminal: (id: string) => id === "t-peer",
+    resolve: (_caller: unknown, id: string) =>
+      id === "t-peer"
+        ? {
+            scope: "global-peer",
+            projectId: GLOBAL_ASSISTANT_ID,
+            slot: 1,
+            sessionId: "help-2",
+            terminalId: "t-peer",
+            attached: false,
+          }
+        : null,
+    submit,
+    list: vi.fn(),
+  } as unknown as AssistantControlBinding["control"];
+  return { control, submit };
 }
 
 describe("the global assistant's tool discovery (#14453)", () => {
@@ -96,7 +134,7 @@ describe("the global assistant's tool discovery (#14453)", () => {
     "lists exactly its root tools at %s, with their real schemas",
     async (tier) => {
       installHostRuntime(true);
-      const tools = await listFor(GLOBAL_ASSISTANT_ID, tier);
+      const tools = await listFor(GLOBAL_ASSISTANT_ID, tier, peerControl().control);
 
       expect(tools.map((tool) => tool.name).sort()).toEqual([...GLOBAL_ASSISTANT_TOOL_IDS].sort());
       for (const tool of tools) {
@@ -113,7 +151,7 @@ describe("the global assistant's tool discovery (#14453)", () => {
 
   it("serves the generated entries' own argument and result schemas", async () => {
     installHostRuntime(true);
-    const tools = await listFor(GLOBAL_ASSISTANT_ID, "full");
+    const tools = await listFor(GLOBAL_ASSISTANT_ID, "full", peerControl().control);
     const { MCP_GLOBAL_ASSISTANT_BASE_MANIFEST } =
       await import("../generated/mcpGlobalAssistantBaseManifest.js");
 
@@ -122,6 +160,14 @@ describe("the global assistant's tool discovery (#14453)", () => {
       expect(tool?.inputSchema).toEqual(buildToolInputSchema(entry));
       expect(tool?.outputSchema).toEqual(buildToolOutputSchema(entry));
     }
+  });
+
+  it("lists neither the peer listing nor its send with no assistant control (#18280)", async () => {
+    installHostRuntime(true);
+    const names = (await listFor(GLOBAL_ASSISTANT_ID, "full")).map((tool) => tool.name);
+    expect(names).not.toContain("assistant.list");
+    expect(names).not.toContain("terminal.sendCommand");
+    expect(names).toContain("host.call");
   });
 
   it("lists only mcp.surface when the session isn't offered its hosts", async () => {
@@ -189,5 +235,91 @@ describe("the global assistant's tool discovery (#14453)", () => {
     expect(names.filter((name) => HOST_CONTROL_TOOL_IDS.has(name))).toEqual([]);
     const catalog = new Set(getViewlessHelpBaseManifest().map((entry) => entry.id));
     expect(names.every((name) => catalog.has(name))).toBe(true);
+  });
+});
+
+describe("the global assistant's send to its other session (#18280)", () => {
+  it("sends to the other global session through the control, with nothing else run", async () => {
+    installHostRuntime(true);
+    const { control, submit } = peerControl();
+    const { server, source } = await serverFor(GLOBAL_ASSISTANT_ID, "core", control);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "t-peer", generation: 4, command: "The person wants X." },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "local", projectId: GLOBAL_ASSISTANT_ID }),
+      expect.objectContaining({ scope: "global-peer", terminalId: "t-peer" }),
+      { command: "The person wants X.", generation: 4, handback: false }
+    );
+    expect(source.dispatchAction).not.toHaveBeenCalled();
+    expect(source.dispatchActionWithoutView).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a worker or shell",
+      /sends only to the other global session/,
+      { terminalId: "t-worker", generation: 1, command: "x" },
+    ],
+    [
+      "a batch",
+      /sends only to the other global session/,
+      { terminalIds: ["t-peer"], generation: 4, command: "x" },
+    ],
+    [
+      "a notice",
+      /takes no `notify`/,
+      { terminalId: "t-peer", generation: 4, command: "x", notify: true },
+    ],
+    [
+      "a reply wait",
+      /takes no `notify`/,
+      { terminalId: "t-peer", generation: 4, command: "x", waitForReply: true },
+    ],
+    [
+      "a handback",
+      /takes no `notify`/,
+      { terminalId: "t-peer", generation: 4, command: "x", handback: true },
+    ],
+    [
+      "a held send",
+      /takes no `notify`/,
+      { terminalId: "t-peer", generation: 4, command: "x", whenBusy: "queue" },
+    ],
+  ])("refuses %s, sending nothing anywhere", async (_name, refusal, args) => {
+    installHostRuntime(true);
+    const { control, submit } = peerControl();
+    const { server, source } = await serverFor(GLOBAL_ASSISTANT_ID, "full", control);
+
+    const result = await callTool(server, { name: "terminal.sendCommand", arguments: args });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(refusal);
+    expect(submit).not.toHaveBeenCalled();
+    expect(source.dispatchAction).not.toHaveBeenCalled();
+    expect(source.dispatchActionWithoutView).not.toHaveBeenCalled();
+  });
+
+  it("refuses a send from a session with no assistant control binding, reaching no terminal", async () => {
+    installHostRuntime(true);
+    const { control, submit } = peerControl();
+    const { server, source } = await serverFor(GLOBAL_ASSISTANT_ID, "full", control, false);
+
+    // An id that names no assistant, so only the global peer gate stands in its way.
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "t-worker", generation: 4, command: "x" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/sends only to the other global session/);
+    expect(submit).not.toHaveBeenCalled();
+    expect(source.dispatchAction).not.toHaveBeenCalled();
+    expect(source.dispatchActionWithoutView).not.toHaveBeenCalled();
   });
 });

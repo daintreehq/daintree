@@ -842,6 +842,10 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             agentId: {
               type: "string",
             },
+            role: {
+              type: "string",
+              enum: ["coordinator", "conversation"],
+            },
           },
           required: ["slot", "agentId"],
           additionalProperties: false,
