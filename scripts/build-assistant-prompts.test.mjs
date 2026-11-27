@@ -226,7 +226,7 @@ describe("help prompt outputs", () => {
     // listing, so the prompt has to name the tool that lists every lane.
     it.each(ALL_GENERATED)("%s points a lane at its sibling lanes", (_name, body) => {
       expect(section(body, "## Common Tasks")).toMatch(
-        /Other lanes may run here, on any agent: check `assistant\.list` \(`self` is you\)/
+        /Other lanes may run here on any agent: see them via `assistant\.list` \(`self` is you\) before acting alone\./
       );
     });
 

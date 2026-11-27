@@ -7,4 +7,4 @@ All in `core`; call them directly, without `actions.search`.
 - Prompt: `terminal.sendCommand({ terminalId, command })`; several: `terminal.sendCommandMany({ sends: [{ terminalId, command }], notify: true })`. A sentence takes `handback`; a slash command or skill none (it'd join the arguments). Without it: one notice per arm; re-arm `terminal.notifyWhenIdle` if `working`. Its marker or screen is the end; an earlier stop is no reason to nudge.
 - Replies: for a short wait, `waitForReply: true`; else pass `notify: true` and end your turn. **A notice is fast but can be missed**: each turn, check awaited agents with `terminal.getStatus`; name any still running as you end it. `terminal.waitUntilIdleBatch` only where `notify` is refused.
 - Close: `terminal.close({ terminalId })` or `terminal.closeMany({ terminalIds })`. Close only what the user asked to, or yours once reported.
-- Other lanes may run here, on any agent: check `assistant.list` (`self` is you) before acting alone.
+- Other lanes may run here on any agent: see them via `assistant.list` (`self` is you) before acting alone.

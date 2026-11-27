@@ -206,11 +206,30 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(listed.vacantSlots).not.toContain(3);
     });
 
+    it("takes self's agent from the run it detected, then launched, then the lane (#18276)", async () => {
+      const hub = addLane(3, "t-hub", {
+        sessionId: "hub-session",
+        record: atPrompt({ detectedAgentId: "claude", launchAgentId: "codex" }),
+      });
+      expect((await control.list(LOCAL)).self?.agentId).toBe("claude");
+
+      hub.record = { launchAgentId: "claude" } as AssistantTerminalRecord;
+      expect((await control.list(LOCAL)).self?.agentId).toBe("claude");
+
+      hub.lane.agentId = "gemini";
+      hub.record = undefined as unknown as AssistantTerminalRecord;
+      expect((await control.list(LOCAL)).self).toEqual({ slot: 3, agentId: "gemini" });
+    });
+
     it("names no self for a caller that isn't one of the project's lanes (#18276)", async () => {
-      addLane(0, "t-zero", { sessionId: "shell-help", projectId: "proj-other" });
+      // A relay caller's session id belongs to another machine, even when it
+      // matches a lane's here: that lane is listed, never taken as self.
+      addLane(0, "t-zero", { sessionId: "shell-help" });
       addLane(1, "t-one");
 
-      expect(await control.list(RELAY)).not.toHaveProperty("self");
+      const relayed = await control.list(RELAY);
+      expect(relayed).not.toHaveProperty("self");
+      expect(relayed.assistants.map((entry) => entry.slot)).toEqual([0, 1]);
       expect(await control.list({ ...LOCAL, helpSessionId: "gone" })).not.toHaveProperty("self");
     });
 

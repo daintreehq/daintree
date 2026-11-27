@@ -99,7 +99,8 @@ export type AssistantSelf = z.infer<typeof AssistantSelfSchema>;
 
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
-  self: AssistantSelfSchema.optional().describe("Your own lane; absent if you aren't one."),
+  /** Absent when the caller isn't one of this project's lanes. */
+  self: AssistantSelfSchema.optional(),
   assistants: z.array(AssistantEntrySchema),
   vacantSlots: z.array(z.number()).describe("Slots a start may use."),
   keptSlots: z

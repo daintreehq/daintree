@@ -90,5 +90,8 @@ describe("AssistantListResultSchema self (#18276)", () => {
     expect(AssistantListResultSchema.safeParse({ ...listing, self: { slot: 2 } }).success).toBe(
       false
     );
+    expect(
+      AssistantListResultSchema.safeParse({ ...listing, self: { agentId: "codex" } }).success
+    ).toBe(false);
   });
 });
