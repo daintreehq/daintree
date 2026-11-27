@@ -13,7 +13,6 @@ import {
   waitForCcrPresets,
   waitForCcrPresetsRemoved,
   getPresetOptionLabels,
-  getPresetRowByName,
   setLaunchPreset,
 } from "../../helpers/presets";
 import {

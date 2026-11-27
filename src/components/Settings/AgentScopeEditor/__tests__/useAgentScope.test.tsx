@@ -206,10 +206,10 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
   it("opens the copy for editing and leaves the launch preset alone (#18278)", async () => {
     const own = { id: "user-1", name: "Mine" };
     const writes: Array<Partial<AgentSettingsEntry>> = [];
-    const picks: unknown[] = [];
+    const picks: Array<{ id: string | undefined } | null> = [];
     const props = {
       ...makeProps("codex", { customPresets: [own], presetId: "user-1" }),
-      setEditPick: (p: unknown) => picks.push(p),
+      setEditPick: (p: { id: string | undefined } | null) => picks.push(p),
       updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
         writes.push(u);
       },
@@ -221,7 +221,7 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
     expect(writes).toHaveLength(1);
     expect("presetId" in writes[0]!).toBe(false);
     expect(picks).toHaveLength(1);
-    expect((picks[0] as { id: string }).id).toMatch(/^user-/);
+    expect(picks[0]?.id).toMatch(/^user-/);
   });
 
   it("keeps it on a copy of the user's own preset", async () => {
