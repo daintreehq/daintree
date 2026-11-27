@@ -18,7 +18,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { sanitizePreset } from "@shared/utils/agentPresets";
 
 /** The preset the rows edit when it isn't the launch preset; `null` follows the launch preset. Owned by the settings view so the Add dialog can open a new preset for editing. */
-export type EditPick = { id: string | undefined } | null;
+export type EditPick = { agentId: string; id: string | undefined } | null;
 
 interface UseAgentScopeProps {
   agentId: string;
@@ -68,7 +68,9 @@ export function useAgentScope({
   // it again when the picked preset is gone.
   const launchPresetId = activeEntry.presetId;
   const editedPresetId =
-    pick && (pick.id === undefined || allPresets.some((f) => f.id === pick.id))
+    pick &&
+    pick.agentId === agentId &&
+    (pick.id === undefined || allPresets.some((f) => f.id === pick.id))
       ? pick.id
       : launchPresetId;
   const selectedPreset = allPresets.find((f) => f.id === editedPresetId);
@@ -201,7 +203,7 @@ export function useAgentScope({
     void (async () => {
       try {
         await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
-        setPick({ id });
+        setPick({ agentId, id });
         onSettingsChange?.();
         // Editing the copy re-keys the editor, removing the Duplicate button that had
         // focus. Hand it to the edit picker, which now names the copy. The launch
@@ -231,7 +233,6 @@ export function useAgentScope({
     const updated = (activeEntry.customPresets ?? []).filter((f) => f.id !== presetId);
     void (async () => {
       try {
-        if (pick?.id === presetId) setPick(null);
         if (activeEntry.presetId === presetId) {
           await updateAgent(agentId, {
             customPresets: updated,
@@ -240,6 +241,7 @@ export function useAgentScope({
         } else {
           await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
         }
+        if (pick?.id === presetId) setPick(null);
         onSettingsChange?.();
       } catch (error) {
         logError("Failed to delete preset", error);
@@ -349,7 +351,7 @@ export function useAgentScope({
     // derived
     editedPresetId,
     launchPresetId,
-    setEditedPresetId: (id: string | undefined) => setPick({ id }),
+    setEditedPresetId: (id: string | undefined) => setPick({ agentId, id }),
     handleLaunchPresetChange,
     scopeKind,
     scopeLabel,

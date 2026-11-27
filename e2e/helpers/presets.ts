@@ -313,11 +313,7 @@ export async function addCustomPreset(
         .poll(
           async () => {
             const state = await getCustomPresetState(window, agentId);
-            return (
-              state.customCount >= stateBefore.customCount + 1 &&
-              state.presetId !== null &&
-              state.presetId !== stateBefore.presetId
-            );
+            return state.customCount >= stateBefore.customCount + 1;
           },
           {
             timeout: process.env.CI ? 10_000 : 5_000,
@@ -459,7 +455,13 @@ export async function getPresetOptionLabels(
       // the listbox open for the next step to trip over.
       await window.keyboard.press("Escape");
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
-      return labels.map((s) => s.trim());
+      // The edit picker tags the launch preset's option with a trailing "Launch".
+      return labels.map((s) =>
+        s
+          .trim()
+          .replace(/Launch$/, "")
+          .trim()
+      );
     },
     { box: true }
   );

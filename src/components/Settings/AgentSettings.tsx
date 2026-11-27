@@ -303,7 +303,7 @@ export function AgentSettings({
     try {
       // A new preset opens for editing but never becomes the launch preset (#18278).
       await updateAgent(addDialogAgentId, { customPresets: updated });
-      setEditPick({ id });
+      setEditPick({ agentId: addDialogAgentId, id });
       onSettingsChange?.();
       lastAddTimeRef.current = Date.now();
       setIsAddDialogOpen(false);
@@ -773,10 +773,19 @@ export function AgentSettings({
           currentPreset={(() => {
             if (!addDialogAgentId) return null;
             const entry = getAgentSettingsEntry(effectiveSettings, addDialogAgentId);
-            if (!entry.presetId) return null;
             const ccr = ccrPresetsByAgent[addDialogAgentId];
             const project = projectPresetsByAgent[addDialogAgentId];
             const merged = getMergedPresets(addDialogAgentId, entry.customPresets, ccr, project);
+            // The preset being edited, which is the launch preset unless another was picked.
+            const picked =
+              editPick && editPick.agentId === addDialogAgentId && editPick.id !== undefined
+                ? merged.find((f) => f.id === editPick.id)
+                : undefined;
+            if (picked) return picked;
+            if (editPick && editPick.agentId === addDialogAgentId && editPick.id === undefined) {
+              return null;
+            }
+            if (!entry.presetId) return null;
             return merged.find((f) => f.id === entry.presetId) ?? null;
           })()}
           onCreate={handleCreatePreset}
