@@ -236,6 +236,25 @@ export async function getPresetRowByName(
 }
 
 /**
+ * Makes the named preset the agent's launch preset through the "Launch preset" picker.
+ * The "Edit preset" picker (`getPresetRowByName`) never changes the launch preset.
+ */
+export async function setLaunchPreset(
+  window: import("@playwright/test").Page,
+  name: string
+): Promise<void> {
+  await test.step(`Set launch preset "${name}"`, async () => {
+    const trigger = window.locator(SEL.preset.launchSelectorTrigger);
+    await trigger.waitFor({ state: "visible", timeout: 10_000 });
+    await trigger.click();
+    const listbox = window.locator(SEL.preset.selectorListbox);
+    await expect(listbox).toBeVisible({ timeout: 5_000 });
+    await listbox.locator('[role="option"]', { hasText: name }).first().click();
+    await expect(listbox).toBeHidden({ timeout: 5_000 });
+  });
+}
+
+/**
  * Reads the currently selected preset label from the PresetSelector trigger.
  * Use this in place of `select.inputValue()` or option-checked assertions.
  */

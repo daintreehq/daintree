@@ -24,6 +24,9 @@ export interface PresetSelectorProps {
   customPresets: AgentPreset[];
   /** The selected id isn't in the lists because its presets haven't loaded, not because it's gone. */
   selectionLoading?: boolean;
+  /** Marks the option that new sessions launch with (`null` = the agent default); omitted, nothing is marked. */
+  launchPresetId?: string | null;
+  triggerTestId?: string;
   onChange: (presetId: string | undefined) => void;
   agentColor: string;
   /** Wires the trigger to the row label that names it. */
@@ -52,6 +55,8 @@ export function PresetSelector({
   projectPresets = [],
   customPresets,
   selectionLoading = false,
+  launchPresetId,
+  triggerTestId = "preset-selector-trigger",
   onChange,
   agentColor,
   "aria-labelledby": ariaLabelledBy,
@@ -186,6 +191,7 @@ export function PresetSelector({
       item={item}
       isSelected={item.source === selectedItem.source && item.id === selectedItem.id}
       isActive={index === activeIndex}
+      isLaunch={launchPresetId !== undefined && item.id === (launchPresetId ?? "")}
       onSelect={handleSelect}
       onHover={() => setActiveIndex(index)}
       testid={testid}
@@ -210,7 +216,7 @@ export function PresetSelector({
           // back to the trigger when the list closes, so a `focus:` indicator
           // would stay lit after every pick.
           className={selectTriggerVariants()}
-          data-testid="preset-selector-trigger"
+          data-testid={triggerTestId}
         >
           <span
             className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
@@ -306,6 +312,7 @@ function PresetOption({
   item,
   isSelected,
   isActive,
+  isLaunch,
   onSelect,
   onHover,
   testid,
@@ -314,6 +321,7 @@ function PresetOption({
   item: Item;
   isSelected: boolean;
   isActive: boolean;
+  isLaunch: boolean;
   onSelect: (id: string) => void;
   onHover: () => void;
   testid?: string;
@@ -349,6 +357,11 @@ function PresetOption({
         aria-hidden="true"
       />
       <span className="flex-1 truncate">{item.label}</span>
+      {isLaunch && (
+        <span className="shrink-0 text-xs text-text-secondary" data-testid="preset-launch-marker">
+          Launch
+        </span>
+      )}
       {isSelected && <Check size={12} className="shrink-0" aria-hidden="true" />}
     </div>
   );

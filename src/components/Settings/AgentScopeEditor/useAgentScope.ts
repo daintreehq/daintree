@@ -17,6 +17,9 @@ import {
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { sanitizePreset } from "@shared/utils/agentPresets";
 
+/** The preset the rows edit when it isn't the launch preset; `null` follows the launch preset. Owned by the settings view so the Add dialog can open a new preset for editing. */
+export type EditPick = { id: string | undefined } | null;
+
 interface UseAgentScopeProps {
   agentId: string;
   activeEntry: AgentSettingsEntry;
@@ -24,6 +27,8 @@ interface UseAgentScopeProps {
   projectPresets: AgentPreset[] | undefined;
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
+  editPick: EditPick;
+  setEditPick: (pick: EditPick) => void;
   editName: string;
   setEditName: (name: string) => void;
   lastEditTimeRef: React.MutableRefObject<number>;
@@ -40,6 +45,8 @@ export function useAgentScope({
   projectPresets,
   editingPresetId,
   setEditingPresetId,
+  editPick: pick,
+  setEditPick: setPick,
   editName,
   setEditName,
   lastEditTimeRef,
@@ -56,7 +63,15 @@ export function useAgentScope({
     () => getMergedPresets(agentId, customPresets, ccrPresets, projectPresets),
     [agentId, customPresets, ccrPresets, projectPresets]
   );
-  const selectedPreset = allPresets.find((f) => f.id === activeEntry.presetId);
+  // Which preset the rows edit is local: nothing is saved by looking at a preset. It
+  // follows the launch preset until the user picks another to edit, and falls back to
+  // it again when the picked preset is gone.
+  const launchPresetId = activeEntry.presetId;
+  const editedPresetId =
+    pick && (pick.id === undefined || allPresets.some((f) => f.id === pick.id))
+      ? pick.id
+      : launchPresetId;
+  const selectedPreset = allPresets.find((f) => f.id === editedPresetId);
 
   const { scopeKind, selectedIsCustom, selectedIsProject, selectedIsCcr } = resolveScopeKind(
     selectedPreset,
@@ -185,13 +200,12 @@ export function useAgentScope({
     ];
     void (async () => {
       try {
-        await updateAgent(agentId, {
-          customPresets: updated,
-          presetId: id,
-        } as Partial<AgentSettingsEntry>);
+        await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
+        setPick({ id });
         onSettingsChange?.();
-        // Selecting the copy re-keys the editor, removing the Duplicate button that had
-        // focus. Hand it to the preset picker, which now names the copy.
+        // Editing the copy re-keys the editor, removing the Duplicate button that had
+        // focus. Hand it to the edit picker, which now names the copy. The launch
+        // preset is unchanged: a copy is never the default unasked.
         requestAnimationFrame(() => {
           const active = document.activeElement;
           if (!active || active === document.body) {
@@ -217,6 +231,7 @@ export function useAgentScope({
     const updated = (activeEntry.customPresets ?? []).filter((f) => f.id !== presetId);
     void (async () => {
       try {
+        if (pick?.id === presetId) setPick(null);
         if (activeEntry.presetId === presetId) {
           await updateAgent(agentId, {
             customPresets: updated,
@@ -323,8 +338,19 @@ export function useAgentScope({
     }
   };
 
+  const handleLaunchPresetChange = (presetId: string | undefined) => {
+    void (async () => {
+      await updateAgent(agentId, { presetId } as Partial<AgentSettingsEntry>);
+      onSettingsChange?.();
+    })();
+  };
+
   return {
     // derived
+    editedPresetId,
+    launchPresetId,
+    setEditedPresetId: (id: string | undefined) => setPick({ id }),
+    handleLaunchPresetChange,
     scopeKind,
     scopeLabel,
     allPresets,

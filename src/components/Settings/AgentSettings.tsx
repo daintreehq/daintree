@@ -30,7 +30,7 @@ import { AgentUsageTrackingSection } from "./AgentUsageTrackingSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
-import { AgentScopeEditor, resolveSkipPermissions } from "./AgentScopeEditor";
+import { AgentScopeEditor, resolveSkipPermissions, type EditPick } from "./AgentScopeEditor";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
@@ -287,6 +287,8 @@ export function AgentSettings({
   // Preset editing state
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  // Which preset Settings is editing when it isn't the launch preset. Never saved.
+  const [editPick, setEditPick] = useState<EditPick>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [addDialogAgentId, setAddDialogAgentId] = useState<string | null>(null);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -299,7 +301,9 @@ export function AgentSettings({
     const id = `user-${crypto.randomUUID()}`;
     const updated = [...existing, { ...presetData, id }];
     try {
-      await updateAgent(addDialogAgentId, { customPresets: updated, presetId: id });
+      // A new preset opens for editing but never becomes the launch preset (#18278).
+      await updateAgent(addDialogAgentId, { customPresets: updated });
+      setEditPick({ id });
       onSettingsChange?.();
       lastAddTimeRef.current = Date.now();
       setIsAddDialogOpen(false);
@@ -331,7 +335,11 @@ export function AgentSettings({
   useEffect(() => {
     setEditingPresetId(null);
     setEditName("");
-  }, [activeSubtab, activeEntryPresetId]);
+  }, [activeSubtab, activeEntryPresetId, editPick]);
+
+  useEffect(() => {
+    setEditPick(null);
+  }, [activeSubtab]);
 
   useStaleAgentPresetCleanup({
     agentId: activeAgentId,
@@ -698,6 +706,8 @@ export function AgentSettings({
             presetInventory={presetInventory}
             editingPresetId={editingPresetId}
             setEditingPresetId={setEditingPresetId}
+            editPick={editPick}
+            setEditPick={setEditPick}
             editName={editName}
             setEditName={setEditName}
             lastEditTimeRef={lastEditTimeRef}

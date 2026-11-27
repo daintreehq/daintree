@@ -8,3 +8,4 @@ export {
   resolveSkipPermissions,
 } from "./scopeUtils";
 export type { ScopeKind } from "./scopeUtils";
+export type { EditPick } from "./useAgentScope";

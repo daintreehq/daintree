@@ -16,6 +16,8 @@ function makeProps(
     projectPresets: undefined,
     editingPresetId: null,
     setEditingPresetId: () => {},
+    editPick: null,
+    setEditPick: () => {},
     editName: "",
     setEditName: () => {},
     lastEditTimeRef: { current: 0 },
@@ -201,6 +203,27 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
     return writes[0]?.customPresets?.at(-1);
   }
 
+  it("opens the copy for editing and leaves the launch preset alone (#18278)", async () => {
+    const own = { id: "user-1", name: "Mine" };
+    const writes: Array<Partial<AgentSettingsEntry>> = [];
+    const picks: unknown[] = [];
+    const props = {
+      ...makeProps("codex", { customPresets: [own], presetId: "user-1" }),
+      setEditPick: (p: unknown) => picks.push(p),
+      updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
+        writes.push(u);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    await act(async () => {
+      result.current.handleDuplicatePreset(own);
+    });
+    expect(writes).toHaveLength(1);
+    expect("presetId" in writes[0]!).toBe(false);
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as { id: string }).id).toMatch(/^user-/);
+  });
+
   it("keeps it on a copy of the user's own preset", async () => {
     const own = { id: "user-1", name: "Mine", continueAtLimitReset: true };
     const copy = await duplicate({ customPresets: [own] }, own);
@@ -218,5 +241,54 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
     const copy = await duplicate({ customPresets: [] }, { id: "team", name: "Team" });
     expect(copy?.name).toBe("Team (copy)");
     expect(copy?.continueAtLimitReset).toBeUndefined();
+  });
+});
+
+describe("useAgentScope — editing a preset is separate from the launch preset (#18278)", () => {
+  const a = { id: "user-a", name: "A" };
+  const b = { id: "user-b", name: "B" };
+  const entry: AgentSettingsEntry = { customPresets: [a, b], presetId: "user-a" };
+
+  it("edits the launch preset until another is picked", () => {
+    const { result } = renderHook(() => useAgentScope(makeProps("claude", entry)));
+    expect(result.current.editedPresetId).toBe("user-a");
+    expect(result.current.selectedPreset?.id).toBe("user-a");
+  });
+
+  it("edits the picked preset and writes nothing", () => {
+    const writes: unknown[] = [];
+    const props = {
+      ...makeProps("claude", entry),
+      editPick: { id: "user-b" },
+      updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
+        writes.push(u);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    expect(result.current.editedPresetId).toBe("user-b");
+    expect(result.current.selectedPreset?.id).toBe("user-b");
+    expect(result.current.launchPresetId).toBe("user-a");
+    expect(writes).toEqual([]);
+  });
+
+  it("falls back to the launch preset when the picked one is gone", () => {
+    const props = { ...makeProps("claude", entry), editPick: { id: "user-gone" } };
+    const { result } = renderHook(() => useAgentScope(props));
+    expect(result.current.editedPresetId).toBe("user-a");
+  });
+
+  it("only the launch control writes presetId", async () => {
+    const writes: Array<Partial<AgentSettingsEntry>> = [];
+    const props = {
+      ...makeProps("claude", entry),
+      updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
+        writes.push(u);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    await act(async () => {
+      result.current.handleLaunchPresetChange("user-b");
+    });
+    expect(writes).toEqual([{ presetId: "user-b" }]);
   });
 });

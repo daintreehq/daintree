@@ -2,7 +2,7 @@ import type { ScopeKind } from "./scopeUtils";
 import { Badge } from "@/components/ui/badge";
 
 /**
- * Where the selected preset comes from, beside the preset row's label. The agent's own
+ * Where the preset being edited comes from, beside the edit row's label. The agent's own
  * default has no chip: it is the baseline, not a source. One word per source, and the
  * same word the picker's trigger uses.
  */
@@ -22,19 +22,26 @@ export function ScopeBadge({ scopeKind }: { scopeKind: ScopeKind }) {
 }
 
 /**
- * What choosing this preset means. Picking a preset here is not "open it for editing":
- * it is the preset the agent launches with, so the description says that first and
- * then says what the rows below it edit.
+ * What the rows under the edit picker are editing, and whether it is also what new
+ * sessions launch with. Looking at a preset never changes the launch preset; the
+ * Launch preset row does.
  */
-export function describeScope(scopeKind: ScopeKind, agentName: string): string {
+export function describeScope(
+  scopeKind: ScopeKind,
+  agentName: string,
+  isLaunchPreset: boolean
+): string {
+  const launch = isLaunchPreset
+    ? `New ${agentName} sessions launch with it.`
+    : "It isn't the launch preset; choose that above.";
   switch (scopeKind) {
     case "default":
-      return `New ${agentName} sessions launch with the agent's own settings, below. A worktree can still pick a preset of its own.`;
+      return `The agent's own settings, below. ${launch}`;
     case "custom":
-      return `New ${agentName} sessions launch with this preset. The settings below edit it; anything left on Default follows the agent's own settings.`;
+      return `The settings below edit this preset; anything left on Default follows the agent's own settings. ${launch}`;
     case "project":
-      return `New ${agentName} sessions launch with this preset, which this project shares with everyone who opens it`;
+      return `Shared by everyone who opens this project, so read-only here. ${launch}`;
     case "ccr":
-      return `New ${agentName} sessions launch through this Claude Code Router route`;
+      return `A Claude Code Router route, read-only here. ${launch}`;
   }
 }

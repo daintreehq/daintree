@@ -14,7 +14,7 @@ import {
   waitForCcrPresetsRemoved,
   getPresetOptionLabels,
   getPresetRowByName,
-  getSelectedPresetLabel,
+  setLaunchPreset,
 } from "../../helpers/presets";
 import {
   installPresetAgents,
@@ -275,8 +275,10 @@ test.describe("Presets: launch surfaces", () => {
       test("A plain toolbar click launches with the default chosen in Settings", async () => {
         await resetClaudeSelection(ctx.window);
         await navigateToAgentSettings(ctx.window, "claude");
-        await getPresetRowByName(ctx.window, CUSTOM_NAME);
-        await expect.poll(() => getSelectedPresetLabel(ctx.window)).toBe(CUSTOM_NAME);
+        await setLaunchPreset(ctx.window, CUSTOM_NAME);
+        await expect(ctx.window.locator(SEL.preset.launchSelectorTrigger)).toContainText(
+          CUSTOM_NAME
+        );
         await closeSettings(ctx.window);
 
         const record = await launchFrom(async () => {

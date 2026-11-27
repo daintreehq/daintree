@@ -394,6 +394,7 @@ export const SEL = {
     section: "#agents-presets",
     addButton: '[data-testid="preset-add-button"]',
     selectorTrigger: '[data-testid="preset-selector-trigger"]',
+    launchSelectorTrigger: '[data-testid="launch-preset-selector-trigger"]',
     selectorListbox: '[data-testid="preset-selector-listbox"][data-state="open"]',
     presetRow: "#agents-presets [data-testid]",
     autoBadge: "[data-testid='preset-badge-auto']",
