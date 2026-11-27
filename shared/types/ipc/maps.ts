@@ -80,7 +80,7 @@ import type {
   SystemOpenInEditorPayload,
   SystemOpenInEditorFallback,
   SystemWakePayload,
-  SystemMemoryPressurePayload,
+  SystemMemoryPressureDelivery,
   CliAvailability,
   AgentCliDetails,
   AgentVersionInfo,
@@ -2073,7 +2073,7 @@ export interface IpcEventMap {
   // System events
   "system:wake": SystemWakePayload;
   // Sustained system memory pressure opened or cleared (window-scoped)
-  "system:memory-pressure": SystemMemoryPressurePayload;
+  "system:memory-pressure": SystemMemoryPressureDelivery;
   // Power policy changed — battery, focus, visibility, or screen lock (#12515)
   "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 

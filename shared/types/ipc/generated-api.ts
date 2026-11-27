@@ -2342,6 +2342,9 @@ export interface GeneratedElectronAPI {
     isMemoryPressureCritical(
       ...args: IpcInvokeMap["system:is-memory-pressure-critical"]["args"]
     ): Promise<IpcInvokeMap["system:is-memory-pressure-critical"]["result"]>;
+    noteMemoryNoticeShown(
+      ...args: IpcInvokeMap["system:note-memory-notice-shown"]["args"]
+    ): Promise<IpcInvokeMap["system:note-memory-notice-shown"]["result"]>;
     reportTerminalRendererDiagnostics(
       ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
     ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;

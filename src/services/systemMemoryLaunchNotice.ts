@@ -1,4 +1,5 @@
-import type { SystemMemoryWorkloads } from "@shared/types/ipc/system";
+import type { SystemMemoryNoticeSurface, SystemMemoryWorkloads } from "@shared/types/ipc/system";
+import { systemClient } from "@/clients/systemClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -6,9 +7,12 @@ import { useNotificationStore } from "@/store/notificationStore";
 const NOTICE_KEY = "system-memory-launch";
 
 interface OpenEpisode {
+  episodeId: string;
   /** `describeSystemMemoryReadings` for the episode's latest publish. */
   reading: string;
   workloads: SystemMemoryWorkloads | null;
+  /** Some project view already raised the bar this episode (#18274). */
+  launchNoticeShown: boolean;
 }
 
 let episode: OpenEpisode | null = null;
@@ -21,8 +25,25 @@ function formatTotal(mb: number): string {
   return gb >= 10 ? `${Math.round(gb)} GB` : `${gb.toFixed(1)} GB`;
 }
 
+/**
+ * Tells Main a once-per-episode surface was shown, so no other project view
+ * raises its own copy (#18274). Best effort: a lost report costs a duplicate.
+ */
+export function reportSystemMemoryNoticeShown(
+  episodeId: string,
+  surface: SystemMemoryNoticeSurface
+): void {
+  try {
+    void systemClient.noteMemoryNoticeShown({ episodeId, surface }).catch(() => {});
+  } catch {
+    // No bridge outside Electron.
+  }
+}
+
 /** The readings, then what the host held when they were taken. Figures only (#12462). */
-export function describeLaunchDuringMemoryEpisode(open: OpenEpisode): string {
+export function describeLaunchDuringMemoryEpisode(
+  open: Pick<OpenEpisode, "reading" | "workloads">
+): string {
   const agents = open.workloads?.agentsRunning ?? null;
   const total = open.workloads?.memoryTotalMb ?? null;
   const host =
@@ -52,11 +73,13 @@ export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
 
 /**
  * An agent the user can see was just launched in this view (#14309). While a
- * memory episode is open, say so once above the grid, with what was observed.
- * It never holds the launch: how many agents run is the user's call.
+ * memory episode is open, say so once above the grid, with what was observed:
+ * once across every project view, so a bar closed in one project doesn't come
+ * back in the next (#18274). It never holds the launch: how many agents run is
+ * the user's call.
  */
 export function noteVisibleAgentLaunch(): void {
-  if (episode === null || shownThisEpisode) return;
+  if (episode === null || shownThisEpisode || episode.launchNoticeShown) return;
   const message = describeLaunchDuringMemoryEpisode(episode);
   const id = notify({
     type: "warning",
@@ -75,6 +98,7 @@ export function noteVisibleAgentLaunch(): void {
   if (!id) return;
   shownThisEpisode = true;
   noticeId = id;
+  reportSystemMemoryNoticeShown(episode.episodeId, "launch-bar");
 }
 
 export function resetSystemMemoryLaunchNoticeForTesting(): void {

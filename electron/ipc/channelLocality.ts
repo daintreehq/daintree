@@ -1295,6 +1295,7 @@ export const CHANNEL_LOCALITY = {
   "system:health-check": "host",
   "system:health-check-specs": "host",
   "system:is-memory-pressure-critical": "host",
+  "system:note-memory-notice-shown": "shell",
   "system:open-external": "shell",
   "system:open-in-editor": "hybrid",
   "system:open-path": "hybrid",

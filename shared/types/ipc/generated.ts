@@ -4880,6 +4880,12 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "system:note-memory-notice-shown": {
+    args: [
+      payload: { episodeId: string; surface: "inbox-warning" | "inbox-critical" | "launch-bar" },
+    ];
+    result: void;
+  };
   "system:report-terminal-renderer-diagnostics": {
     args: [
       payload: {
