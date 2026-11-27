@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import type {
+  SystemMemoryEpisodeHost,
+  SystemMemoryPressurePayload,
+} from "../../../shared/types/ipc/system.js";
+import type {
   HostConnectionState,
   HostDescriptor,
   HostHandshakeInfo,
@@ -11,7 +15,11 @@ import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { acceptHostPush, unclassifiedPushName } from "../hybrid/eventsPush.js";
+import {
+  acceptHostPush,
+  systemMemoryEpisodeOf,
+  unclassifiedPushName,
+} from "../hybrid/eventsPush.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../canopy/linkMethods.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
@@ -100,6 +108,12 @@ export interface ViewSink {
    * acknowledge any of it.
    */
   agentActivated?(webContentsId: number): void;
+  /**
+   * The host's memory episode, stamped with the host it describes. The Shell
+   * shows it once per window and replays it on load, as it does its own
+   * (#18275), so it never goes to every view bound here.
+   */
+  memoryEpisode?(hostId: HostId, payload: SystemMemoryPressurePayload): void;
 }
 
 interface OpenEndpoint {
@@ -1109,6 +1123,19 @@ export class HostConnection {
       this.noteUnknownPush(event);
       return;
     }
+    const memoryEpisode = this.views.memoryEpisode
+      ? systemMemoryEpisodeOf(event.channel, event.args)
+      : null;
+    if (memoryEpisode !== null) {
+      // One this build can't read is dropped: unstamped, it would read as this machine's.
+      if (memoryEpisode === "unsupported") return;
+      // Named by this Shell, which knows which host sent it and what the user calls it.
+      this.views.memoryEpisode!(this.hostId, {
+        ...memoryEpisode,
+        host: this.memoryEpisodeHost(),
+      });
+      return;
+    }
     // A Canopy panel reading this host from a view bound elsewhere.
     if (event.endpointId?.startsWith(CANOPY_VIEWER_ENDPOINT_PREFIX)) {
       for (const listener of [...this.viewerEventListeners]) {
@@ -1132,6 +1159,16 @@ export class HostConnection {
     if (webContentsId !== undefined && this.isBoundHere(webContentsId)) {
       this.views.send(webContentsId, event.channel, event.args);
     }
+  }
+
+  /** Who a host's memory episode describes, named as the user knows the host here. */
+  private memoryEpisodeHost(): SystemMemoryEpisodeHost {
+    const descriptor = this.descriptor();
+    return {
+      id: this.hostId,
+      name: descriptor?.name ?? this.hostId,
+      ...(descriptor?.platform ? { platform: descriptor.platform } : {}),
+    };
   }
 
   /**

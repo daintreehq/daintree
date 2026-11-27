@@ -1,5 +1,7 @@
 import { CHANNELS } from "../../ipc/channels.js";
 import { EVENT_LOCALITY, getChannelLocality } from "../../ipc/channelLocality.js";
+import { z } from "zod";
+import type { SystemMemoryPressurePayload } from "../../../shared/types/ipc/system.js";
 
 /**
  * Hybrid push channels and which machine a remote-bound view takes them from.
@@ -109,4 +111,58 @@ export function acceptLocalPushForRemoteView(channel: string, args: readonly unk
   if (locality === null) return false;
   const source = pushSource(channel, args);
   return source === "shell" || source === "both";
+}
+
+const nullableNumber = z.number().nullable();
+
+/**
+ * What a view can show of a host's episode. Extra fields pass, so a newer host
+ * can add one; a changed shape is refused rather than handed to a renderer that
+ * would throw on it halfway through raising the notice.
+ */
+const SystemMemoryEpisodeSchema = z
+  .object({
+    status: z.enum(["degraded", "normal"]),
+    swapUsedPercent: nullableNumber,
+    swapKind: z.enum(["swap", "commit"]),
+    fseventsdRssMb: nullableNumber,
+    kernelPressureLevel: z.enum(["warn", "critical"]).nullable(),
+    escalated: z.boolean(),
+    workloads: z
+      .object({
+        appMemoryMb: nullableNumber,
+        projects: z.array(
+          z.object({
+            projectId: z.string().nullable(),
+            projectName: z.string().nullable(),
+            terminalCount: z.number(),
+            memoryMb: z.number(),
+          })
+        ),
+        agentsRunning: nullableNumber,
+        memoryTotalMb: nullableNumber,
+      })
+      .nullable(),
+    replay: z.literal(true).optional(),
+    episodeId: z.string().nullable().optional(),
+  })
+  .loose();
+
+/**
+ * The memory episode an `events:push` carries: its payload, `"unsupported"`
+ * for one whose payload this build can't read, or null for any other push. A
+ * host's episode is shown the way this machine's own is, once per window
+ * (#18275), so the Shell takes every one out of ordinary per-view routing.
+ */
+export function systemMemoryEpisodeOf(
+  channel: string,
+  args: readonly unknown[]
+): SystemMemoryPressurePayload | "unsupported" | null {
+  if (channel !== CHANNELS.EVENTS_PUSH) return null;
+  const envelope = args[0] as { name?: unknown; payload?: unknown } | null | undefined;
+  if (!envelope || typeof envelope !== "object" || envelope.name !== "system:memory-pressure") {
+    return null;
+  }
+  const parsed = SystemMemoryEpisodeSchema.safeParse(envelope.payload);
+  return parsed.success ? (envelope.payload as SystemMemoryPressurePayload) : "unsupported";
 }

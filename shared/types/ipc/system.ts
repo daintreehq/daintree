@@ -99,6 +99,34 @@ export interface SystemMemoryPressurePayload {
   escalated: boolean;
   /** What Daintree was hosting at the time; null on `normal` or when nothing could be read. */
   workloads: SystemMemoryWorkloads | null;
+  /**
+   * The remote host the readings were taken on, stamped by the Shell that
+   * received them; absent for this machine's own (#18275).
+   */
+  host?: SystemMemoryEpisodeHost;
+  /**
+   * The machine's standing state sent to a view that just attached or came
+   * back, not an edge it measured: a `normal` one clears a notice silently.
+   */
+  replay?: true;
+  /**
+   * Which episode this is on a remote host, as that host sends it: the same
+   * through its escalations and replays, a new one after each recovery, so
+   * readings that happen to repeat still read as a new episode. Null on
+   * standing state with no episode open.
+   */
+  episodeId?: string | null;
+}
+
+export interface SystemMemoryEpisodeHost {
+  id: string;
+  /** What the user calls the host on this Shell. */
+  name: string;
+  /**
+   * The host's OS when this Shell has seen it, which decides how its swap
+   * reading reads (#18273); absent when unknown.
+   */
+  platform?: "darwin" | "linux";
 }
 
 /** A system-memory notice surface shown at most once per episode (#18274). */

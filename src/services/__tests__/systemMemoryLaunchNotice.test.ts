@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemMemoryWorkloads } from "@shared/types/ipc/system";
 
-const notifyMock = vi.hoisted(() => vi.fn<(payload: { message: string }) => string>());
+const notifyMock = vi.hoisted(() =>
+  vi.fn<
+    (payload: {
+      message: string;
+      title?: string;
+      replaceKey?: string;
+      supersedeKey?: string;
+    }) => string
+  >()
+);
 const dismissMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 
 // Main's once-per-episode claims (#18274): the first claim of a surface wins.
@@ -201,5 +210,86 @@ describe("systemMemoryLaunchNotice", () => {
         workloads: workloads({ memoryTotalMb: 8 * 1024 - 400 }),
       })
     ).toContain("7.6 GB of memory");
+  });
+
+  it("names the remote host the episode is on (#18275)", () => {
+    const host = { id: "host-studio", name: "Studio" };
+    const reading = "On Studio, swap is 91% full.";
+    expect(
+      describeLaunchDuringMemoryEpisode({
+        reading,
+        workloads: workloads({ agentsRunning: 6, memoryTotalMb: 32768 }),
+        host,
+      })
+    ).toBe(
+      "On Studio, swap is 91% full. When that was measured, 6 agents were running on Studio, which has 32 GB of memory."
+    );
+    expect(
+      describeLaunchDuringMemoryEpisode({
+        reading,
+        workloads: workloads({ agentsRunning: 6, memoryTotalMb: null }),
+        host,
+      })
+    ).toBe("On Studio, swap is 91% full. When that was measured, 6 agents were running on Studio.");
+    expect(
+      describeLaunchDuringMemoryEpisode({
+        reading,
+        workloads: workloads({ agentsRunning: 1, memoryTotalMb: null }),
+        host,
+      })
+    ).toBe("On Studio, swap is 91% full. When that was measured, 1 agent was running on Studio.");
+    expect(
+      describeLaunchDuringMemoryEpisode({
+        reading,
+        workloads: workloads({ agentsRunning: null, memoryTotalMb: 32768 }),
+        host,
+      })
+    ).toBe("On Studio, swap is 91% full. Studio has 32 GB of memory.");
+  });
+
+  it("owes each host's episode its own warning, under its own key, whatever its name (#18275)", async () => {
+    const studio = { id: "host-studio", name: "Studio" };
+    const twin = { id: "host-studio-2", name: "Studio" };
+    setSystemMemoryEpisode(episode({ reading: READING, workloads: workloads() }));
+    await launch();
+    setSystemMemoryEpisode({
+      episodeId: "studio-1",
+      reading: READING,
+      workloads: workloads(),
+      host: studio,
+    });
+    expect(dismissMock.mock.calls).toEqual([["notice-1"]]);
+    await launch();
+
+    // The same host worsening, or renamed, keeps the warning it already gave.
+    setSystemMemoryEpisode({
+      episodeId: "studio-1",
+      reading: "Swap is 97% full.",
+      workloads: workloads(),
+      host: studio,
+    });
+    setSystemMemoryEpisode({
+      episodeId: "studio-1",
+      reading: READING,
+      workloads: workloads(),
+      host: { ...studio, name: "Studio Pro" },
+    });
+    await launch();
+    expect(dismissMock.mock.calls).toEqual([["notice-1"]]);
+
+    setSystemMemoryEpisode({
+      episodeId: "twin-1",
+      reading: READING,
+      workloads: workloads(),
+      host: twin,
+    });
+    expect(dismissMock.mock.calls).toEqual([["notice-1"], ["notice-2"]]);
+    await launch();
+
+    expect(notifyMock).toHaveBeenCalledTimes(3);
+    const keys = notifyMock.mock.calls.map(([payload]) => payload);
+    expect(keys[1]!.title).toBe("High memory use on Studio");
+    for (const key of keys) expect(key.supersedeKey).toBe(key.replaceKey);
+    expect(new Set(keys.map((key) => key.replaceKey)).size).toBe(3);
   });
 });

@@ -38,7 +38,10 @@ import {
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitchCancelledError.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
-import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import {
+  deliverOpenSystemMemoryPressure,
+  refreshSystemMemoryPressure,
+} from "./systemMemoryPressureDelivery.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import { prepareSwitchScreenHandoff, type SwitchScreenHandoff } from "./switchScreenHandoff.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -127,6 +130,13 @@ function abandonUnpaintedWarmSwitch(
     pruneOrphanedChildren(host);
   } catch (error) {
     console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
+  }
+  // While the incoming view held the window, a memory publish went to it, not
+  // to the view the user is back on.
+  try {
+    if (restoredView) refreshSystemMemoryPressure(host.win, restoredView.webContents);
+  } catch (error) {
+    console.error("[ProjectViewManager] memory notice for the restored view threw:", error);
   }
   return restoredView;
 }

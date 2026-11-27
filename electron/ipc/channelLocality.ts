@@ -1623,7 +1623,8 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "project-groups:update": "host",
   "run-history:update": "host",
   "sound:cancel": "shell",
-  "system:memory-pressure": "shell",
+  // Describes the machine whose monitor measured it, so a remote view hears its host's (#18275).
+  "system:memory-pressure": "host",
   "system:power-policy-changed": "shell",
   "system:wake": "shell",
   "terminal:adoptions-changed": "host",

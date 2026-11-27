@@ -206,6 +206,23 @@ describe("SidebarMemoryNotice", () => {
     expect(menuItemLabels(openMenu(container))).toEqual(["Sleep idle projects"]);
   });
 
+  it("offers no menu on a host's notice, whose idle projects it can't vouch for (#18275)", () => {
+    const local = { critical: false, reading: READING, detail: DETAIL, action: null };
+    act(() => {
+      seedIdleProjects(["a"]);
+      useSystemMemoryNoticeStore.getState().setNotice(local);
+    });
+    const { container } = renderRow();
+    expect(container.querySelector("[data-sidebar-memory-menu]")).not.toBeNull();
+
+    act(() => useSystemMemoryNoticeStore.getState().setNotice({ ...local, hostName: "Studio" }));
+    expect(container.querySelector("[data-sidebar-memory-notice]")).not.toBeNull();
+    expect(container.querySelector("[data-sidebar-memory-menu]")).toBeNull();
+
+    act(() => useSystemMemoryNoticeStore.getState().setNotice(local));
+    expect(menuItemLabels(openMenu(container))).toEqual(["Sleep idle projects"]);
+  });
+
   it("collapses both actions into one button so the reading keeps the row", () => {
     act(() => {
       seedIdleProjects(["a"]);

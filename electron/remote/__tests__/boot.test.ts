@@ -25,6 +25,7 @@ const m = vi.hoisted(() => {
 
   const openedListeners = new Set<(endpoint: unknown, handle: unknown) => void>();
   const transportListeners = new Set<(endpointIds: string[], attached: boolean) => void>();
+  const resyncListeners = new Set<(endpoints: unknown[]) => void>();
   const sessionHost = {
     onEndpointOpened: vi.fn((l: (endpoint: unknown, handle: unknown) => void) => {
       openedListeners.add(l);
@@ -33,6 +34,10 @@ const m = vi.hoisted(() => {
     onTransportChange: vi.fn((l: (endpointIds: string[], attached: boolean) => void) => {
       transportListeners.add(l);
       return () => transportListeners.delete(l);
+    }),
+    onEndpointsResynced: vi.fn((l: (endpoints: unknown[]) => void) => {
+      resyncListeners.add(l);
+      return () => resyncListeners.delete(l);
     }),
   };
 
@@ -119,6 +124,7 @@ const m = vi.hoisted(() => {
     sessionHost,
     openedListeners,
     transportListeners,
+    resyncListeners,
     client,
     lease,
     leaseListeners,
@@ -661,6 +667,7 @@ beforeEach(() => {
   m.server.expiredListeners.clear();
   m.openedListeners.clear();
   m.transportListeners.clear();
+  m.resyncListeners.clear();
   m.clientOpenedListeners.clear();
   m.clientClosedListeners.clear();
   m.sessionAttachedListeners.clear();
@@ -1346,6 +1353,31 @@ describe("startRemoteHosts", () => {
     expect(m.attachWorktreePortBridge).toHaveBeenCalledWith(link, endpoint);
     expect(m.statsPush).toHaveBeenCalledWith(endpoint);
     expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
+  });
+
+  it("repeats this machine's memory state once to a Shell it had to resync (#18275)", async () => {
+    await startRemoteHosts({ hostMode: true });
+    const closed = { ...fakeEndpoint("remote:s1:view-10"), kind: "remote-view", send: vi.fn() };
+    closed.close();
+    const open = { ...fakeEndpoint("remote:s1:view-11"), kind: "remote-view", send: vi.fn() };
+    const another = { ...fakeEndpoint("remote:s1:view-12"), kind: "remote-view", send: vi.fn() };
+
+    for (const l of [...m.resyncListeners]) l([closed, open, another]);
+
+    // That Shell spreads it to every view it has of this host.
+    expect(open.send.mock.calls).toEqual([
+      [
+        {
+          type: "event",
+          channel: "events:push",
+          args: [
+            { name: "system:memory-pressure", payload: expect.objectContaining({ replay: true }) },
+          ],
+        },
+      ],
+    ]);
+    expect(closed.send).not.toHaveBeenCalled();
+    expect(another.send).not.toHaveBeenCalled();
   });
 
   it("serves ports, project moves and plugins only while listening, on the server's sessions", async () => {

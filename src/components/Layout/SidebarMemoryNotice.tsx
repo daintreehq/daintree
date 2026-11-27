@@ -46,14 +46,27 @@ const ACTION_CLASS = cn(
 export function SidebarMemoryNotice() {
   const notice = useSystemMemoryNoticeStore((s) => s.notice);
   if (!notice) return null;
-  // Split so the project and stats subscriptions live only while a notice does.
-  return <MemoryNoticeRow notice={notice} />;
+  // A host's notice offers no sleep: its idle check can't see which of the
+  // host's projects other Shells have on screen (#18275).
+  if (notice.hostName !== undefined) return <MemoryNoticeRow notice={notice} sleep={null} />;
+  // Split so the project and stats subscriptions live only while this machine's notice does.
+  return <LocalMemoryNoticeRow notice={notice} />;
 }
 
-function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
-  const { action } = notice;
+function LocalMemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
   const sleep = useSleepIdleProjects();
-  const canSleep = sleep.idleProjects.length > 0;
+  return <MemoryNoticeRow notice={notice} sleep={sleep} />;
+}
+
+function MemoryNoticeRow({
+  notice,
+  sleep,
+}: {
+  notice: SystemMemoryNotice;
+  sleep: ReturnType<typeof useSleepIdleProjects> | null;
+}) {
+  const { action } = notice;
+  const canSleep = sleep !== null && sleep.idleProjects.length > 0;
   // A picked action runs once the menu has handed focus back to its trigger.
   // Run straight from the item, a confirmation or diagnostic panel that opens
   // during the menu's exit animation has its focus pulled back to the trigger,
@@ -138,7 +151,7 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
               <DropdownMenuItem
                 data-sidebar-memory-sleep=""
                 onSelect={() => {
-                  pendingActionRef.current = () => void sleep.openPreview();
+                  pendingActionRef.current = () => void sleep?.openPreview();
                 }}
               >
                 Sleep idle projects
