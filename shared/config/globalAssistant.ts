@@ -57,6 +57,10 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * trust that link rests on (#18258). `mcp.surface` reports its own
  * session, `role` included, so it can tell when the `daintree` server it
  * reached took it for something other than the global assistant (#16765).
+ * `assistant.list` and `terminal.sendCommand` are the one channel between
+ * this machine's two global sessions (#18280): the listing names the session
+ * itself and the other one, and the send reaches that other session and no
+ * terminal else.
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -68,6 +72,8 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_SSH_HOST_KEYS_TOOL,
   "mcp.surface",
+  "assistant.list",
+  "terminal.sendCommand",
 ]);
 
 /**

@@ -90,12 +90,37 @@ export const KeptAssistantSlotSchema = z.object({
 });
 export type KeptAssistantSlot = z.infer<typeof KeptAssistantSlotSchema>;
 
+/**
+ * A global session's side, which follows coordination (#18280): the one that
+ * coordinates acts on the fleet and hears its notices, the other is the
+ * person's conversation. A handover swaps them; a lone session is both.
+ */
+export const GLOBAL_ASSISTANT_ROLES = ["coordinator", "conversation"] as const;
+export type GlobalAssistantRole = (typeof GLOBAL_ASSISTANT_ROLES)[number];
+
 /** The calling lane itself, which `assistants` leaves out (#18276). */
 export const AssistantSelfSchema = z.object({
   slot: z.number(),
   agentId: z.string(),
+  role: z
+    .enum(GLOBAL_ASSISTANT_ROLES)
+    .optional()
+    .describe("A global session's side, as of this listing. Absent for a project's lane."),
 });
 export type AssistantSelf = z.infer<typeof AssistantSelfSchema>;
+
+/**
+ * The other global session on this machine, as a global session sees it
+ * (#18280): the one thing it may send to directly.
+ */
+export const GlobalAssistantPeerSchema = z.object({
+  terminalId: z.string(),
+  generation: z.number(),
+  slot: z.number(),
+  role: z.enum(GLOBAL_ASSISTANT_ROLES),
+  agentState: AssistantEntrySchema.shape.agentState,
+});
+export type GlobalAssistantPeer = z.infer<typeof GlobalAssistantPeerSchema>;
 
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
@@ -109,6 +134,9 @@ export const AssistantListResultSchema = z.object({
   global: GlobalAssistantEntrySchema.nullable().describe(
     "This machine's global Assistant: send and status only. Null if none runs."
   ),
+  globalPeer: GlobalAssistantPeerSchema.nullable()
+    .optional()
+    .describe("For a global session only: the other one, to send to. Null if none runs."),
 });
 export type AssistantListResult = z.infer<typeof AssistantListResultSchema>;
 

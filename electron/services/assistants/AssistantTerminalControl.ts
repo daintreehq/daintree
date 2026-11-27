@@ -11,6 +11,8 @@ import {
   type AssistantStartArgs,
   type AssistantStartResult,
   type GlobalAssistantEntry,
+  type GlobalAssistantPeer,
+  type GlobalAssistantRole,
   type KeptAssistantSlot,
 } from "../../../shared/types/assistantControl.js";
 import type { AgentId, AgentState, WaitingReason } from "../../../shared/types/agent.js";
@@ -18,8 +20,10 @@ import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
   stampAssistantPrompt,
+  stampGlobalPeerAssistantPrompt,
   stampSiblingAssistantPrompt,
   stampUpwardAssistantPrompt,
+  type GlobalAssistantPeerSender,
   type SiblingAssistantLane,
 } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
@@ -97,7 +101,8 @@ export type AssistantCaller =
  * this machine may send to and read the status of, and nothing else.
  */
 export interface AssistantTarget {
-  scope: "project" | "global";
+  /** `global-peer`: the other global session, as one global session reaches it (#18280). */
+  scope: "project" | "global" | "global-peer";
   projectId: string;
   slot: number;
   sessionId: string;
@@ -183,10 +188,11 @@ export interface AssistantTerminalControlDeps {
   /** Where a send for a mid-turn assistant is held (#16620); absent or null, none is. */
   queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
   /**
-   * The global assistant session that coordinates (#18143), listed as the
-   * global one. Absent, the first running session is.
+   * The global assistant session that coordinates (#18143): the one a
+   * project's assistant reaches, and which side each global session is on
+   * (#18280). Absent, the first running session is.
    */
-  globalCoordinatorSlot?: () => Promise<number>;
+  globalCoordinatorSlot?: () => number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** The reply a screen shows, ending at the handback marker observed when there is one. */
@@ -363,15 +369,18 @@ function resumeRefusalMessage(
 const GLOBAL_SEND_ONLY_MESSAGE =
   "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.";
 
+const GLOBAL_PEER_SEND_ONLY_MESSAGE =
+  "The other global session takes a plain send from this one, nothing else: no keys, interrupt, close, read, handback or held send. Nothing was done.";
+
 const OWN_KEYS_HELD_MESSAGE =
   "The only input at the assistant's prompt since it settled is keys you sent, which can leave text there. Nothing was sent; send once it has settled again.";
 
-/** Refuses everything but a send at the global Assistant, whatever path reached here. */
+/** Refuses everything but a send at a global session, whatever path reached here. */
 function requireProjectScope(target: AssistantTarget): void {
-  if (target.scope === "global") {
+  if (target.scope !== "project") {
     throw new AssistantTargetError(
       ASSISTANT_TARGET_REFUSALS.globalSendOnly,
-      GLOBAL_SEND_ONLY_MESSAGE
+      target.scope === "global" ? GLOBAL_SEND_ONLY_MESSAGE : GLOBAL_PEER_SEND_ONLY_MESSAGE
     );
   }
 }
@@ -423,7 +432,7 @@ export class AssistantTerminalControl {
    */
   resolve(caller: AssistantCaller, terminalId: string): AssistantTarget | null {
     for (const lane of this.deps.listRunningLanes()) {
-      const scope = this.scopeOf(caller, lane.projectId);
+      const scope = this.scopeOf(caller, lane);
       if (scope === null) continue;
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (running?.terminalId !== terminalId) continue;
@@ -453,30 +462,105 @@ export class AssistantTerminalControl {
     return target;
   }
 
-  private scopeOf(caller: AssistantCaller, laneProjectId: string): AssistantTarget["scope"] | null {
-    // A global session is never a project peer, not even of the other global session (#18142).
-    if (isGlobalAssistantId(laneProjectId)) return reachesGlobal(caller) ? "global" : null;
-    return laneProjectId === caller.projectId ? "project" : null;
+  private scopeOf(caller: AssistantCaller, lane: RunningLane): AssistantTarget["scope"] | null {
+    if (isGlobalAssistantId(lane.projectId)) {
+      // A project's assistant reaches only the session that coordinates (#18143),
+      // never the person's conversation beside it (#18280).
+      if (reachesGlobal(caller)) return lane.slot === this.coordinatorSlot() ? "global" : null;
+      // A global session is never a project peer, not even of the other global
+      // session (#18142), but the two may message each other (#18280).
+      return this.callerGlobalSlot(caller) !== null ? "global-peer" : null;
+    }
+    return lane.projectId === caller.projectId ? "project" : null;
+  }
+
+  /**
+   * The global session that coordinates (#18143), read afresh at every call
+   * so a handover moves both what a project reaches and each session's side.
+   * Absent or failing, the first running session.
+   */
+  private coordinatorSlot(): number | null {
+    try {
+      const slot = this.deps.globalCoordinatorSlot?.();
+      if (slot !== undefined) return slot;
+    } catch {
+      // Falls through to the first running session, as with no reading at all.
+    }
+    let first: number | null = null;
+    for (const lane of this.deps.listRunningLanes()) {
+      if (!isGlobalAssistantId(lane.projectId)) continue;
+      if (this.deps.getRunningLaneSession(lane.projectId, lane.slot) === null) continue;
+      if (first === null || lane.slot < first) first = lane.slot;
+    }
+    return first;
+  }
+
+  /** The slot of the running global session `caller` is, by its help session; null for any other caller. */
+  private callerGlobalSlot(caller: AssistantCaller): number | null {
+    if (caller.kind !== "local" || !isGlobalAssistantId(caller.projectId)) return null;
+    for (const lane of this.deps.listRunningLanes()) {
+      if (!isGlobalAssistantId(lane.projectId)) continue;
+      const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+      if (running?.sessionId === caller.helpSessionId) return lane.slot;
+    }
+    return null;
+  }
+
+  private globalRoleOf(slot: number): GlobalAssistantRole {
+    return slot === this.coordinatorSlot() ? "coordinator" : "conversation";
+  }
+
+  /**
+   * A global session's listing (#18280): its own slot and side, and the other
+   * session to send to. It has no project, so no project lanes or slots.
+   */
+  private async listForGlobal(
+    caller: AssistantCaller & { kind: "local" }
+  ): Promise<AssistantListResult> {
+    let self: AssistantSelf | undefined;
+    let peer: GlobalAssistantPeer | null = null;
+    const ownSlot = this.callerGlobalSlot(caller);
+    for (const lane of this.deps.listRunningLanes()) {
+      if (!isGlobalAssistantId(lane.projectId)) continue;
+      const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+      if (!running) continue;
+      if (lane.slot === ownSlot) {
+        const record = await this.deps.getTerminal(running.terminalId).catch(() => null);
+        self = {
+          slot: lane.slot,
+          agentId: record?.detectedAgentId ?? record?.launchAgentId ?? lane.agentId,
+          role: this.globalRoleOf(lane.slot),
+        };
+        continue;
+      }
+      if (ownSlot === null || peer !== null) continue;
+      const entry = await this.globalEntryFor(lane);
+      if (entry) peer = { ...entry, slot: lane.slot, role: this.globalRoleOf(lane.slot) };
+    }
+    return {
+      projectId: caller.projectId,
+      ...(self ? { self } : {}),
+      assistants: [],
+      vacantSlots: [],
+      keptSlots: [],
+      global: null,
+      globalPeer: peer,
+    };
   }
 
   async list(caller: AssistantCaller): Promise<AssistantListResult> {
+    if (caller.kind === "local" && isGlobalAssistantId(caller.projectId)) {
+      return this.listForGlobal(caller);
+    }
     const assistants: AssistantEntry[] = [];
     const occupied = new Set<number>();
     // The session that coordinates (#18143), and none while it isn't running:
     // the other one acts on no worker, so it isn't the global assistant to reach.
-    const coordinator = (await this.deps.globalCoordinatorSlot?.().catch(() => null)) ?? null;
     let globalLane: RunningLane | null = null;
     let self: AssistantSelf | undefined;
     for (const lane of this.deps.listRunningLanes()) {
       if (lane.projectId !== caller.projectId || isGlobalAssistantId(lane.projectId)) {
-        if (
-          this.scopeOf(caller, lane.projectId) === "global" &&
-          (coordinator !== null
-            ? lane.slot === coordinator
-            : globalLane === null || lane.slot < globalLane.slot)
-        ) {
-          globalLane = lane;
-        }
+        if (this.scopeOf(caller, lane) === "global") globalLane = lane;
         continue;
       }
       occupied.add(lane.slot);
@@ -683,6 +767,12 @@ export class AssistantTerminalControl {
       whenBusy?: AssistantWhenBusy;
     }
   ): Promise<ReturnType<typeof buildTerminalSendCommandReceipt> | QueuedSendReceipt> {
+    if (target.scope === "global-peer" && (request.handback || request.whenBusy)) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+        GLOBAL_PEER_SEND_ONLY_MESSAGE
+      );
+    }
     this.requireGeneration(caller, target, request.generation);
     const record = await this.deps.getTerminal(target.terminalId);
     if (!record) {
@@ -708,7 +798,8 @@ export class AssistantTerminalControl {
         })`
       );
     }
-    // The read was async: the run must still be the one the caller named.
+    // The read was async: the run must still be the one the caller named, and
+    // one it still reaches, since a handover moves which global session that is.
     this.requireGeneration(caller, target, request.generation);
     const { text, handbackCode } = this.prepareLine(caller, target, request);
     const submissionToken = randomUUID();
@@ -737,6 +828,18 @@ export class AssistantTerminalControl {
     return null;
   }
 
+  /** A global caller's slot and side as it sends, for the peer stamp (#18280). */
+  private globalSender(caller: AssistantCaller): GlobalAssistantPeerSender {
+    const slot = this.callerGlobalSlot(caller);
+    if (slot === null) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.notFound,
+        "This global session is no longer running. Nothing was sent."
+      );
+    }
+    return { slot, role: this.globalRoleOf(slot) };
+  }
+
   /** The line a send types: stamped with where it came from, with any handback instruction. */
   private prepareLine(
     caller: AssistantCaller,
@@ -746,19 +849,25 @@ export class AssistantTerminalControl {
     // A message up to the global is raised with it, never a brief for it to carry out;
     // one from a sibling lane is a peer's (#18277). Another machine's stays a brief.
     const stamped =
-      target.scope === "global"
-        ? stampUpwardAssistantPrompt(
+      target.scope === "global-peer"
+        ? stampGlobalPeerAssistantPrompt(
             request.command,
-            this.deps.projectName(caller.projectId) ?? caller.projectId,
+            this.globalSender(caller),
             caller.machineName
           )
-        : caller.kind === "local"
-          ? stampSiblingAssistantPrompt(
+        : target.scope === "global"
+          ? stampUpwardAssistantPrompt(
               request.command,
-              this.callerLane(caller),
+              this.deps.projectName(caller.projectId) ?? caller.projectId,
               caller.machineName
             )
-          : stampAssistantPrompt(request.command, caller.machineName);
+          : caller.kind === "local"
+            ? stampSiblingAssistantPrompt(
+                request.command,
+                this.callerLane(caller),
+                caller.machineName
+              )
+            : stampAssistantPrompt(request.command, caller.machineName);
     if (!request.handback) return { text: stamped, handbackCode: undefined };
     const handbackCode = mintHandbackCode();
     return { text: appendHandbackInstruction(stamped, handbackCode, "run"), handbackCode };
@@ -1214,6 +1323,7 @@ export function liveAssistantTerminalControl(deps: {
   extractReply: AssistantTerminalControlDeps["extractReply"];
   projectName: AssistantTerminalControlDeps["projectName"];
   queue?: AssistantTerminalControlDeps["queue"];
+  globalCoordinatorSlot?: AssistantTerminalControlDeps["globalCoordinatorSlot"];
 }): AssistantTerminalControl {
   return new AssistantTerminalControl({
     listRunningLanes: () => deps.help.listRunningLanes(),
@@ -1248,8 +1358,9 @@ export function liveAssistantTerminalControl(deps: {
     keptLanes: (projectId) => deps.help.listKeptLanes(projectId),
     claimLaneResume: (projectId, slot) => deps.help.claimLaneResume(projectId, slot),
     revoke: (sessionId) => deps.help.revokeSession(sessionId),
-    globalCoordinatorSlot: async () =>
-      (await import("../globalAssistant.js")).globalAssistantCoordinatorSlot(),
+    ...(deps.globalCoordinatorSlot !== undefined
+      ? { globalCoordinatorSlot: deps.globalCoordinatorSlot }
+      : {}),
     extractReply: deps.extractReply,
     projectName: deps.projectName,
     ...(deps.queue !== undefined ? { queue: deps.queue } : {}),
