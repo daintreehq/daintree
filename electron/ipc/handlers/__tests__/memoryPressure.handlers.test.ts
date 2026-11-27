@@ -68,7 +68,10 @@ describe("registerMemoryPressureHandlers", () => {
       windowRegistry: { all: () => [{ browserWindow: win }] },
     } as never);
 
-    getHandler("system:note-memory-notice-shown")({ episodeId: "episode-1", surface: "launch-bar" });
+    getHandler("system:note-memory-notice-shown")({
+      episodeId: "episode-1",
+      surface: "launch-bar",
+    });
 
     expect(noteShownMock).toHaveBeenCalledWith("episode-1", "launch-bar", [win]);
   });

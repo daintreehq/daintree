@@ -316,7 +316,9 @@ describe("useSystemMemoryPressureNotice", () => {
     await mountAndCapture();
     const history = await historyStore();
     notifyMock.mockImplementation((payload: { historyId?: string; message: string }) => {
-      history.getState().addEntry({ id: payload.historyId, type: "warning", message: payload.message });
+      history
+        .getState()
+        .addEntry({ id: payload.historyId, type: "warning", message: payload.message });
       return "notice-1";
     });
 
@@ -438,7 +440,9 @@ describe("useSystemMemoryPressureNotice", () => {
       await mountAndCapture();
       const history = await historyStore();
       notifyMock.mockImplementation((payload: { historyId?: string; message: string }) => {
-        history.getState().addEntry({ id: payload.historyId, type: "warning", message: payload.message });
+        history
+          .getState()
+          .addEntry({ id: payload.historyId, type: "warning", message: payload.message });
         return "";
       });
 

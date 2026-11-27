@@ -89,7 +89,9 @@ describe("systemMemoryLaunchNotice", () => {
     noteVisibleAgentLaunch();
     expect(notifyMock).toHaveBeenCalledTimes(1);
 
-    setSystemMemoryEpisode(episode({ reading: READING, workloads: workloads({ agentsRunning: 1 }) }));
+    setSystemMemoryEpisode(
+      episode({ reading: READING, workloads: workloads({ agentsRunning: 1 }) })
+    );
     noteVisibleAgentLaunch();
     expect(notifyMock).toHaveBeenCalledTimes(2);
     expect(lastMessage()).toContain("1 agent was running");

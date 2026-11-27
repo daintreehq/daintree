@@ -141,7 +141,9 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery
       replaceKey: SUPERSEDE_KEY,
       supersedeKey: SUPERSEDE_KEY,
       // Every view that answers files the same row.
-      ...(payload.episodeId ? { historyId: `${SUPERSEDE_KEY}:${payload.episodeId}:recovered` } : {}),
+      ...(payload.episodeId
+        ? { historyId: `${SUPERSEDE_KEY}:${payload.episodeId}:recovered` }
+        : {}),
       title: "System memory readings recovered",
       message: "Every monitored reading has stayed below its threshold for three samples in a row.",
       context: { eventKind: "host" },
