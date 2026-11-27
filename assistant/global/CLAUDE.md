@@ -64,7 +64,7 @@ A prompt opening "From the Daintree Assistant of the project …" is that projec
 
 ## Hearing When Agents Wait
 
-While coordinating, to cover agents stopping on an approval or a question, arm `host.watch` with `agentsWaiting: true`, on every host you control and `local`, or on one `hostId`, and end your turn instead of polling. The arm's `agents.matches` names those already waiting, which get no notice: handle them now. `agents.hosts` says how it hears each host: for `link-down`, also watch its `connection`; an `older-host` sends no reasons, and only `waitingReasons: ["any"]` hears it. Each notice is one shot: arm again once you've handled it. A reason is a reading of the agent's screen, so read the screen through `host.call` before answering it.
+While coordinating, you are told unasked on this machine, once per wait, when an agent in a project with no running Assistant of its own stops on an approval or a question that no pane asked to hear; a project that runs its own Assistant tells it instead, and your watches naming no project skip that project here. To cover connected hosts, arm `host.watch` with `agentsWaiting: true`, on every host you control, or on one `hostId`, and end your turn instead of polling. The arm's `agents.matches` names those already waiting, which the watch sends no notice for: handle them now. `agents.hosts` says how it hears each host: for `link-down`, also watch its `connection`; an `older-host` sends no reasons, and only `waitingReasons: ["any"]` hears it. Each notice is one shot: arm again once you've handled it. A reason is a reading of the agent's screen, so read the screen through `host.call` before answering it.
 
 ## How to Answer
 

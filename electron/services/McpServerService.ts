@@ -1233,6 +1233,20 @@ export class McpServerService {
     return this.terminalNotify.projectIdsWithPendingWork();
   }
 
+  /** What a pane's requested notice says of this wait (#18279). */
+  noticeCoversStop(
+    terminalId: string,
+    since: number,
+    receiverPane?: string
+  ): "told" | "pending" | "pending-here" | null {
+    return this.terminalNotify.coversStop(terminalId, since, receiverPane);
+  }
+
+  /** Whether the person stopped this pane's notices at or after `since` (#18279). */
+  paneNoticesStoppedSince(terminalId: string, since: number): boolean {
+    return this.terminalNotify.stoppedSince(terminalId, since);
+  }
+
   /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */
   stopPaneNotices(terminalId: string): void {
     this.terminalNotify.stopPane(terminalId);

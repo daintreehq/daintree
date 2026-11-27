@@ -5,8 +5,10 @@ import {
   formatHostNoticesLostLine,
   formatHostWatchLine,
   formatNoticeLine,
+  formatWorkerWaitLine,
   type FiredNotice,
 } from "../noticeFormat.js";
+import { HOST_WATCH_AGENTS_MAX } from "../../../../shared/types/hostControl.js";
 
 describe("the delivered line", () => {
   const notice = (terminalId: string, extra: Partial<FiredNotice> = {}): FiredNotice => ({
@@ -552,5 +554,31 @@ describe("the agent watch line (#16188)", () => {
     });
     expect([...line].some((char) => char.charCodeAt(0) < 0x20 || char === "\u202e")).toBe(false);
     expect(line.length).toBeLessThan(1_000);
+  });
+});
+
+describe("formatWorkerWaitLine (#18279)", () => {
+  const agent = (index: number) => ({
+    hostId: "local",
+    projectId: "proj-1",
+    worktreeId: null,
+    terminalId: `w-${index}`,
+    incarnation: 2,
+    agentIncarnation: null,
+    waitingReason: "question" as const,
+    seenAt: Date.UTC(2026, 10, 27, 0, 56),
+  });
+
+  it("names the first few workers and counts the rest, as observations", () => {
+    const line = formatWorkerWaitLine(
+      Array.from({ length: HOST_WATCH_AGENTS_MAX + 2 }, (_, i) => agent(i))
+    );
+    expect(line).toContain(`saw ${HOST_WATCH_AGENTS_MAX + 2} agents start waiting`);
+    expect(line).toContain(
+      "terminal w-0 on this machine (project proj-1, incarnation 2) waiting on a question at 2026-11-27T00:56:00.000Z"
+    );
+    expect(line).not.toContain(`w-${HOST_WATCH_AGENTS_MAX}`);
+    expect(line).toContain("; and 2 more.");
+    expect(line).not.toContain("watch ");
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
@@ -15,10 +16,12 @@ import {
 } from "../../services/globalAssistant.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import {
+  GLOBAL_ASSISTANT_ID,
   GLOBAL_ASSISTANT_SLOT,
   isGlobalAssistantId,
   isGlobalAssistantSlot,
 } from "../../../shared/config/globalAssistant.js";
+import { ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import {
   keptLocalRelayConversations,
@@ -60,6 +63,7 @@ import {
   LOCAL_RELAY_SENDER_ID,
 } from "./localMcpRelay.js";
 import { withLocalPluginTools } from "./localPluginTools.js";
+import { WorkerWaitRoute } from "./workerWaitRoute.js";
 import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
@@ -109,7 +113,66 @@ const helpSessions = {
   listRunningLanes: () => loadedHelpSessionService()?.listRunningLanes() ?? [],
   getConversationOwnershipId: (sessionId: string) =>
     loadedHelpSessionService()?.getConversationOwnershipId(sessionId) ?? null,
+  isHelpTerminal: (terminalId: string) =>
+    loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false,
 };
+
+/** Who started a lane no view shows, when that was this machine: never a remote Shell's. */
+const LOCAL_VIEWLESS_STARTS: ReadonlySet<string> = new Set([
+  "local",
+  "schedule",
+  "update-restart",
+  "standing-restart",
+]);
+
+/**
+ * A lane's assistant running here as this machine's own (#18279): live on its
+ * PTY, in one of this machine's views or started by this machine with none.
+ * Receive-only: it decides who hears workers' waits, never who may call hosts.
+ */
+function runningLocalLane(projectId: string, slot: number): OpenRun | null {
+  const running = helpSessions.getRunningLaneSession(projectId, slot);
+  if (running === null) return null;
+  const handle = running.projectViewWebContentsId;
+  if (isRemoteEndpointHandle(handle)) return null;
+  if (
+    handle === NO_VIEW_HANDLE &&
+    !isGlobalAssistantId(projectId) &&
+    !LOCAL_VIEWLESS_STARTS.has(running.startedBy?.kind ?? "")
+  ) {
+    return null;
+  }
+  const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
+  if (launchGeneration === null) return null;
+  return {
+    projectId,
+    slot,
+    sessionId: running.sessionId,
+    terminalId: running.terminalId,
+    launchGeneration,
+  };
+}
+
+/** A project's lowest-numbered lane running here, which hears its workers' waits (#18279). */
+function projectReceiver(projectId: string): OpenRun | null {
+  if (isGlobalAssistantId(projectId)) return null;
+  for (const slot of ASSISTANT_SLOTS) {
+    const run = runningLocalLane(projectId, slot);
+    if (run !== null) return run;
+  }
+  return null;
+}
+
+/** The global Assistant coordinating now, running: who hears a project with none of its own. */
+function globalReceiver(): OpenRun | null {
+  const slot = globalAssistantCoordinatorSlot();
+  const run = runningLocalLane(GLOBAL_ASSISTANT_ID, slot);
+  if (run === null) return null;
+  const confirmed = peekGlobalAssistantService(slot)?.getRunningSession() ?? null;
+  return confirmed?.sessionId === run.sessionId && confirmed.terminalId === run.terminalId
+    ? run
+    : null;
+}
 
 /**
  * Whether a help session belongs to no view yet because this machine's own
@@ -448,6 +511,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   };
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessions.getSessionLane(helpSessionId),
+    localProjectHasAssistant: (projectId) => projectReceiver(projectId) !== null,
     callerRun: localCallerOf,
     client: () => getRemoteService("hostControlLinkClient") ?? null,
     hosts: () => deps.observeHosts(),
@@ -581,7 +645,9 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   const offStandDown = onGlobalAssistantStandDown((sessionId) => runtime.standDown(sessionId));
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
+  const workerWaits = installWorkerWaitRoute(runtime);
   return () => {
+    workerWaits.dispose();
     cancelSessionWatch();
     offSessionEnded?.();
     offStandDown();
@@ -773,5 +839,78 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     unregister();
     client.dispose();
     offHosts();
+  };
+}
+
+/**
+ * This machine's workers' waits, told to the Assistant that hears each one's
+ * project (#18279): its lowest running lane, else the global coordinator.
+ */
+function installWorkerWaitRoute(runtime: HostCallRuntime): { dispose(): void } {
+  let notices: import("../../services/McpServerService.js").McpServerService | null = null;
+  let disposed = false;
+  void mcpServer()
+    .then(({ mcpServerService }) => {
+      if (!disposed) notices = mcpServerService;
+    })
+    .catch(() => {});
+  const route = new WorkerWaitRoute({
+    observe: (listener) => {
+      const offState = events.on("agent:state-changed", (payload) => {
+        const terminalId = payload.terminalId;
+        if (!terminalId) return;
+        const seen = agentWaitingOf(payload, getPtyClient());
+        listener(terminalId, seen === null ? null : { ...seen, source: "event" });
+      });
+      // A pane in the trash keeps its PTY through the undo window, but nobody is asked about it.
+      const offTrashed = events.on("terminal:trashed", ({ id }) => listener(id, null));
+      return () => {
+        offState();
+        offTrashed();
+      };
+    },
+    readOpenWaits: async () => {
+      const directory = await getLocalAgentDirectory().read({});
+      if (directory.coverage !== "ok") return [];
+      return directory.entries.flatMap((entry) =>
+        entry.state === "live" &&
+        entry.role === "worker" &&
+        entry.agentState === "waiting" &&
+        entry.subject.scope.kind === "project"
+          ? [
+              {
+                terminalId: entry.subject.terminalId,
+                projectId: entry.subject.scope.projectId,
+                incarnation: entry.subject.incarnation,
+                waitingReason: entry.waitingReason,
+                ...(entry.waitingReason === "approval" && entry.approvalKind !== undefined
+                  ? { approvalKind: entry.approvalKind }
+                  : {}),
+                seenAt: entry.since,
+              },
+            ]
+          : []
+      );
+    },
+    isAssistantTerminal: (terminalId) =>
+      helpSessions.isHelpTerminal(terminalId) ||
+      getPtyClient()?.isAssistantTerminal(terminalId) === true,
+    liveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+    receiverFor: (projectId) => projectReceiver(projectId) ?? globalReceiver(),
+    // Not loaded yet, no pane can have asked for a notice.
+    coveredByNotice: (terminalId, since, receiverPane) =>
+      notices?.noticeCoversStop(terminalId, since, receiverPane) ?? null,
+    receiverStopped: (run, since) =>
+      notices?.paneNoticesStoppedSince(run.terminalId, since) ?? false,
+    coveredByWatch: (run, terminalId, since) => runtime.watchCoversWait(run, terminalId, since),
+    queueNotice: queueOnNoticeLine,
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  });
+  return {
+    dispose: () => {
+      disposed = true;
+      route.dispose();
+    },
   };
 }

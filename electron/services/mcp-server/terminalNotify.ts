@@ -4,6 +4,7 @@ import { isGlobalPluginToolOperation } from "../../../shared/config/globalAssist
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
+import type { HostWatchAgent } from "../../../shared/types/hostControl.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import type {
   TerminalSubmissionRecord,
@@ -36,6 +37,7 @@ import {
   formatHostWatchLine,
   formatNoticeLine,
   formatRetiredExchangesLine,
+  formatWorkerWaitLine,
   type AssistantApproval,
   type FiredNotice,
   type HostWatchNotice,
@@ -370,9 +372,21 @@ export interface LaneWake {
    * {@link LaneWake.decision}; `steer` carries a global Assistant's prompt
    * held for this pane's next prompt (#16187), in {@link LaneWake.steer};
    * `composer` carries what the pane's own composer sent while the pane had no
-   * line to take it (#16379, #16872), in {@link LaneWake.composer}.
+   * line to take it (#16379, #16872), in {@link LaneWake.composer};
+   * `worker-wait` says which of the project's workers were seen waiting, for
+   * the Assistant that receives them unasked (#18279), in
+   * {@link LaneWake.workerWaits}.
    */
-  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer" | "composer";
+  kind:
+    | "notice"
+    | "retired"
+    | "lost"
+    | "watch"
+    | "approval"
+    | "decision"
+    | "steer"
+    | "composer"
+    | "worker-wait";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -384,6 +398,12 @@ export interface LaneWake {
   lostNotices?: { hostName: string; terminalIds: readonly string[] };
   /** A `watch` line's fixed facts. */
   hostWatch?: HostWatchNotice;
+  /**
+   * A `worker-wait` line's agents, as seen, and whether its receiver is the
+   * global Assistant, which reads them through `host.status`. Its `recheck`
+   * keeps only those still waiting.
+   */
+  workerWaits?: { agents: readonly HostWatchAgent[]; global: boolean };
   /** An `approval` line's tool or tier. */
   approval?: AssistantApproval;
   /**
@@ -676,6 +696,14 @@ export class TerminalNotifyService {
   private readonly ownersByTerminal = new Map<string, PaneOwner>();
   /** Target terminal → the panes waiting on it. */
   private readonly watchersByTarget = new Map<string, Set<PaneOwner>>();
+  /**
+   * The latest wait a requested notice told for each target, once its line was
+   * written or handed to its relay, by its transition into the state reported,
+   * so a standing route can tell that wait was told (#18279).
+   */
+  private readonly waitReportedAt = new Map<string, number>();
+  /** When the person last stopped each pane's notices: a standing route never undoes it. */
+  private readonly paneStoppedAt = new Map<string, number>();
   /** A restart's hold → the reply wait's hold it took over (#14369). */
   private readonly restartTakeovers = new Map<NoticeHold, NoticeHold>();
   /** Terminal id → exit epoch and code, for exits that land while a call awaits. */
@@ -1136,6 +1164,64 @@ export class TerminalNotifyService {
     return [...ids];
   }
 
+  /**
+   * What a pane's requested notice says of the wait `terminalId` was in at
+   * `since` (#18279): `told` once a line carrying it went out; `pending`
+   * while one is settling on it, fired and undelivered, or waiting on its
+   * send's write to start counting, and `pending-here` when that notice is
+   * `receiverPane`'s own, which hears it whenever it can take a line; null
+   * when none will. One armed that this wait never settles, such as a target
+   * that went from idle straight to waiting, or one that reported an earlier
+   * stop, says nothing of it.
+   */
+  coversStop(
+    terminalId: string,
+    since: number,
+    receiverPane?: string
+  ): "told" | "pending" | "pending-here" | null {
+    const toldAt = this.waitReportedAt.get(terminalId);
+    if (toldAt !== undefined && toldAt >= since) return "told";
+    let pending = false;
+    const holds = (owner: PaneOwner): "pending-here" | undefined => {
+      pending = true;
+      return owner.terminalId === receiverPane ? "pending-here" : undefined;
+    };
+    for (const owner of this.ownersByKey.values()) {
+      // A pane whose line failed holds its notices until a turn it may never finish.
+      if (owner.delivery.status === "failed") continue;
+      if (owner.fired.some((entry) => reportsWait(entry.notice, terminalId, since))) {
+        if (holds(owner) !== undefined) return "pending-here";
+      }
+    }
+    for (const owner of this.watchersByTarget.get(terminalId) ?? []) {
+      const notice = owner.notices.get(terminalId);
+      if (notice === undefined) continue;
+      const settling = notice.settling;
+      if (
+        notice.since === undefined ||
+        (settling?.state === "waiting" && settling.lastTransitionAt >= since)
+      ) {
+        if (holds(owner) !== undefined) return "pending-here";
+      }
+    }
+    return pending ? "pending" : null;
+  }
+
+  /** Whether the person stopped `terminalId`'s notices at or after `since` (#18279). */
+  stoppedSince(terminalId: string, since: number): boolean {
+    const at = this.paneStoppedAt.get(terminalId);
+    return at !== undefined && at >= since;
+  }
+
+  /** A requested notice on a wait went out: a standing route won't tell it again. */
+  private noteTold(notice: FiredNotice): void {
+    if (!reportsWait(notice, notice.terminalId, Number.NEGATIVE_INFINITY)) return;
+    const at = notice.lastTransitionAt as number;
+    // Lines confirm out of order across panes: an older wait never hides a newer one told.
+    const known = this.waitReportedAt.get(notice.terminalId);
+    if (known === undefined || at > known) remember(this.waitReportedAt, notice.terminalId, at);
+  }
+
   getPaneState(terminalId: string): PaneNotifyState | null {
     const owner = this.ownersByTerminal.get(terminalId);
     return owner === undefined ? null : this.paneState(owner);
@@ -1143,6 +1229,7 @@ export class TerminalNotifyService {
 
   /** The user's "stop" on the pane: every notice it has pending goes. */
   stopPane(terminalId: string): void {
+    remember(this.paneStoppedAt, terminalId, this.now());
     this.markTeardown(`terminal\u0000${terminalId}`);
     const owner = this.ownersByTerminal.get(terminalId);
     if (owner !== undefined) this.disposeOwner(owner);
@@ -1621,15 +1708,16 @@ export class TerminalNotifyService {
     for (const entry of owner.fired) if (entry.wakeToken === token) entry.wakeToken = undefined;
     // A wake is never typed twice: part of its line may have landed. Only
     // where the host saw the line stop does a wake hear more (#18157): a
-    // Decisions answer refused before any of it was written ended untyped,
-    // and its sink types it again; one whose Enter the host held is left to
-    // its sink to find on the screen.
+    // Decisions answer or a worker's wait (#18279) refused before any of it
+    // was written ended untyped, and its sink offers it again; one whose Enter
+    // the host held is left to its sink to find on the screen.
     for (const [id, entry] of owner.wakes) {
       if (entry.token !== token) continue;
       owner.wakes.delete(id);
       reportWake(
         entry.wake,
-        stoppedAt === "admission" && entry.wake.kind === "decision"
+        stoppedAt === "admission" &&
+          (entry.wake.kind === "decision" || entry.wake.kind === "worker-wait")
           ? { kind: "unavailable", reason: LINE_REFUSED }
           : { kind: "ambiguous", reason: stoppedAt === "enter" ? ENTER_HELD : "unconfirmed" }
       );
@@ -1978,7 +2066,10 @@ export class TerminalNotifyService {
     );
     // Only a process that ended frees the id for a new pane. A pane closed to
     // the trash can come back, still inside its interval.
-    if (kind === "exit") this.lastDeliveryAt.delete(terminalId);
+    if (kind === "exit") {
+      this.lastDeliveryAt.delete(terminalId);
+      this.waitReportedAt.delete(terminalId);
+    }
 
     const own = this.ownersByTerminal.get(terminalId);
     if (own !== undefined) this.disposeOwner(own);
@@ -2592,6 +2683,13 @@ export class TerminalNotifyService {
           : []
       ),
       ...wakes.flatMap(({ wake }) =>
+        wake.kind === "worker-wait" &&
+        wake.workerWaits !== undefined &&
+        wake.workerWaits.agents.length > 0
+          ? [formatWorkerWaitLine(wake.workerWaits.agents, wake.workerWaits.global)]
+          : []
+      ),
+      ...wakes.flatMap(({ wake }) =>
         wake.kind === "approval" && wake.approval !== undefined
           ? [formatAssistantApprovalLine(wake.approval)]
           : []
@@ -2738,6 +2836,7 @@ export class TerminalNotifyService {
       if (phase === "pty_written") {
         logger.info("Notice line written", { pane: owner.terminalId });
         owner.inHost = undefined;
+        for (const entry of owner.fired) if (entry.wakeToken === token) this.noteTold(entry.notice);
         owner.fired = owner.fired.filter((entry) => entry.wakeToken !== token);
         this.finishWakes(
           owner,
@@ -2832,6 +2931,7 @@ export class TerminalNotifyService {
   private handOff(owner: PaneOwner, relay: Pick<RelayNoticeRoute, "deliver">): void {
     const ready = owner.fired.filter((entry) => isDeliverable(entry));
     owner.fired = owner.fired.filter((entry) => !isDeliverable(entry));
+    for (const entry of ready) this.noteTold(entry.notice);
     owner.droppedCount = 0;
     owner.recheckMs = undefined;
     this.setDelivery(owner, { status: "idle" });
@@ -3044,6 +3144,17 @@ function handbackMatches(notice: Notice, handback: TerminalHandback): boolean {
 }
 
 /** Insert as newest, dropping the oldest entry once the map holds too many. */
+/** A notice reporting `terminalId` waiting, entered at or after `since`. */
+function reportsWait(notice: FiredNotice, terminalId: string, since: number): boolean {
+  return (
+    notice.terminalId === terminalId &&
+    notice.observation.kind === "state" &&
+    notice.observation.state === "waiting" &&
+    typeof notice.lastTransitionAt === "number" &&
+    notice.lastTransitionAt >= since
+  );
+}
+
 function remember<V>(map: Map<string, V>, key: string, value: V, prune = true): void {
   map.delete(key);
   map.set(key, value);

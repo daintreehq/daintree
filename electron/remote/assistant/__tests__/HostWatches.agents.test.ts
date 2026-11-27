@@ -4,6 +4,7 @@ import type {
   AgentDirectory,
   AgentDirectoryLiveEntry,
 } from "../../../../shared/types/agentDirectory.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import { NOTIFY_TARGET_SETTLE_MS } from "../../../../shared/types/terminalNotify.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
 import { formatHostWatchLine } from "../../../services/mcp-server/noticeFormat.js";
@@ -739,5 +740,148 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
       seen: [expect.objectContaining({ hostId: "local", terminalId: "t-local" })],
       omitted: 0,
     });
+  });
+});
+
+describe("HostWatches leaving a project with its own Assistant to it (#18279)", () => {
+  const GLOBAL_RUN: OpenRun = { ...RUN, projectId: GLOBAL_ASSISTANT_ID };
+  const LEAD: OpenRun = {
+    projectId: "proj-1",
+    slot: 0,
+    sessionId: "lead",
+    terminalId: "t-lead",
+    launchGeneration: 2,
+  };
+  let now: number;
+  let listener: AgentWaitingListener | null;
+  let reads: Map<string, AgentWatchRead>;
+  let assisted: Set<string>;
+  let queued: LaneWake[];
+  let watches: HostWatches;
+
+  const advance = (ms: number) => {
+    now += ms;
+    vi.advanceTimersByTime(ms);
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    now = 10_000;
+    listener = null;
+    assisted = new Set();
+    queued = [];
+    reads = new Map([["local", { status: "read", directory: directory([]), waitingEvents: true }]]);
+    let ids = 0;
+    watches = new HostWatches({
+      hosts: () => [host("studio", "studio-01")],
+      controlOn: () => true,
+      stillRunning: () => true,
+      observe: () => () => {},
+      observeAgents: (next) => {
+        listener = next;
+        return () => {
+          listener = null;
+        };
+      },
+      readAgents: async (hostId) => reads.get(hostId) ?? { status: "unread" },
+      localProjectHasAssistant: (projectId) => assisted.has(projectId),
+      queueNotice: (_lane, wake) => queued.push(wake),
+      now: () => now,
+      newId: () => `id-${++ids}`,
+    });
+  });
+
+  afterEach(() => {
+    watches.dispose();
+    vi.useRealTimers();
+  });
+
+  const seen = (wake: LaneWake | undefined) =>
+    wake?.hostWatch?.agents?.seen.map((agent) => `${agent.hostId}:${agent.terminalId}`);
+
+  it("skips this machine's assisted projects in a global watch naming none, already waiting or new", async () => {
+    assisted.add("proj-1");
+    reads.set("local", {
+      status: "read",
+      waitingEvents: true,
+      directory: directory([waiting("t-mine"), waiting("t-other", { projectId: "proj-2" })]),
+    });
+    const result = await watches.armAgents(GLOBAL_RUN, {
+      operation: "arm",
+      agentsWaiting: true,
+      hostId: "local",
+    });
+    expect(result.agents?.matches.map((agent) => agent.terminalId)).toEqual(["t-other"]);
+    expect(result.agents?.omitted).toBe(0);
+
+    listener?.("local", heard("t-1"));
+    listener?.("local", heard("t-2", { projectId: "proj-2" }));
+    // A remote host's project of the same id is not this machine's.
+    listener?.("studio", heard("t-3"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(seen(queued[0])).toEqual(["local:t-2"]);
+  });
+
+  it("drops a wait whose project starts its own Assistant before the line is typed", async () => {
+    await watches.armAgents(GLOBAL_RUN, { operation: "arm", agentsWaiting: true });
+    listener?.("local", heard("t-1"));
+    listener?.("local", heard("t-2", { projectId: "proj-2" }));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    assisted.add("proj-1");
+    expect(queued[0]?.recheck()).toEqual({ kind: "ready" });
+    expect(seen(queued[0])).toEqual(["local:t-2"]);
+  });
+
+  it("still tells a global watch naming the project, and a project's own watch", async () => {
+    assisted.add("proj-1");
+    await watches.armAgents(GLOBAL_RUN, {
+      operation: "arm",
+      agentsWaiting: true,
+      projectId: "proj-1",
+    });
+    await watches.armAgents(LEAD, { operation: "arm", agentsWaiting: true });
+    listener?.("local", heard("t-1"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued.map(seen)).toEqual([["local:t-1"], ["local:t-1"]]);
+  });
+
+  it("says a run's own watch may tell a wait while it gathers or holds it, and told it once written", async () => {
+    await watches.armAgents(LEAD, { operation: "arm", agentsWaiting: true });
+    expect(watches.coversWait(LEAD, "local", "t-1", 5_000)).toBeNull();
+    listener?.("local", heard("t-1"));
+    expect(watches.coversWait(LEAD, "local", "t-1", 5_000)).toBe("pending");
+    expect(watches.coversWait(GLOBAL_RUN, "local", "t-1", 5_000)).toBeNull();
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued).toHaveLength(1);
+    expect(watches.coversWait(LEAD, "local", "t-1", 5_000)).toBe("pending");
+    // A later wait by the same terminal isn't the one it names.
+    expect(watches.coversWait(LEAD, "local", "t-1", 6_000)).toBeNull();
+    queued[0]!.report({ kind: "delivered" });
+    expect(watches.coversWait(LEAD, "local", "t-1", 5_000)).toBe("told");
+  });
+
+  it("says nothing of a wait its watch let go: refined away, withdrawn, or never typed", async () => {
+    const armed = await watches.armAgents(LEAD, {
+      operation: "arm",
+      agentsWaiting: true,
+      waitingReasons: ["approval"],
+    });
+    listener?.("local", heard("t-2"));
+    expect(watches.coversWait(LEAD, "local", "t-2", 5_000)).toBe("pending");
+    listener?.("local", heard("t-2", { waitingReason: "question", refined: true }));
+    expect(watches.coversWait(LEAD, "local", "t-2", 5_000)).toBeNull();
+    expect(armed.watches[0]?.status).toBe("armed");
+
+    listener?.("local", heard("t-3", { waitingReason: "approval" }));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued).toHaveLength(1);
+    watches.run(LEAD, { operation: "cancel", watchId: armed.watches[0]!.watchId });
+    expect(watches.coversWait(LEAD, "local", "t-3", 5_000)).toBeNull();
+
+    await watches.armAgents(LEAD, { operation: "arm", agentsWaiting: true });
+    listener?.("local", heard("t-4"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    queued[1]!.report({ kind: "unavailable", reason: "control-off" });
+    expect(watches.coversWait(LEAD, "local", "t-4", 5_000)).toBeNull();
   });
 });
