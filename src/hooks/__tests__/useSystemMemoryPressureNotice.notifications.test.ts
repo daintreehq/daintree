@@ -15,7 +15,6 @@ const CRITICAL: SystemMemoryPressureDelivery = {
   workloads: null,
   episodeId: "episode-1",
   fileInbox: true,
-  launchNoticeShown: false,
 };
 const WARNING: SystemMemoryPressureDelivery = {
   ...CRITICAL,

@@ -23,12 +23,13 @@ vi.mock("@/services/ActionService", () => ({
 const eventsOnMock = vi.fn();
 // Main's once-per-episode claims (#18274): the first claim of a surface wins.
 const granted = new Set<string>();
-const claimMock = vi.fn(async ({ episodeId, surface }: { episodeId: string; surface: string }) => {
+async function claimOnce({ episodeId, surface }: { episodeId: string; surface: string }) {
   const key = `${episodeId}:${surface}`;
   if (granted.has(key)) return false;
   granted.add(key);
   return true;
-});
+}
+const claimMock = vi.fn(claimOnce);
 const releaseMock = vi.fn(
   async ({ episodeId, surface }: { episodeId: string; surface: string }) => {
     granted.delete(`${episodeId}:${surface}`);
@@ -46,7 +47,6 @@ const DEGRADED: SystemMemoryPressureDelivery = {
   workloads: null,
   episodeId: "episode-1",
   fileInbox: true,
-  launchNoticeShown: false,
 };
 const NORMAL: SystemMemoryPressureDelivery = {
   status: "normal",
@@ -58,7 +58,6 @@ const NORMAL: SystemMemoryPressureDelivery = {
   workloads: null,
   episodeId: "episode-1",
   fileInbox: false,
-  launchNoticeShown: false,
 };
 const CRITICAL: SystemMemoryPressureDelivery = {
   ...DEGRADED,
@@ -186,7 +185,8 @@ describe("useSystemMemoryPressureNotice", () => {
     notifyMock.mockReturnValue("notice-1");
     eventsOnMock.mockReset();
     granted.clear();
-    claimMock.mockClear();
+    claimMock.mockReset();
+    claimMock.mockImplementation(claimOnce);
     releaseMock.mockClear();
     attended = true;
     dispatchMock.mockReset();
@@ -547,31 +547,59 @@ describe("useSystemMemoryPressureNotice", () => {
       });
     });
 
-    it("drops what Main granted after the episode recovered meanwhile", async () => {
+    it("handles a delivery only after the one before it has filed what Main gave it", async () => {
       await mountAndCapture();
-      let answer: (granted: boolean) => void = () => {};
+      const history = await fileRow();
+      const answers: Array<() => void> = [];
       claimMock.mockImplementation(
-        () =>
+        ({ episodeId, surface }) =>
           new Promise<boolean>((resolve) => {
-            answer = resolve;
+            answers.push(() => {
+              const key = `${episodeId}:${surface}`;
+              resolve(!granted.has(key));
+              granted.add(key);
+            });
           })
       );
 
-      let pending!: Promise<void>;
+      // A worsening at the same level, then the recovery, arrive while Main is
+      // still answering the first delivery's claim.
+      let settled!: Promise<void>;
       act(() => {
-        pending = captured!({ ...CRITICAL, fileInbox: false });
+        void captured!(DEGRADED);
+        void captured!({ ...DEGRADED, swapUsedPercent: 97, escalated: true });
+        settled = captured!(NORMAL);
       });
-      await deliver(NORMAL);
+      let done = false;
+      void settled.then(() => (done = true));
       await act(async () => {
-        answer(true);
-        await pending;
+        while (!done) {
+          answers.shift()?.();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
       });
 
-      expect(notifyMock.mock.calls.map(([p]) => p.type)).toEqual(["success"]);
-      expect(releaseMock).toHaveBeenCalledWith({
-        episodeId: "episode-1",
-        surface: "critical-toast",
+      expect(notifyMock.mock.calls.map(([p]) => p.type)).toEqual(["warning", "success"]);
+      const row = history
+        .getState()
+        .entries.find((e) => e.id === notifyMock.mock.calls[0]![0].historyId);
+      // The worsening refreshed the filed row; recovery then retired it.
+      expect(row?.message).toContain("Swap is 97% full");
+      expect(row?.archivedAt).toEqual(expect.any(Number));
+    });
+
+    it("keeps handling deliveries after one throws", async () => {
+      await mountAndCapture();
+      const store = await noticeStore();
+      notifyMock.mockImplementationOnce(() => {
+        throw new Error("notify failed");
       });
+
+      await deliver(DEGRADED);
+      await deliver({ ...DEGRADED, episodeId: "episode-2", swapUsedPercent: 95 });
+
+      expect(store.getState().notice?.reading).toContain("Swap is 95% full");
+      expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
     it("retires every row of the episode on recovery, the launch bar's included", async () => {

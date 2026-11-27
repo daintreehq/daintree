@@ -79,6 +79,11 @@ export function describeLaunchDuringMemoryEpisode(
  * refreshes the figures without re-arming the bar; recovery takes it down.
  */
 export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
+  // A new episode re-arms the bar even if this view missed the last recovery.
+  if (next !== null && episode !== null && next.episodeId !== episode.episodeId) {
+    claiming = false;
+    shownThisEpisode = false;
+  }
   episode = next;
   if (next !== null) return;
   claiming = false;

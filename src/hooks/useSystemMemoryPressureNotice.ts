@@ -5,6 +5,7 @@ import type {
 } from "@shared/types/ipc/system";
 import { isWindowAttended, notify } from "@/lib/notify";
 import { isMac } from "@/lib/platform";
+import { logError } from "@/utils/logger";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { pluralize } from "@/lib/pluralize";
 import { actionService } from "@/services/ActionService";
@@ -130,9 +131,21 @@ function buildMemoryUseAction(): NotificationAction {
   };
 }
 
-export async function handleSystemMemoryPressure(
-  payload: SystemMemoryPressureDelivery
-): Promise<void> {
+let deliveries: Promise<void> = Promise.resolve();
+
+/**
+ * Deliveries are handled one at a time: each may wait on Main to answer a
+ * claim, and a later one (a worsening, the recovery) must never land before an
+ * earlier one has filed what Main gave it.
+ */
+export function handleSystemMemoryPressure(payload: SystemMemoryPressureDelivery): Promise<void> {
+  deliveries = deliveries
+    .then(() => applySystemMemoryPressure(payload))
+    .catch((error: unknown) => logError("System memory notice failed", error));
+  return deliveries;
+}
+
+async function applySystemMemoryPressure(payload: SystemMemoryPressureDelivery): Promise<void> {
   if (payload.status === "normal") {
     setSystemMemoryEpisode(null);
     // Recovery reaches every view. One that heard the episode answers, and so
@@ -190,11 +203,6 @@ export async function handleSystemMemoryPressure(
       : false,
     critical && isWindowAttended() ? claimSystemMemoryNotice(episodeId, "critical-toast") : false,
   ]);
-  // Recovery, or a newer episode, landed while Main was answering.
-  if (heardEpisodeId !== episodeId) {
-    if (toast) releaseSystemMemoryNotice(episodeId, "critical-toast");
-    return;
-  }
   if (!file) {
     // Another view filed this level's row: refresh its figures in place. A row
     // the user dismissed or archived is left gone, here and in every other

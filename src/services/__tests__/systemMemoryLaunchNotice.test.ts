@@ -157,6 +157,20 @@ describe("systemMemoryLaunchNotice", () => {
     expect(releaseMock).toHaveBeenCalledWith({ episodeId: "episode-1", surface: "launch-bar" });
   });
 
+  it("re-arms the bar for a new episode this view heard without the recovery between", async () => {
+    setSystemMemoryEpisode(episode({ reading: READING, workloads: workloads() }));
+    // A claim still out when the next episode arrives.
+    noteVisibleAgentLaunch();
+    setSystemMemoryEpisode({
+      ...episode({ reading: READING, workloads: workloads() }),
+      episodeId: "episode-2",
+    });
+    await launch();
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(claimMock).toHaveBeenLastCalledWith({ episodeId: "episode-2", surface: "launch-bar" });
+  });
+
   it("raises nothing for a claim Main answers after the episode recovered", async () => {
     setSystemMemoryEpisode(episode({ reading: READING, workloads: workloads() }));
     noteVisibleAgentLaunch();
