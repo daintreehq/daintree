@@ -497,7 +497,7 @@ describe("help.displayImage short-circuit (#9828)", () => {
     const server = createSessionServer("sess-global", deps);
     await server.connect(makeMockTransport());
 
-    for (const name of ["terminal.waitUntilIdle", "assistant.list", "agent.readQuota"]) {
+    for (const name of ["terminal.waitUntilIdle", "terminal.sendCommandOwned", "agent.readQuota"]) {
       const result = (await callTool(server, { name, arguments: {} })) as {
         isError?: boolean;
         content: { text: string }[];
