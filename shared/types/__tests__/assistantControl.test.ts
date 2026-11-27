@@ -71,3 +71,24 @@ describe("AssistantListResultSchema keptSlots (#16763)", () => {
     ).toBe(false);
   });
 });
+
+describe("AssistantListResultSchema self (#18276)", () => {
+  const listing = {
+    projectId: "proj-1",
+    assistants: [],
+    vacantSlots: [],
+    keptSlots: [],
+    global: null,
+  };
+
+  it("is optional, so a host that predates it still answers, and names a slot and an agent", () => {
+    expect(AssistantListResultSchema.safeParse(listing).success).toBe(true);
+    expect(
+      AssistantListResultSchema.safeParse({ ...listing, self: { slot: 2, agentId: "codex" } })
+        .success
+    ).toBe(true);
+    expect(AssistantListResultSchema.safeParse({ ...listing, self: { slot: 2 } }).success).toBe(
+      false
+    );
+  });
+});

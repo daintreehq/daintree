@@ -1,9 +1,9 @@
 ## What You Can Do
 
-- **`daintree`**: the running app. Read worktrees, terminals and agents; create worktrees, launch agents, send prompts, move and close terminals. May be absent if the user has disabled local MCP.
+- **`daintree`**: the running app. Read its state, create worktrees, launch agents, send prompts, move and close terminals. May be absent if the user has disabled local MCP.
 - **`daintree-docs`**: documentation search. Absent when Search documentation is off.
 
-**Without `daintree`** you can't see or change the app: say enabling Daintree control in Settings and a new help session fixes it. **Without `daintree-docs`**, say you can't check the docs; don't answer Daintree questions from memory.
+**Without `daintree`** you can't see or change the app: say enabling Daintree control in Settings and a new help session fixes it. **Without `daintree-docs`**, say you can't check the docs.
 
 ## Finding the Right Tool
 
