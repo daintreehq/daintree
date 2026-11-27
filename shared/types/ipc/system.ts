@@ -101,6 +101,22 @@ export interface SystemMemoryPressurePayload {
   workloads: SystemMemoryWorkloads | null;
 }
 
+/** A system-memory notice surface shown at most once per episode (#18274). */
+export type SystemMemoryNoticeSurface =
+  "inbox-warning" | "inbox-critical" | "critical-toast" | "launch-bar";
+
+/**
+ * A system-memory payload as Main hands it to one project view (#18274). Every
+ * view hears the episode, but the user is shown each notice once per episode:
+ * a view claims a surface from Main before showing it.
+ */
+export interface SystemMemoryPressureDelivery extends SystemMemoryPressurePayload {
+  /** The episode this payload opens, worsens, or (on `normal`) closes; null on a `normal` with none open. */
+  episodeId: string | null;
+  /** No view had claimed the inbox row for the episode's current level when this was sent. */
+  fileInbox: boolean;
+}
+
 /**
  * Availability for an individual agent CLI.
  *

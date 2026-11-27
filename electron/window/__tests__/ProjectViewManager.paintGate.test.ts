@@ -1409,7 +1409,17 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       await switchBack;
 
       expect(pressureSends()).toEqual([
-        [CHANNELS.EVENTS_PUSH, { name: "system:memory-pressure", payload: escalation }],
+        [
+          CHANNELS.EVENTS_PUSH,
+          {
+            name: "system:memory-pressure",
+            payload: {
+              ...escalation,
+              episodeId: expect.any(String),
+              fileInbox: true,
+            },
+          },
+        ],
       ]);
     } finally {
       resetSystemMemoryPressureDeliveryForTesting();

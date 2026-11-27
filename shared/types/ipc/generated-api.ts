@@ -2327,6 +2327,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["slash-commands:list"]["result"]>;
   };
   system: {
+    claimMemoryNotice(
+      ...args: IpcInvokeMap["system:claim-memory-notice"]["args"]
+    ): Promise<IpcInvokeMap["system:claim-memory-notice"]["result"]>;
     getMemorySnapshot(
       ...args: IpcInvokeMap["system:get-memory-snapshot"]["args"]
     ): Promise<IpcInvokeMap["system:get-memory-snapshot"]["result"]>;
@@ -2342,6 +2345,9 @@ export interface GeneratedElectronAPI {
     isMemoryPressureCritical(
       ...args: IpcInvokeMap["system:is-memory-pressure-critical"]["args"]
     ): Promise<IpcInvokeMap["system:is-memory-pressure-critical"]["result"]>;
+    releaseMemoryNotice(
+      ...args: IpcInvokeMap["system:release-memory-notice"]["args"]
+    ): Promise<IpcInvokeMap["system:release-memory-notice"]["result"]>;
     reportTerminalRendererDiagnostics(
       ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
     ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;

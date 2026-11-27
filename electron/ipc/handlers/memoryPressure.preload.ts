@@ -2,6 +2,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const MEMORY_PRESSURE_METHOD_CHANNELS = {
   isMemoryPressureCritical: "system:is-memory-pressure-critical",
+  claimMemoryNotice: "system:claim-memory-notice",
+  releaseMemoryNotice: "system:release-memory-notice",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MEMORY_PRESSURE_METHOD_CHANNELS;

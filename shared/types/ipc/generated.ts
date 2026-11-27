@@ -4860,6 +4860,15 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "system:claim-memory-notice": {
+    args: [
+      payload: {
+        episodeId: string;
+        surface: "inbox-warning" | "inbox-critical" | "critical-toast" | "launch-bar";
+      },
+    ];
+    result: boolean;
+  };
   "system:get-memory-snapshot": {
     args: [];
     result: import("../memoryAccounting.js").CompositeMemorySnapshot;
@@ -4879,6 +4888,15 @@ export interface GeneratedIpcInvokeMap {
   "system:is-memory-pressure-critical": {
     args: [];
     result: boolean;
+  };
+  "system:release-memory-notice": {
+    args: [
+      payload: {
+        episodeId: string;
+        surface: "inbox-warning" | "inbox-critical" | "critical-toast" | "launch-bar";
+      },
+    ];
+    result: void;
   };
   "system:report-terminal-renderer-diagnostics": {
     args: [
