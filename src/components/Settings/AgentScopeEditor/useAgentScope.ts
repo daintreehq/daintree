@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
@@ -28,7 +28,7 @@ interface UseAgentScopeProps {
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
   editPick: EditPick;
-  setEditPick: (pick: EditPick) => void;
+  setEditPick: Dispatch<SetStateAction<EditPick>>;
   editName: string;
   setEditName: (name: string) => void;
   lastEditTimeRef: React.MutableRefObject<number>;
@@ -203,7 +203,8 @@ export function useAgentScope({
     void (async () => {
       try {
         await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
-        setPick({ agentId, id });
+        // Another agent's pick made while this save was pending stays.
+        setPick((cur) => (cur && cur.agentId !== agentId ? cur : { agentId, id }));
         onSettingsChange?.();
         // Editing the copy re-keys the editor, removing the Duplicate button that had
         // focus. Hand it to the edit picker, which now names the copy. The launch
@@ -241,7 +242,8 @@ export function useAgentScope({
         } else {
           await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
         }
-        if (pick?.id === presetId) setPick(null);
+        // Only the pick this delete removes: a newer one made while saving stays.
+        setPick((cur) => (cur?.agentId === agentId && cur.id === presetId ? null : cur));
         onSettingsChange?.();
       } catch (error) {
         logError("Failed to delete preset", error);

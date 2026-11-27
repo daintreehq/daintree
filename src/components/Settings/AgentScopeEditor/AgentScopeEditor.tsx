@@ -1,4 +1,4 @@
-import { Fragment, useRef } from "react";
+import { Fragment, useRef, type Dispatch, type SetStateAction } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
@@ -26,7 +26,7 @@ interface AgentScopeEditorProps {
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
   editPick: EditPick;
-  setEditPick: (pick: EditPick) => void;
+  setEditPick: Dispatch<SetStateAction<EditPick>>;
   editName: string;
   setEditName: (name: string) => void;
   lastEditTimeRef: React.MutableRefObject<number>;

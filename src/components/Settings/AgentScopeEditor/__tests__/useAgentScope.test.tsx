@@ -28,6 +28,13 @@ function makeProps(
   };
 }
 
+// The hook sets the pick with an updater; this records what it settles on from "no pick".
+function record(picks: unknown[]): Parameters<typeof useAgentScope>[0]["setEditPick"] {
+  return (next) => {
+    picks.push(typeof next === "function" ? next(null) : next);
+  };
+}
+
 describe("useAgentScope — permission Inherit follows the global switch (#16414)", () => {
   function setGlobalSkip(globalSkipPermissions: boolean) {
     useAgentSettingsStore.setState({
@@ -206,10 +213,10 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
   it("opens the copy for editing and leaves the launch preset alone (#18278)", async () => {
     const own = { id: "user-1", name: "Mine" };
     const writes: Array<Partial<AgentSettingsEntry>> = [];
-    const picks: Array<{ agentId: string; id: string | undefined } | null> = [];
+    const picks: unknown[] = [];
     const props = {
       ...makeProps("codex", { customPresets: [own], presetId: "user-1" }),
-      setEditPick: (p: { agentId: string; id: string | undefined } | null) => picks.push(p),
+      setEditPick: record(picks),
       updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
         writes.push(u);
       },
@@ -293,7 +300,7 @@ describe("useAgentScope — editing a preset is separate from the launch preset 
     const picks: unknown[] = [];
     const props = {
       ...makeProps("claude", entry),
-      setEditPick: (p: unknown) => picks.push(p),
+      setEditPick: record(picks),
       updateAgent: async (_id: string, u: Partial<AgentSettingsEntry>) => {
         writes.push(u);
       },

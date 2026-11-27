@@ -448,20 +448,21 @@ export async function getPresetOptionLabels(
     "Get preset option labels",
     async () => {
       const listbox = await openPresetSelector(window);
-      const labels = await listbox.locator('[role="option"]').allTextContents();
+      const labels = await listbox.locator('[role="option"]').evaluateAll((els) =>
+        els.map((el) => {
+          const copy = el.cloneNode(true) as Element;
+          // The edit picker tags the launch preset's option; the label is the rest.
+          copy.querySelector('[data-testid="preset-launch-marker"]')?.remove();
+          return copy.textContent ?? "";
+        })
+      );
       // Escape, not a click on the trigger. The open listbox is a dismissable
       // layer that covers its own trigger, so a click there is swallowed by the
       // overlay and never toggles it shut — with `force` or without — leaving
       // the listbox open for the next step to trip over.
       await window.keyboard.press("Escape");
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
-      // The edit picker tags the launch preset's option with a trailing "Launch".
-      return labels.map((s) =>
-        s
-          .trim()
-          .replace(/Launch$/, "")
-          .trim()
-      );
+      return labels.map((s) => s.trim());
     },
     { box: true }
   );
