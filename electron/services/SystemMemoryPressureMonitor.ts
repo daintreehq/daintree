@@ -35,6 +35,21 @@ export const SWAP_PRESSURE_MIN_USED_MB = 4096;
  * its own confirmation and minimum view age on top.
  */
 export const SWAP_PRESSURE_CONFIRM_SAMPLES = 2;
+/**
+ * Off Darwin, where swap (or the Windows commit limit) has a fixed size, an
+ * episode that swap opened stays open until it falls to this percentage, so a
+ * reading hovering on {@link SWAP_USED_PERCENT_THRESHOLD} cannot flap (#18273).
+ */
+export const SWAP_CLEAR_PERCENT = 70;
+/**
+ * On Darwin swap counts toward the episode only while it grows: occupancy is
+ * relative to whatever swapfiles exist, and swap in use falls only on a
+ * restart, so a Mac carrying old swap reads nearly full for days (#18273).
+ * Growth in swap used between consecutive samples, per minute, that the swap
+ * cause needs; once it holds an open episode, the lower hold rate keeps it.
+ */
+export const SWAP_GROWTH_OPEN_MB_PER_MIN = 128;
+export const SWAP_GROWTH_HOLD_MB_PER_MIN = 64;
 /** Consecutive over-threshold samples that open an episode. */
 export const EPISODE_OPEN_SAMPLES = 3;
 /**
@@ -224,8 +239,8 @@ function mergeOverCauses(seen: OverCauses | null, observed: OverCauses): OverCau
 
 /**
  * Observes whether the machine itself is degraded — swap nearly full, or on
- * Darwin an `fseventsd` grown to many gigabytes or the kernel reporting memory
- * pressure (#12799) — so a slow Mac is not read as
+ * Darwin swap growing (#18273), an `fseventsd` grown to many gigabytes or the
+ * kernel reporting memory pressure (#12799) — so a slow Mac is not read as
  * a slow Daintree (#12462). Numbers only: it never infers a cause.
  *
  * The first over-threshold sample logs a `system-health` record, and another
@@ -276,6 +291,29 @@ export function createSystemMemoryPressureMonitor(
   let swapPressureStreak = 0;
   let swapPressureConfirmed = false;
   let lastSwapSampleAt = Number.NEGATIVE_INFINITY;
+  /** The last swap reading growth is measured from; null rebaselines. */
+  let swapBaseline: { usedMb: number; at: number } | null = null;
+  /** Swap is a cause of the open episode, so it is held by the lower band. */
+  let swapHoldsEpisode = false;
+
+  /**
+   * Swap growth in MB per minute since the previous reading, or null when it
+   * cannot be measured: a failed reading, the first after one, a probe that
+   * straddled a sleep, or a gap too long for the two to be consecutive.
+   */
+  function measureSwapGrowth(swap: SwapUsage | null, startedAt: number): number | null {
+    const probeMs = wallNow() - startedAt;
+    const baseline = swapBaseline;
+    swapBaseline = swap === null ? null : { usedMb: swap.usedMb, at: startedAt };
+    if (swap === null || baseline === null) return null;
+    if (probeMs < 0 || probeMs > PROBE_TIMEOUT_MS * 2) {
+      swapBaseline = null;
+      return null;
+    }
+    const gapMs = startedAt - baseline.at;
+    if (gapMs <= 0 || gapMs > SWAP_PRESSURE_STALE_MS) return null;
+    return ((swap.usedMb - baseline.usedMb) * 60_000) / gapMs;
+  }
 
   /**
    * A failed reading breaks the run like any other: a missing measurement
@@ -327,13 +365,32 @@ export function createSystemMemoryPressureMonitor(
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
-    const swapOver = swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
+    const swapPercentOver =
+      swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
+    // Null where this sample cannot say whether swap is a cause.
+    let swapCause: boolean | null;
+    if (deps.isDarwin) {
+      const growth = measureSwapGrowth(swap, startedAt);
+      swapCause =
+        growth === null
+          ? null
+          : growth >=
+            (swapHoldsEpisode ? SWAP_GROWTH_HOLD_MB_PER_MIN : SWAP_GROWTH_OPEN_MB_PER_MIN);
+    } else {
+      swapCause =
+        swapUsedPercent === null
+          ? null
+          : swapUsedPercent > (swapHoldsEpisode ? SWAP_CLEAR_PERCENT : SWAP_USED_PERCENT_THRESHOLD);
+    }
+    const swapOver = swapCause === true;
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
     recordSwapPressureSample(sample, swapUsedPercent, startedAt);
     if (deps.onWatchdogPressure) {
       const heavySwap =
-        swapOver && swap !== null && (!deps.isDarwin || swap.usedMb >= SWAP_PRESSURE_MIN_USED_MB);
+        swapPercentOver &&
+        swap !== null &&
+        (!deps.isDarwin || swap.usedMb >= SWAP_PRESSURE_MIN_USED_MB);
       const observedAll = swap !== null && (!deps.isDarwin || kernelPressureLevel !== null);
       deps.onWatchdogPressure(
         kernelOver || heavySwap ? true : observedAll ? false : null,
@@ -356,7 +413,7 @@ export function createSystemMemoryPressureMonitor(
       const episodeOpening = !episodeOpen && overStreak >= EPISODE_OPEN_SAMPLES;
       // Figures are left out: they move on every reading.
       const observed: OverCauses = {
-        swapOver: swap === null ? null : swapOver,
+        swapOver: swapCause,
         fseventsdOver: fseventsdRssMb === null ? null : fseventsdOver,
         kernelPressureLevel,
       };
@@ -374,6 +431,8 @@ export function createSystemMemoryPressureMonitor(
           (fseventsdOver && published.fseventsdRssMb === null) ||
           (kernelPressureLevel !== null &&
             kernelPressureLevel > (published.kernelPressureLevel ?? 1)));
+      // A failed swap reading keeps the hold as it was.
+      swapHoldsEpisode = (episodeOpen || episodeOpening) && (swapCause ?? swapHoldsEpisode);
       if (!episodeOpening && !escalating) return null;
       if (escalating) logWarn("system-health", { state: "escalated", ...figures });
       episodeOpen = true;
@@ -400,8 +459,9 @@ export function createSystemMemoryPressureMonitor(
       };
     }
 
+    if (swapCause !== null) swapHoldsEpisode = false;
     const fullyObserved =
-      swap !== null &&
+      swapCause !== null &&
       (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An
