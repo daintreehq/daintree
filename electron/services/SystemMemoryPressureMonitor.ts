@@ -378,8 +378,9 @@ export function createSystemMemoryPressureMonitor(
       swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
     recordSwapPressureSample(sample, swapUsedPercent, startedAt);
     // Null where this sample cannot say whether swap is a cause. On Darwin a
-    // reading with nothing to measure growth against shows none: it cannot
-    // open an episode, and it must not hold back recovery either.
+    // reading with nothing to measure growth against shows none, so it cannot
+    // open an episode or hold back a recovery from another cause; while swap
+    // holds the episode it is unknown, since it cannot show the growth stopped.
     let swapCause: boolean | null;
     if (swap === null) {
       swapBaseline = null;
@@ -387,8 +388,12 @@ export function createSystemMemoryPressureMonitor(
     } else if (deps.isDarwin) {
       const growth = measureSwapGrowth(swap, startedAt, startedMono);
       swapCause =
-        growth !== null &&
-        growth >= (swapHoldsEpisode ? SWAP_GROWTH_HOLD_MB_PER_MIN : SWAP_GROWTH_OPEN_MB_PER_MIN);
+        growth === null
+          ? swapHoldsEpisode
+            ? null
+            : false
+          : growth >=
+            (swapHoldsEpisode ? SWAP_GROWTH_HOLD_MB_PER_MIN : SWAP_GROWTH_OPEN_MB_PER_MIN);
     } else {
       swapCause =
         swapUsedPercent !== null &&
@@ -470,7 +475,7 @@ export function createSystemMemoryPressureMonitor(
     }
 
     const fullyObserved =
-      swap !== null &&
+      swapCause !== null &&
       (!deps.isDarwin || (fseventsdRssMb !== null && kernelPressureLevel !== null));
     if (!fullyObserved) {
       // Breaks both runs: "consecutive" means consecutive observations. An

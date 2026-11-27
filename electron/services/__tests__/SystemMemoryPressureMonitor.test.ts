@@ -1297,6 +1297,27 @@ describe("createSystemMemoryPressureMonitor", () => {
       expect(publish).not.toHaveBeenCalled();
     });
 
+    it("never lets readings across long gaps close an episode swap holds", async () => {
+      let rate = SWAP_GROWTH_OPEN_MB_PER_MIN;
+      const { monitor, tick } = makeMonitor({ swap: swapGrowingAt(() => rate) });
+
+      await tick(EPISODE_OPEN_SAMPLES + 1);
+      rate = 0;
+      await tick(EPISODE_CLEAR_SAMPLES - 1);
+      rate = 90;
+      for (let i = 0; i < EPISODE_CLEAR_SAMPLES; i++) {
+        now += SWAP_PRESSURE_STALE_MS + 1;
+        await monitor.sample();
+      }
+      expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded"]);
+
+      // Paired readings again show whether growth stopped.
+      rate = 0;
+      now += SAMPLE_INTERVAL_MS;
+      await tick(EPISODE_CLEAR_SAMPLES + 1);
+      expect(publish.mock.calls.map(([p]) => p.status)).toEqual(["degraded", "normal"]);
+    });
+
     it("does not let a kernel episode hold swap to the lower rate", async () => {
       let level: KernelPressureLevel = 2;
       const { tick } = makeMonitor({
