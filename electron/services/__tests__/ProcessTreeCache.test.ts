@@ -403,71 +403,142 @@ describe("poll scheduling and adaptive backoff", () => {
   // A sweep that takes `ms` to read the tree.
   function slowRefresh(ms: number): void {
     refreshSpy.mockImplementation(
-      () => new Promise<boolean>((r) => setTimeout(() => r(false), ms))
+      () => new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))
     );
   }
 
   it("reports when the last good sweep began, not when it finished (#18291)", async () => {
     await vi.advanceTimersByTimeAsync(0);
+    const first = cache.getLastSweepStartedAt();
+    await vi.advanceTimersByTimeAsync(1_500);
     slowRefresh(300);
     const startedAt = Date.now();
     cache.requestRefresh();
+    expect(cache.getLastSweepStartedAt()).toBe(first);
+
     await vi.advanceTimersByTimeAsync(300);
 
     expect(cache.getLastSweepStartedAt()).toBe(startedAt);
     expect(cache.getLastRefreshTime()).toBe(startedAt + 300);
   });
 
-  it("keeps the last good sweep's start when a sweep fails", async () => {
-    await vi.advanceTimersByTimeAsync(0);
-    const good = cache.getLastSweepStartedAt();
-    await vi.advanceTimersByTimeAsync(1_000);
-    refreshSpy.mockRejectedValueOnce(new Error("ps failed"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    cache.requestRefresh();
-    await vi.advanceTimersByTimeAsync(0);
+  it("keeps the last good sweep's times when a sweep fails, and moves on once one succeeds", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const goodStart = cache.getLastSweepStartedAt();
+      const goodEnd = cache.getLastRefreshTime();
+      await vi.advanceTimersByTimeAsync(1_000);
+      refreshSpy.mockRejectedValueOnce(new Error("ps failed"));
+      const calls = refreshSpy.mock.calls.length;
+      cache.requestRefresh();
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(cache.getLastSweepStartedAt()).toBe(good);
+      expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
+      expect(cache.getLastError()?.message).toBe("ps failed");
+      expect(cache.getLastSweepStartedAt()).toBe(goodStart);
+      expect(cache.getLastRefreshTime()).toBe(goodEnd);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const recoveredAt = Date.now();
+      cache.requestRefresh();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.getLastSweepStartedAt()).toBe(recoveredAt);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
-  it("sweeps at once when asked early", async () => {
+  it("sweeps at once when asked a second or more after the last sweep", async () => {
     cache.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     const calls = refreshSpy.mock.calls.length;
 
     cache.requestRefresh();
-    await vi.advanceTimersByTimeAsync(0);
 
     expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
   });
 
-  it("follows a sweep already running with one more, shared by every request made meanwhile", async () => {
+  it("spaces early sweeps a second apart however many callers ask", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0);
-    slowRefresh(300);
+    const calls = refreshSpy.mock.calls.length;
+
+    for (let i = 0; i < 5; i++) {
+      cache.requestRefresh();
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    // 750 ms after the last sweep began: none yet.
+    expect(refreshSpy).toHaveBeenCalledTimes(calls);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
+    // Then back on schedule.
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs() - 1);
+    expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("never pushes out a poll already due sooner than an early sweep", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    // A fast cadence: the next poll lands 500 ms after the last sweep began.
+    cache.setPollInterval(500);
+    const calls = refreshSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(100);
     cache.requestRefresh();
-    const inFlightStart = Date.now();
+
+    await vi.advanceTimersByTimeAsync(399);
+    expect(refreshSpy).toHaveBeenCalledTimes(calls);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("follows a sweep already running with one more, a second after it began", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    slowRefresh(300);
+    const before = refreshSpy.mock.calls.length;
+    cache.requestRefresh();
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
     await vi.advanceTimersByTimeAsync(100);
     cache.requestRefresh();
     cache.requestRefresh();
-    const callsDuring = refreshSpy.mock.calls.length;
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
 
-    await vi.advanceTimersByTimeAsync(200);
-    expect(refreshSpy).toHaveBeenCalledTimes(callsDuring + 1);
+    await vi.advanceTimersByTimeAsync(899);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 2);
+
+    // One follow-up for all three requests, then the normal schedule.
     await vi.advanceTimersByTimeAsync(300);
-    expect(cache.getLastSweepStartedAt()).toBeGreaterThan(inFlightStart);
-    // Back on schedule: nothing more until the interval elapses.
-    expect(refreshSpy).toHaveBeenCalledTimes(callsDuring + 1);
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs() - 1);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 2);
+  });
+
+  it("drops a follow-up asked for mid-sweep when the cache stops", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    slowRefresh(300);
+    const before = refreshSpy.mock.calls.length;
+    cache.requestRefresh();
+    cache.requestRefresh();
+    cache.stop();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("ignores an early request after stop()", async () => {
     cache.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     const calls = refreshSpy.mock.calls.length;
     cache.stop();
 
     cache.requestRefresh();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(refreshSpy).toHaveBeenCalledTimes(calls);
   });

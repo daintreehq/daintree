@@ -91,6 +91,8 @@ function createMockProcessTreeCache(): ProcessTreeCache {
     onRefresh: vi.fn().mockReturnValue(() => {}),
     refresh: vi.fn(),
     getLastRefreshTime: vi.fn().mockReturnValue(0),
+    getLastSweepStartedAt: vi.fn().mockReturnValue(0),
+    requestRefresh: vi.fn(),
     getLastError: vi.fn().mockReturnValue(null),
     getCacheSize: vi.fn().mockReturnValue(0),
   } as unknown as ProcessTreeCache;
@@ -1142,6 +1144,82 @@ describe("TerminalProcess spawn command identity seeding", () => {
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
       expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
       expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a Windows agy that draws a prompt-shaped line until the census loses it (#18291)", async () => {
+    vi.useFakeTimers();
+    const cache = createMockProcessTreeCache();
+    // PowerShell (the PTY root, 123) running agy.exe (456).
+    let agyAlive = true;
+    let sweptAt = Date.now();
+    const listeners = new Set<() => void>();
+    vi.mocked(cache.getProcess).mockImplementation((pid: number) => {
+      if (pid === 123) {
+        return {
+          pid,
+          ppid: 1,
+          comm: "powershell.exe",
+          command: "powershell.exe",
+          cpuPercent: 0,
+          memoryKb: 0,
+        };
+      }
+      if (pid === 456 && agyAlive) {
+        return {
+          pid,
+          ppid: 123,
+          comm: "agy.exe",
+          command: "agy.exe -i hello",
+          cpuPercent: 0,
+          memoryKb: 0,
+        };
+      }
+      return undefined;
+    });
+    vi.mocked(cache.getChildPids).mockImplementation((pid: number) =>
+      pid === 123 && agyAlive ? [456] : []
+    );
+    vi.mocked(cache.getDescendantPids).mockImplementation((pid: number) =>
+      pid === 123 && agyAlive ? [456] : []
+    );
+    vi.mocked(cache.getLastSweepStartedAt).mockImplementation(() => sweptAt);
+    vi.mocked(cache.onRefresh).mockImplementation((listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    });
+    const sweep = () => {
+      sweptAt = Date.now();
+      for (const listener of [...listeners]) listener();
+    };
+    const terminal = createPlainTerminalWithCommand("t-agy-widget", "agy -i hello", {
+      processTreeCache: cache,
+    });
+    const pty = getMockPty(terminal);
+
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(terminal.getInfo().detectedAgentId).toBe("antigravity");
+
+      pty.__emitData(
+        "Question 1/1: Run the greeting script here?\r\n> 1. Yes\r\n  2. No\r\nLast shell location:\r\nPS C:\\dev\\wintest>"
+      );
+      for (let i = 0; i < 4; i++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        sweep();
+      }
+      expect(terminal.getInfo().detectedAgentId).toBe("antigravity");
+      expect(cache.requestRefresh).toHaveBeenCalled();
+
+      agyAlive = false;
+      pty.__emitData("\r\nPS C:\\dev\\wintest> ");
+      sweep();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
       vi.useRealTimers();

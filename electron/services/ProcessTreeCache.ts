@@ -103,6 +103,8 @@ function startedAfter(a: string | undefined, b: string | undefined): boolean {
   return Number.isFinite(aMs) && Number.isFinite(bMs) && aMs > bMs;
 }
 
+const EARLY_SWEEP_MIN_GAP_MS = 1_000;
+
 export class ProcessTreeCache {
   private cache: Map<number, ProcessInfo> = new Map();
   private childrenMap: Map<number, number[]> = new Map();
@@ -122,6 +124,10 @@ export class ProcessTreeCache {
   // An early sweep asked for while one was already running, which started too
   // soon to answer it.
   private refreshRequested: boolean = false;
+  // When the last sweep of any outcome began, and when the pending poll is due
+  // (both performance.now()); they space early sweeps however many callers ask.
+  private lastSweepAttemptAt = Number.NEGATIVE_INFINITY;
+  private pollDueAt = 0;
   private isWindows: boolean = process.platform === "win32";
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
@@ -159,6 +165,7 @@ export class ProcessTreeCache {
 
   stop(): void {
     this.disposed = true;
+    this.refreshRequested = false;
     if (this.pollTimer !== null) {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
@@ -190,6 +197,7 @@ export class ProcessTreeCache {
       clearTimeout(this.pollTimer);
     }
     this.pollArmedAt = armedAt;
+    this.pollDueAt = performance.now() + delayMs;
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       if (this.disposed) return;
@@ -298,6 +306,7 @@ export class ProcessTreeCache {
         );
       }
       this.armCensusIdleRetire();
+      this.refreshRequested = false;
       if (!this.disposed) {
         this.schedulePoll(this.currentIntervalMs);
       }
@@ -312,6 +321,7 @@ export class ProcessTreeCache {
 
     this.isRefreshing = true;
     this.refreshRequested = false;
+    this.lastSweepAttemptAt = performance.now();
     const sweepStartedAt = Date.now();
     let outcome: RefreshOutcome = "error";
     try {
@@ -376,7 +386,8 @@ export class ProcessTreeCache {
           this.advanceBackoff();
         }
         if (this.refreshRequested) {
-          void this.refresh();
+          this.refreshRequested = false;
+          this.schedulePoll(Math.min(this.currentIntervalMs, this.earlySweepDelay()));
         } else {
           this.schedulePoll(this.currentIntervalMs);
         }
@@ -952,7 +963,18 @@ export class ProcessTreeCache {
       this.refreshRequested = true;
       return;
     }
-    void this.refresh();
+    const delay = this.earlySweepDelay();
+    if (delay === 0) {
+      void this.refresh();
+    } else if (this.pollTimer === null || performance.now() + delay < this.pollDueAt) {
+      this.schedulePoll(delay);
+    }
+  }
+
+  // A machine-wide census is not free on Windows, and each terminal holding a
+  // prompt asks for one; early sweeps start no closer than this together.
+  private earlySweepDelay(): number {
+    return Math.max(0, this.lastSweepAttemptAt + EARLY_SWEEP_MIN_GAP_MS - performance.now());
   }
 
   /** What `memoryKb` measures as of the last successful census. */

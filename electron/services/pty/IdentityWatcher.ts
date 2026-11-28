@@ -47,6 +47,10 @@ export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 // widget that quotes a prompt can stay on screen for minutes; a real exit is
 // still confirmed within about a second.
 export const CENSUS_RECHECK_MIN_MS = 1_000;
+// A census that lands no sweep this long after the prompt appeared has stopped
+// answering (its helper failed, or it lost the terminal's row), and holding on
+// its last word would pin an exited agent. The prompt decides again.
+export const CENSUS_UNANSWERED_MS = 5_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -684,7 +688,9 @@ export class IdentityWatcher {
     // On Windows one prompt-shaped chunk was enough to demote, and a live
     // agent's own output can carry one (#18291). While the census can still
     // vouch for the agent, the poll decides once a sweep confirms the exit.
+    // Only a running poll can: a stopped watcher keeps the chunk's verdict.
     if (
+      this.submittedAt !== null &&
       !foregroundShellIdle.supported &&
       hasReturnedShellPromptOutput &&
       !hasRecentCommandFailureOutput &&
@@ -879,14 +885,16 @@ export class IdentityWatcher {
   // early sweep is requested. A census that has seen the agent can only lose
   // it by the agent exiting, so its absence confirms at once.
   private censusHoldsPrompt(agentProcessPresent: boolean | undefined): boolean {
+    if (agentProcessPresent === undefined) return false;
     const sampledAt = this.delegate.getProcessTreeSampledAt?.();
-    if (sampledAt === undefined || agentProcessPresent === undefined) return false;
+    if (sampledAt === undefined) return false;
     const now = Date.now();
     if (this.censusCandidateSince === 0) this.censusCandidateSince = now;
-    if (
-      agentProcessPresent === false &&
-      (this.sawAgentProcess || sampledAt > this.censusCandidateSince)
-    ) {
+    const sampledSincePrompt = sampledAt >= this.censusCandidateSince;
+    if (agentProcessPresent === false && (this.sawAgentProcess || sampledSincePrompt)) {
+      return false;
+    }
+    if (!sampledSincePrompt && now - this.censusCandidateSince >= CENSUS_UNANSWERED_MS) {
       return false;
     }
     if (now - this.censusRequestedAt >= CENSUS_RECHECK_MIN_MS) {
@@ -1086,8 +1094,14 @@ export class IdentityWatcher {
         this.delegate.getCursorLine(),
         { allowHistoryScan: true }
       ).isPrompt;
+    // Only once committed: a prompt still in the history from the launch line
+    // must not start the clock a later sweep is measured against.
     let censusHoldsPrompt = false;
-    if (agentProcessPresent !== undefined && (promptVisible || unambiguousShellPromptVisible)) {
+    if (
+      this.committed &&
+      agentProcessPresent !== undefined &&
+      (promptVisible || unambiguousShellPromptVisible)
+    ) {
       censusHoldsPrompt = this.censusHoldsPrompt(agentProcessPresent);
     } else {
       this.censusCandidateSince = 0;
@@ -1331,7 +1345,9 @@ export class IdentityWatcher {
       !hasRecentCommandFailureOutput &&
       !this.hasAgentUiPromptFalsePositive(false);
 
-    if (isAgent && !foreground.supported && censusHoldsPrompt && !nonPosixAgentExited) {
+    // Ahead of the descendant-count exit too: a count that fell before the
+    // prompt appeared is as stale as the census sweep it came with.
+    if (isAgent && !foreground.supported && censusHoldsPrompt) {
       return HOLD_AGENT_PROCESS_PRESENT;
     }
 
