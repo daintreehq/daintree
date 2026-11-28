@@ -1512,23 +1512,29 @@ describe("IdentityWatcher", () => {
         expect(clear).toHaveBeenCalledWith("prompt-return");
       });
 
-      it("keeps judging a held prompt that later output pushed off screen", async () => {
-        const { state, clear, sweep, show } = await launchAgy(
-          { agentProcessPresent: false },
-          { detected: false }
-        );
-        // agy quits before any sweep has named it; the shell prints its prompt,
-        // then more output scrolls the prompt out of the lines the poll reads.
-        show(EXIT_TAIL);
-        state.visibleLines = ["line one", "line two", "line three", "line four"];
-        state.cursorLine = "line four";
-        await vi.advanceTimersByTimeAsync(600);
+      it("gives a later prompt its own wait for the census", async () => {
+        const { state, clear, watcher, sweep, show } = await launchAgy();
+        // The census helper stops answering while the first widget is up.
+        show([...WIDGET, QUOTED_PROMPT]);
+        const first = state.censusRequests;
+        while (state.censusRequests < first + 10) {
+          await vi.advanceTimersByTimeAsync(200);
+        }
         expect(clear).not.toHaveBeenCalled();
 
-        sweep(false);
-        await vi.advanceTimersByTimeAsync(1_000);
+        // The widget closes; agy keeps working and later asks again.
+        state.visibleLines = NEUTRAL;
+        state.cursorLine = "";
+        watcher.noteScreenChange();
+        await vi.advanceTimersByTimeAsync(1_500);
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(clear).not.toHaveBeenCalled();
 
-        expect(clear).toHaveBeenCalledWith("prompt-return");
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
       });
 
       it("never measures a sweep against a prompt seen before the command committed", async () => {

@@ -302,9 +302,6 @@ export class IdentityWatcher {
   private censusCandidateSince = 0;
   private censusRequestedAt = 0;
   private censusUnansweredRequests = 0;
-  // A raw chunk's prompt is being held for a sweep: the poll keeps judging it
-  // even once later output has pushed it off the lines it scans.
-  private censusRawPromptPending = false;
   // A prompt already on screen when the next command is submitted is stale.
   // Only a prompt emitted afterward can cancel an uncommitted process badge.
   private sawPromptAfterSubmit = false;
@@ -475,7 +472,6 @@ export class IdentityWatcher {
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
     this.censusCandidateSince = 0;
-    this.censusRawPromptPending = false;
     this.censusUnansweredRequests = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
@@ -704,7 +700,6 @@ export class IdentityWatcher {
       !hasRecentCommandFailureOutput &&
       this.censusHoldsReturnedPromptOutput()
     ) {
-      this.censusRawPromptPending = true;
       return;
     }
     if (foregroundShellIdle.empty) {
@@ -756,7 +751,6 @@ export class IdentityWatcher {
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
     this.censusCandidateSince = 0;
-    this.censusRawPromptPending = false;
     this.censusUnansweredRequests = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
@@ -1115,16 +1109,12 @@ export class IdentityWatcher {
     // Only once committed: a prompt still in the history from the launch line
     // must not start the clock a later sweep is measured against.
     let censusHoldsPrompt = false;
-    if (agentProcessPresent === true) {
-      // A live agent drew the held chunk; its own exit is now read from the census.
-      this.censusRawPromptPending = false;
-    }
-    const censusPromptEvidence =
-      promptVisible || unambiguousShellPromptVisible || this.censusRawPromptPending;
-    if (this.committed && censusJudgesAgent && censusPromptEvidence) {
+    if (this.committed && censusJudgesAgent && (promptVisible || unambiguousShellPromptVisible)) {
       censusHoldsPrompt = this.censusHoldsPrompt(agentProcessPresent);
     } else if (this.committed) {
+      // A later prompt is new evidence with its own wait for the census.
       this.censusCandidateSince = 0;
+      this.censusUnansweredRequests = 0;
     }
     // A live identity only pre-empts the fallback commit when it matches what
     // the fallback detected — a stale badge (e.g. a prior `npm run dev` whose
@@ -1219,9 +1209,7 @@ export class IdentityWatcher {
       // An icon-only command can inherit the previous shell prompt in the
       // visible buffer. Do not treat it as this command's return until a new
       // prompt has arrived in output since submission.
-      promptVisible:
-        (agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false) ||
-        this.censusRawPromptPending,
+      promptVisible: agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput: this.hasRecentCommandFailureOutput(),
       censusHoldsPrompt,
