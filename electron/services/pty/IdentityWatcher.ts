@@ -47,10 +47,11 @@ export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 // widget that quotes a prompt can stay on screen for minutes; a real exit is
 // still confirmed within about a second.
 export const CENSUS_RECHECK_MIN_MS = 1_000;
-// A census that lands no sweep this long after the prompt appeared has stopped
-// answering (its helper failed, or it lost the terminal's row), and holding on
-// its last word would pin an exited agent. The prompt decides again.
-export const CENSUS_UNANSWERED_MS = 5_000;
+// A census that has finished no sweep this long, while a prompt has waited as
+// long, has stopped answering (its helper failed), and holding on its last
+// word would pin an exited agent: the prompt decides again. Longer than the
+// Windows census request's own 10 s timeout, so one slow sweep still answers.
+export const CENSUS_UNANSWERED_MS = 12_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -235,10 +236,10 @@ export interface IdentityWatcherDelegate {
   /** Called after each census refresh; returns the unsubscribe. Absent when there is no census. */
   onProcessTreeRefresh?(listener: () => void): () => void;
   /**
-   * When the last successful census sweep began (`Date.now()`, 0 before the
-   * first); `undefined` when there is no census.
+   * When the last successful census sweep began and finished (`Date.now()`,
+   * both 0 before the first); `undefined` when there is no census.
    */
-  getProcessTreeSampledAt?(): number | undefined;
+  getProcessTreeSample?(): { readonly startedAt: number; readonly finishedAt: number } | undefined;
   /** Ask the census for a sweep sooner than its schedule. */
   requestProcessTreeRefresh?(): void;
   readForegroundProcessGroupSnapshot(): {
@@ -880,21 +881,28 @@ export class IdentityWatcher {
   // lifecycle evidence the screen gives, and a live agent can draw one (a
   // question quoting a path, a tool transcript). The agent's own process in
   // the census outranks it: while a sweep still finds the process, or none
-  // has run since the prompt appeared (before the census first named the
-  // agent, an absence can mean it hasn't looked yet), the prompt waits and an
-  // early sweep is requested. A census that has seen the agent can only lose
-  // it by the agent exiting, so its absence confirms at once.
+  // has begun since the prompt appeared (before the census first named the
+  // agent, an absence can mean it hasn't looked yet; a terminal too new for
+  // the last sweep has no row at all), the prompt waits and an early sweep is
+  // requested. A census that has seen the agent can only lose it by the agent
+  // exiting, so its absence confirms at once.
   private censusHoldsPrompt(agentProcessPresent: boolean | undefined): boolean {
-    if (agentProcessPresent === undefined) return false;
-    const sampledAt = this.delegate.getProcessTreeSampledAt?.();
-    if (sampledAt === undefined) return false;
+    const sample = this.delegate.getProcessTreeSample?.();
+    // A census that has never finished a sweep can't vouch for anything.
+    if (!sample || sample.finishedAt === 0) return false;
     const now = Date.now();
     if (this.censusCandidateSince === 0) this.censusCandidateSince = now;
-    const sampledSincePrompt = sampledAt >= this.censusCandidateSince;
-    if (agentProcessPresent === false && (this.sawAgentProcess || sampledSincePrompt)) {
+    const sampledSincePrompt = sample.startedAt >= this.censusCandidateSince;
+    if (agentProcessPresent === undefined) {
+      // It looked since the prompt and still can't place this terminal.
+      if (sampledSincePrompt) return false;
+    } else if (agentProcessPresent === false && (this.sawAgentProcess || sampledSincePrompt)) {
       return false;
     }
-    if (!sampledSincePrompt && now - this.censusCandidateSince >= CENSUS_UNANSWERED_MS) {
+    if (
+      now - this.censusCandidateSince >= CENSUS_UNANSWERED_MS &&
+      now - sample.finishedAt >= CENSUS_UNANSWERED_MS
+    ) {
       return false;
     }
     if (now - this.censusRequestedAt >= CENSUS_RECHECK_MIN_MS) {
@@ -1057,10 +1065,9 @@ export class IdentityWatcher {
     // Without a foreground probe (Windows), whether the agent still runs is
     // read from its own process in the census, never from a descendant count.
     const agentType = this.identity?.agentType;
+    const censusJudgesAgent = Boolean(agentType) && foregroundShellIdle?.supported === false;
     const agentProcessPresent =
-      agentType && foregroundShellIdle?.supported === false
-        ? this.delegate.hasAgentProcess(agentType)
-        : undefined;
+      agentType && censusJudgesAgent ? this.delegate.hasAgentProcess(agentType) : undefined;
     if (agentProcessPresent) {
       this.sawAgentProcess = true;
     }
@@ -1097,11 +1104,7 @@ export class IdentityWatcher {
     // Only once committed: a prompt still in the history from the launch line
     // must not start the clock a later sweep is measured against.
     let censusHoldsPrompt = false;
-    if (
-      this.committed &&
-      agentProcessPresent !== undefined &&
-      (promptVisible || unambiguousShellPromptVisible)
-    ) {
+    if (this.committed && censusJudgesAgent && (promptVisible || unambiguousShellPromptVisible)) {
       censusHoldsPrompt = this.censusHoldsPrompt(agentProcessPresent);
     } else {
       this.censusCandidateSince = 0;

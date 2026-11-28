@@ -124,6 +124,9 @@ export class ProcessTreeCache {
   // An early sweep asked for while one was already running, which started too
   // soon to answer it.
   private refreshRequested: boolean = false;
+  // Subscribers are being told about a sweep that has just ended, and the
+  // poll after it isn't armed yet: a request now joins that scheduling.
+  private notifying: boolean = false;
   // When the last sweep of any outcome began, and when the pending poll is due
   // (both performance.now()); they space early sweeps however many callers ask.
   private lastSweepAttemptAt = Number.NEGATIVE_INFINITY;
@@ -370,6 +373,7 @@ export class ProcessTreeCache {
       }
 
       // Invoke callbacks after isRefreshing is reset
+      this.notifying = true;
       for (const callback of this.refreshCallbacks) {
         try {
           callback();
@@ -377,6 +381,7 @@ export class ProcessTreeCache {
           console.error("[ProcessTreeCache] Refresh callback error:", err);
         }
       }
+      this.notifying = false;
 
       // Schedule next poll with adaptive backoff
       if (!this.disposed) {
@@ -959,7 +964,7 @@ export class ProcessTreeCache {
    */
   requestRefresh(): void {
     if (this.disposed) return;
-    if (this.isRefreshing) {
+    if (this.isRefreshing || this.notifying) {
       this.refreshRequested = true;
       return;
     }

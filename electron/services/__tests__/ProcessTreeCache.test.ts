@@ -511,8 +511,34 @@ describe("poll scheduling and adaptive backoff", () => {
     expect(refreshSpy).toHaveBeenCalledTimes(before + 2);
 
     // One follow-up for all three requests, then the normal schedule.
+    const followUpStart = Date.now();
     await vi.advanceTimersByTimeAsync(300);
+    expect(cache.getLastSweepStartedAt()).toBe(followUpStart);
     await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs() - 1);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 2);
+  });
+
+  it("schedules a request made while subscribers hear of a sweep as an early one", async () => {
+    let asked = false;
+    cache.onRefresh(() => {
+      if (!asked) {
+        asked = true;
+        cache.requestRefresh();
+      }
+    });
+    cache.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    asked = false;
+    const before = refreshSpy.mock.calls.length;
+    cache.requestRefresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
+
+    // The subscriber's request lands a second after that sweep began, not on
+    // the normal interval.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshSpy).toHaveBeenCalledTimes(before + 1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(refreshSpy).toHaveBeenCalledTimes(before + 2);
   });
 

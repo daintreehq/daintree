@@ -41,6 +41,8 @@ interface FakeDelegateState {
   agentProcessPresent: boolean | undefined;
   /** When the last census sweep began; undefined = no census. */
   censusSampledAt: number | undefined;
+  /** When it finished; defaults to when it began. */
+  censusAnsweredAt: number | undefined;
   censusRequests: number;
   /** Every agent id the census was asked about. */
   censusQueries: string[];
@@ -70,6 +72,7 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     ptyDescendantCount: 0,
     agentProcessPresent: undefined,
     censusSampledAt: undefined,
+    censusAnsweredAt: undefined,
     censusRequests: 0,
     censusQueries: [],
     foreground: null,
@@ -114,7 +117,13 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
       treeListeners.add(listener);
       return () => treeListeners.delete(listener);
     },
-    getProcessTreeSampledAt: () => state.censusSampledAt,
+    getProcessTreeSample: () =>
+      state.censusSampledAt === undefined
+        ? undefined
+        : {
+            startedAt: state.censusSampledAt,
+            finishedAt: state.censusAnsweredAt ?? state.censusSampledAt,
+          },
     requestProcessTreeRefresh: () => {
       state.censusRequests++;
     },
@@ -1194,10 +1203,11 @@ describe("IdentityWatcher", () => {
         await vi.advanceTimersByTimeAsync(2_000);
         expect(watcher.isFallbackCommitted).toBe(true);
         if (detected) fake.state.detectedAgentId = "antigravity";
-        // A census sweep lands: what it found, from a sweep begun at `startedAt`.
+        // A census sweep finishes now: what it found, from a sweep begun at `startedAt`.
         const sweep = (present: boolean | undefined, startedAt = Date.now()) => {
           fake.state.agentProcessPresent = present;
           fake.state.censusSampledAt = startedAt;
+          fake.state.censusAnsweredAt = Date.now();
           fake.refreshTree();
         };
         const show = (lines: string[]) => {
@@ -1221,15 +1231,58 @@ describe("IdentityWatcher", () => {
         watcher.dispose();
       });
 
-      it("lets the same chunk demote at once when the census has no row for the terminal", async () => {
+      it("waits for one sweep begun since the prompt when the census has no row for the terminal", async () => {
         const { state, clear, sweep, show } = await launchAgy();
-        sweep(undefined);
+        // The last sweep ran before this terminal's shell existed.
+        sweep(undefined, Date.now() - 1);
         const before = state.censusRequests;
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.censusRequests).toBe(before + 1);
+
+        // A sweep that has since found agy keeps it.
+        await vi.advanceTimersByTimeAsync(500);
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+      });
+
+      it("lets the prompt decide when a sweep begun since it still has no row for the terminal", async () => {
+        const { clear, sweep, show } = await launchAgy();
+        sweep(undefined, Date.now() - 1);
+
+        show(EXIT_TAIL);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(undefined);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("holds a screen-only prompt over a missing row the same way", async () => {
+        const { state, clear, watcher, sweep } = await launchAgy();
+        sweep(undefined, Date.now() - 1);
+
+        state.visibleLines = [...WIDGET, QUOTED_PROMPT];
+        state.cursorLine = QUOTED_PROMPT;
+        watcher.noteScreenChange();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(undefined);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("lets the chunk demote at once when the census has never finished a sweep", async () => {
+        const { state, clear, show } = await launchAgy({ censusSampledAt: 0 });
 
         show([...WIDGET, QUOTED_PROMPT]);
 
         expect(clear).toHaveBeenCalledWith("prompt-return");
-        expect(state.censusRequests).toBe(before);
+        expect(state.censusRequests).toBe(0);
       });
 
       it("lets the same chunk demote at once without a census", async () => {
@@ -1386,14 +1439,53 @@ describe("IdentityWatcher", () => {
         expect(clear).toHaveBeenCalledWith("prompt-return");
       });
 
-      it("lets the prompt decide once the census stops answering", async () => {
-        const { clear, show } = await launchAgy();
+      it("lets the prompt decide once the census has finished no sweep for 12 s", async () => {
+        const { state, clear, show } = await launchAgy();
+        const lastAnswer = state.censusSampledAt!;
 
         show(EXIT_TAIL);
-        await vi.advanceTimersByTimeAsync(4_000);
+        const promptAt = Date.now();
+        await vi.advanceTimersByTimeAsync(lastAnswer + 12_000 - promptAt - 1);
+        expect(clear).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(promptAt + 12_000 - Date.now() - 1);
         expect(clear).not.toHaveBeenCalled();
 
+        // Then the poll's two confirming ticks.
+        await vi.advanceTimersByTimeAsync(2_200);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("keeps a live agy through a slow census whose sweeps still finish", async () => {
+        const { clear, watcher, sweep, show } = await launchAgy();
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        // Each sweep takes four seconds. The first began just before the
+        // prompt; the first to begin after it can't finish until 7 s in.
+        await vi.advanceTimersByTimeAsync(3_000);
+        sweep(true, Date.now() - 4_000);
+        for (let i = 0; i < 6; i++) {
+          await vi.advanceTimersByTimeAsync(4_000);
+          sweep(true, Date.now() - 4_000);
+        }
+
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
+      });
+
+      it("stops trusting a sighting once the census stops finishing sweeps", async () => {
+        const { clear, sweep, show } = await launchAgy();
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(500);
+        sweep(true);
+        const lastAnswer = Date.now();
+
+        // The census helper dies; agy then quits.
         await vi.advanceTimersByTimeAsync(2_000);
+        show(EXIT_TAIL);
+        await vi.advanceTimersByTimeAsync(lastAnswer + 12_000 - Date.now() - 1);
+        expect(clear).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(2_200);
         expect(clear).toHaveBeenCalledWith("prompt-return");
       });
 
@@ -1450,6 +1542,9 @@ describe("IdentityWatcher", () => {
         watcher.observeOutput(EXIT_TAIL.join("\r\n"));
 
         expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.detectionCalls).toEqual([
+          { agentType: undefined, processIconId: undefined, isBusy: false },
+        ]);
         expect(state.censusRequests).toBe(0);
       });
 

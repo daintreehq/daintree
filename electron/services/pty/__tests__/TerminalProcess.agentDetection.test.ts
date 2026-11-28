@@ -1153,8 +1153,9 @@ describe("TerminalProcess spawn command identity seeding", () => {
   it("keeps a Windows agy that draws a prompt-shaped line until the census loses it (#18291)", async () => {
     vi.useFakeTimers();
     const cache = createMockProcessTreeCache();
-    // PowerShell (the PTY root, 123) running agy.exe (456).
-    let agyAlive = true;
+    // PowerShell (the PTY root, 123) running agy.exe (456), as the census last
+    // saw it: the mock only changes when a sweep lands.
+    let censusSeesAgy = true;
     let sweptAt = Date.now();
     const listeners = new Set<() => void>();
     vi.mocked(cache.getProcess).mockImplementation((pid: number) => {
@@ -1168,7 +1169,7 @@ describe("TerminalProcess spawn command identity seeding", () => {
           memoryKb: 0,
         };
       }
-      if (pid === 456 && agyAlive) {
+      if (pid === 456 && censusSeesAgy) {
         return {
           pid,
           ppid: 123,
@@ -1181,17 +1182,19 @@ describe("TerminalProcess spawn command identity seeding", () => {
       return undefined;
     });
     vi.mocked(cache.getChildPids).mockImplementation((pid: number) =>
-      pid === 123 && agyAlive ? [456] : []
+      pid === 123 && censusSeesAgy ? [456] : []
     );
     vi.mocked(cache.getDescendantPids).mockImplementation((pid: number) =>
-      pid === 123 && agyAlive ? [456] : []
+      pid === 123 && censusSeesAgy ? [456] : []
     );
     vi.mocked(cache.getLastSweepStartedAt).mockImplementation(() => sweptAt);
+    vi.mocked(cache.getLastRefreshTime).mockImplementation(() => sweptAt);
     vi.mocked(cache.onRefresh).mockImplementation((listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     });
-    const sweep = () => {
+    const sweep = (seesAgy: boolean) => {
+      censusSeesAgy = seesAgy;
       sweptAt = Date.now();
       for (const listener of [...listeners]) listener();
     };
@@ -1209,14 +1212,17 @@ describe("TerminalProcess spawn command identity seeding", () => {
       );
       for (let i = 0; i < 4; i++) {
         await vi.advanceTimersByTimeAsync(1_000);
-        sweep();
+        sweep(true);
       }
       expect(terminal.getInfo().detectedAgentId).toBe("antigravity");
       expect(cache.requestRefresh).toHaveBeenCalled();
 
-      agyAlive = false;
+      // agy quits; the census hasn't swept since.
       pty.__emitData("\r\nPS C:\\dev\\wintest> ");
-      sweep();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(terminal.getInfo().detectedAgentId).toBe("antigravity");
+
+      sweep(false);
       await vi.advanceTimersByTimeAsync(600);
 
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
