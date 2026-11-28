@@ -39,6 +39,13 @@ interface FakeDelegateState {
   lastCommand: string | undefined;
   ptyDescendantCount: number | undefined;
   agentProcessPresent: boolean | undefined;
+  /** When the last census sweep began; undefined = no census. */
+  censusSampledAt: number | undefined;
+  /** When it finished; defaults to when it began. */
+  censusAnsweredAt: number | undefined;
+  censusRequests: number;
+  /** Every agent id the census was asked about. */
+  censusQueries: string[];
   foreground: { shellPgid: number; foregroundPgid: number } | null;
   detectionCalls: Array<{ agentType?: string; processIconId?: string; isBusy: boolean }>;
 }
@@ -64,6 +71,10 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     lastCommand: undefined,
     ptyDescendantCount: 0,
     agentProcessPresent: undefined,
+    censusSampledAt: undefined,
+    censusAnsweredAt: undefined,
+    censusRequests: 0,
+    censusQueries: [],
     foreground: null,
     detectionCalls: [],
     ...overrides,
@@ -98,10 +109,23 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     getRecentOutput: () => state.recentOutput,
     getLastCommand: () => state.lastCommand,
     getPtyDescendantCount: () => state.ptyDescendantCount,
-    hasAgentProcess: () => state.agentProcessPresent,
+    hasAgentProcess: (agentId) => {
+      state.censusQueries.push(agentId);
+      return state.agentProcessPresent;
+    },
     onProcessTreeRefresh: (listener) => {
       treeListeners.add(listener);
       return () => treeListeners.delete(listener);
+    },
+    getProcessTreeSample: () =>
+      state.censusSampledAt === undefined
+        ? undefined
+        : {
+            startedAt: state.censusSampledAt,
+            finishedAt: state.censusAnsweredAt ?? state.censusSampledAt,
+          },
+    requestProcessTreeRefresh: () => {
+      state.censusRequests++;
     },
     readForegroundProcessGroupSnapshot: () => state.foreground,
     handleAgentDetection: (result) => {
@@ -1131,6 +1155,465 @@ describe("IdentityWatcher", () => {
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+    });
+
+    describe("Windows agy drawing a prompt-shaped line while it runs (#18291)", () => {
+      const LAUNCH =
+        "agy -i 'I need help with Daintree' --settings C:\\Users\\me\\AppData\\Roaming\\Daintree\\help-sessions\\s0\\.antigravity-session-settings.json";
+      // agy 1.5.18's ask_question widget as a live session draws it, its
+      // question quoting a PowerShell prompt on the last line.
+      const WIDGET = [
+        "Question 1/1: Run the greeting script here?",
+        "> 1. Yes",
+        "  2. No",
+        "  3. Write-in...",
+        "  ↑/↓ Navigate · enter Select · esc Skip",
+        "Last shell location:",
+      ];
+      const QUOTED_PROMPT = "PS C:\\dev\\wintest>";
+      const EXIT_TAIL = [
+        "Resume this conversation with:",
+        "agy --conversation=4f3c9a10-8d2e-4b7a-9c61-2a5e0d7b1f18",
+        QUOTED_PROMPT,
+      ];
+      const NEUTRAL = ["> Check where the last build left the shell, then ask me."];
+
+      async function launchAgy(
+        overrides: Partial<FakeDelegateState> = {},
+        { detected = true }: { detected?: boolean } = {}
+      ) {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        const fake = createFakeDelegate({
+          processDetector: fakeDetector,
+          visibleLines: NEUTRAL,
+          cursorLine: "",
+          ptyDescendantCount: 1,
+          agentProcessPresent: true,
+          censusSampledAt: Date.now(),
+          foreground: null,
+          ...overrides,
+        });
+        const watcher = new IdentityWatcher(fake.delegate);
+        watcher.seed(LAUNCH);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(watcher.isFallbackCommitted).toBe(true);
+        if (detected) fake.state.detectedAgentId = "antigravity";
+        // A census sweep finishes now: what it found, from a sweep begun at `startedAt`.
+        const sweep = (present: boolean | undefined, startedAt = Date.now()) => {
+          fake.state.agentProcessPresent = present;
+          fake.state.censusSampledAt = startedAt;
+          fake.state.censusAnsweredAt = Date.now();
+          fake.refreshTree();
+        };
+        const show = (lines: string[]) => {
+          fake.state.visibleLines = lines;
+          fake.state.cursorLine = lines[lines.length - 1];
+          watcher.observeOutput(lines.join("\r\n"));
+        };
+        return { ...fake, clear, watcher, sweep, show };
+      }
+
+      it("ignores a prompt-shaped chunk while the census still finds agy, and asks for a sweep", async () => {
+        const { state, clear, watcher, show } = await launchAgy();
+        const before = state.censusRequests;
+
+        show([...WIDGET, QUOTED_PROMPT]);
+
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.detectionCalls).toHaveLength(0);
+        expect(state.censusRequests).toBe(before + 1);
+        expect(new Set(state.censusQueries)).toEqual(new Set(["antigravity"]));
+        watcher.dispose();
+      });
+
+      it("waits for one sweep begun since the prompt when the census has no row for the terminal", async () => {
+        const { state, clear, sweep, show } = await launchAgy();
+        // The last sweep ran before this terminal's shell existed.
+        sweep(undefined, Date.now() - 1);
+        const before = state.censusRequests;
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.censusRequests).toBe(before + 1);
+
+        // A sweep that has since found agy keeps it.
+        await vi.advanceTimersByTimeAsync(500);
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+      });
+
+      it("lets the prompt decide when a sweep begun since it still has no row for the terminal", async () => {
+        const { clear, sweep, show } = await launchAgy();
+        sweep(undefined, Date.now() - 1);
+
+        show(EXIT_TAIL);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(undefined);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("holds a screen-only prompt over a missing row the same way", async () => {
+        const { state, clear, watcher, sweep } = await launchAgy();
+        sweep(undefined, Date.now() - 1);
+
+        state.visibleLines = [...WIDGET, QUOTED_PROMPT];
+        state.cursorLine = QUOTED_PROMPT;
+        watcher.noteScreenChange();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(undefined);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("lets the chunk demote at once when the census has never finished a sweep", async () => {
+        const { state, clear, show } = await launchAgy({ censusSampledAt: 0 });
+
+        show([...WIDGET, QUOTED_PROMPT]);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.censusRequests).toBe(0);
+      });
+
+      it("lets the same chunk demote at once without a census", async () => {
+        const { state, clear, show } = await launchAgy({ censusSampledAt: undefined });
+
+        show([...WIDGET, QUOTED_PROMPT]);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.censusRequests).toBe(0);
+      });
+
+      it("keeps agy when the prompt-shaped line reaches the screen without a chunk, until a sweep misses it", async () => {
+        const { state, clear, watcher, sweep } = await launchAgy();
+
+        state.visibleLines = [...WIDGET, QUOTED_PROMPT];
+        state.cursorLine = QUOTED_PROMPT;
+        watcher.noteScreenChange();
+        for (let i = 0; i < 4; i++) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          sweep(true);
+        }
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.detectionCalls).toHaveLength(0);
+
+        sweep(false);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("asks for an early sweep at most once a second while the widget stays up", async () => {
+        const { state, watcher, show } = await launchAgy();
+        const before = state.censusRequests;
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        expect(state.censusRequests).toBe(before + 1);
+        // The poll keeps judging the prompt on its own cadence; none of those
+        // ticks asks again inside the second.
+        await vi.advanceTimersByTimeAsync(999);
+        expect(state.censusRequests).toBe(before + 1);
+        // The first tick past it does, and so on while the widget stays up.
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(state.censusRequests).toBe(before + 2);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(state.censusRequests).toBeGreaterThanOrEqual(before + 3);
+        expect(state.censusRequests).toBeLessThanOrEqual(before + 4);
+        watcher.dispose();
+      });
+
+      it("keeps agy while its widget stays up and every sweep finds it", async () => {
+        const { state, clear, watcher, sweep, show } = await launchAgy();
+
+        const before = state.censusRequests;
+        show([...WIDGET, QUOTED_PROMPT]);
+        for (let i = 0; i < 12; i++) {
+          await vi.advanceTimersByTimeAsync(1_250);
+          sweep(true);
+        }
+
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.detectionCalls).toHaveLength(0);
+        // It keeps asking for as long as the widget stays up, about once a second.
+        expect(state.censusRequests - before).toBeGreaterThanOrEqual(10);
+        expect(state.censusRequests - before).toBeLessThanOrEqual(16);
+        watcher.dispose();
+      });
+
+      it("keeps agy committed from the command line before any sweep has named it", async () => {
+        const { state, clear, watcher, sweep, show } = await launchAgy(
+          { agentProcessPresent: false, censusSampledAt: Date.now() },
+          { detected: false }
+        );
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.censusRequests).toBeGreaterThan(0);
+
+        for (let i = 0; i < 6; i++) {
+          sweep(true);
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+
+        expect(clear).not.toHaveBeenCalled();
+        expect(watcher.isFallbackCommitted).toBe(true);
+        watcher.dispose();
+      });
+
+      it("drops agy on the first sweep after a real /quit", async () => {
+        const { state, clear, sweep, show } = await launchAgy();
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(1_000);
+        sweep(true);
+
+        // agy has exited; the census still holds the sweep from before.
+        const beforeQuit = state.censusRequests;
+        show(EXIT_TAIL);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+        expect(state.censusRequests).toBeGreaterThan(beforeQuit);
+
+        sweep(false);
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("takes a sighted agy's absence at once, even from a sweep older than the prompt", async () => {
+        const startedAt = Date.now();
+        const { state, clear, sweep, show } = await launchAgy();
+        // The census named agy during launch, then a sweep found it gone.
+        sweep(false, startedAt);
+        await vi.advanceTimersByTimeAsync(0);
+        const before = state.censusRequests;
+
+        show(EXIT_TAIL);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.censusRequests).toBe(before);
+      });
+
+      it("takes an absence only from a sweep begun since the prompt, until agy was named", async () => {
+        const { clear, sweep, show } = await launchAgy(
+          { agentProcessPresent: false },
+          { detected: false }
+        );
+
+        show(EXIT_TAIL);
+        const promptAt = Date.now();
+        await vi.advanceTimersByTimeAsync(500);
+        // A sweep that was already running when the prompt arrived.
+        sweep(false, promptAt - 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(false);
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("holds a prompt over a descendant count that fell before it, until a sweep agrees", async () => {
+        const { state, clear, sweep, show } = await launchAgy(
+          { agentProcessPresent: false, ptyDescendantCount: 3 },
+          { detected: false }
+        );
+        await vi.advanceTimersByTimeAsync(600);
+        // A tool call ends just before the widget draws.
+        state.ptyDescendantCount = 1;
+        const staleAt = Date.now() - 1;
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(false);
+        await vi.advanceTimersByTimeAsync(600);
+        expect(staleAt).toBeLessThan(state.censusSampledAt!);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("lets the prompt decide once twelve early-sweep requests in a row go unanswered", async () => {
+        const { state, clear, show } = await launchAgy();
+
+        show(EXIT_TAIL);
+        const first = state.censusRequests;
+        while (state.censusRequests < first + 12) {
+          await vi.advanceTimersByTimeAsync(200);
+          expect(clear).not.toHaveBeenCalled();
+        }
+
+        // The next poll gives up on the census; two ticks confirm the prompt.
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("keeps a live agy across a suspend that outlasts the wait, until the census answers", async () => {
+        const { clear, watcher, sweep, show } = await launchAgy();
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(1_500);
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(500);
+
+        // The machine sleeps for a minute: the wall clock jumps, no timer ran.
+        vi.setSystemTime(Date.now() + 60_000);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
+      });
+
+      it("keeps a live agy through a slow census whose sweeps still finish", async () => {
+        const { clear, watcher, sweep, show } = await launchAgy();
+
+        show([...WIDGET, QUOTED_PROMPT]);
+        // Each sweep takes four seconds. The first began just before the
+        // prompt; the first to begin after it can't finish until 7 s in.
+        await vi.advanceTimersByTimeAsync(3_000);
+        sweep(true, Date.now() - 4_000);
+        for (let i = 0; i < 6; i++) {
+          await vi.advanceTimersByTimeAsync(4_000);
+          sweep(true, Date.now() - 4_000);
+        }
+
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
+      });
+
+      it("stops trusting a sighting once the census stops finishing sweeps", async () => {
+        const { state, clear, sweep, show } = await launchAgy();
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(500);
+        sweep(true);
+        // The census helper dies with that answer; every request from here on
+        // goes unanswered. agy then quits.
+        const lastAnswered = state.censusRequests;
+        await vi.advanceTimersByTimeAsync(2_000);
+        show(EXIT_TAIL);
+        while (state.censusRequests < lastAnswered + 12) {
+          await vi.advanceTimersByTimeAsync(200);
+          expect(clear).not.toHaveBeenCalled();
+        }
+
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("gives a later prompt its own wait for the census", async () => {
+        const { state, clear, watcher, sweep, show } = await launchAgy();
+        // The census helper stops answering while the first widget is up.
+        show([...WIDGET, QUOTED_PROMPT]);
+        const first = state.censusRequests;
+        while (state.censusRequests < first + 10) {
+          await vi.advanceTimersByTimeAsync(200);
+        }
+        expect(clear).not.toHaveBeenCalled();
+
+        // The widget closes; agy keeps working and later asks again.
+        state.visibleLines = NEUTRAL;
+        state.cursorLine = "";
+        watcher.noteScreenChange();
+        await vi.advanceTimersByTimeAsync(1_500);
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
+      });
+
+      it("never measures a sweep against a prompt seen before the command committed", async () => {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        // The prompt the launch was typed at is still on screen.
+        const { delegate, state, refreshTree } = createFakeDelegate({
+          processDetector: fakeDetector,
+          visibleLines: [QUOTED_PROMPT],
+          cursorLine: QUOTED_PROMPT,
+          ptyDescendantCount: 1,
+          agentProcessPresent: false,
+          censusSampledAt: 0,
+          foreground: null,
+        });
+        const watcher = new IdentityWatcher(delegate);
+        watcher.seed(LAUNCH);
+        await vi.advanceTimersByTimeAsync(500);
+        // A sweep before agy is in the tree.
+        state.censusSampledAt = Date.now();
+        refreshTree();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(watcher.isFallbackCommitted).toBe(true);
+
+        // The widget replaces it without a prompt-free screen in between.
+        state.visibleLines = [...WIDGET, QUOTED_PROMPT];
+        watcher.observeOutput([...WIDGET, QUOTED_PROMPT].join("\r\n"));
+
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
+      });
+
+      it("leaves a stopped watcher's chunk to decide alone, so nothing waits on a poll that won't run", () => {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        const { delegate, state } = createFakeDelegate({
+          processDetector: fakeDetector,
+          detectedAgentId: "antigravity",
+          agentProcessPresent: true,
+          censusSampledAt: Date.now(),
+          foreground: null,
+        });
+        const watcher = new IdentityWatcher(delegate);
+        watcher.seed(LAUNCH);
+        watcher.stop();
+
+        watcher.observeOutput(EXIT_TAIL.join("\r\n"));
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.detectionCalls).toEqual([
+          { agentType: undefined, processIconId: undefined, isBusy: false },
+        ]);
+        expect(state.censusRequests).toBe(0);
+      });
+
+      it("never consults the census where the foreground probe answers", async () => {
+        const { state, clear, show, watcher } = await launchAgy({
+          foreground: { shellPgid: 10, foregroundPgid: 20 },
+        });
+        state.visibleLines = [...WIDGET, QUOTED_PROMPT];
+        state.cursorLine = QUOTED_PROMPT;
+        watcher.noteScreenChange();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(clear).not.toHaveBeenCalled();
+
+        state.foreground = { shellPgid: 10, foregroundPgid: 10 };
+        state.ptyDescendantCount = 0;
+        show(EXIT_TAIL);
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        expect(state.censusQueries).toHaveLength(0);
+        expect(state.censusRequests).toBe(0);
       });
     });
 

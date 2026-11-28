@@ -66,6 +66,8 @@ function createMockProcessTreeCache(descendantPids: number[] = []): ProcessTreeC
     onRefresh: vi.fn().mockReturnValue(() => {}),
     refresh: vi.fn(),
     getLastRefreshTime: vi.fn().mockReturnValue(0),
+    getLastSweepStartedAt: vi.fn().mockReturnValue(0),
+    requestRefresh: vi.fn(),
     getLastError: vi.fn().mockReturnValue(null),
     getCacheSize: vi.fn().mockReturnValue(0),
   } as unknown as ProcessTreeCache;
