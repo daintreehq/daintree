@@ -400,6 +400,78 @@ describe("poll scheduling and adaptive backoff", () => {
     expect(cache.getCurrentIntervalMs()).toBe(15_000);
   });
 
+  // A sweep that takes `ms` to read the tree.
+  function slowRefresh(ms: number): void {
+    refreshSpy.mockImplementation(
+      () => new Promise<boolean>((r) => setTimeout(() => r(false), ms))
+    );
+  }
+
+  it("reports when the last good sweep began, not when it finished (#18291)", async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    slowRefresh(300);
+    const startedAt = Date.now();
+    cache.requestRefresh();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(cache.getLastSweepStartedAt()).toBe(startedAt);
+    expect(cache.getLastRefreshTime()).toBe(startedAt + 300);
+  });
+
+  it("keeps the last good sweep's start when a sweep fails", async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    const good = cache.getLastSweepStartedAt();
+    await vi.advanceTimersByTimeAsync(1_000);
+    refreshSpy.mockRejectedValueOnce(new Error("ps failed"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    cache.requestRefresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cache.getLastSweepStartedAt()).toBe(good);
+  });
+
+  it("sweeps at once when asked early", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = refreshSpy.mock.calls.length;
+
+    cache.requestRefresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refreshSpy).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("follows a sweep already running with one more, shared by every request made meanwhile", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    slowRefresh(300);
+    cache.requestRefresh();
+    const inFlightStart = Date.now();
+    await vi.advanceTimersByTimeAsync(100);
+    cache.requestRefresh();
+    cache.requestRefresh();
+    const callsDuring = refreshSpy.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(refreshSpy).toHaveBeenCalledTimes(callsDuring + 1);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(cache.getLastSweepStartedAt()).toBeGreaterThan(inFlightStart);
+    // Back on schedule: nothing more until the interval elapses.
+    expect(refreshSpy).toHaveBeenCalledTimes(callsDuring + 1);
+  });
+
+  it("ignores an early request after stop()", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = refreshSpy.mock.calls.length;
+    cache.stop();
+
+    cache.requestRefresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refreshSpy).toHaveBeenCalledTimes(calls);
+  });
+
   it("disposed flag prevents rescheduling after stop()", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0); // first refresh completes

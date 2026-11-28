@@ -1890,6 +1890,8 @@ export class TerminalProcess {
       hasAgentProcess: (agentId) => tp.hasAgentProcess(agentId),
       onProcessTreeRefresh: (listener) =>
         tp.deps.processTreeCache?.onRefresh(listener) ?? (() => {}),
+      getProcessTreeSampledAt: () => tp.deps.processTreeCache?.getLastSweepStartedAt(),
+      requestProcessTreeRefresh: () => tp.deps.processTreeCache?.requestRefresh(),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
       handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };

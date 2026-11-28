@@ -43,6 +43,10 @@ export const FOREGROUND_PROBE_FOLLOW_UP_MS = 400;
 // unchanged prompt candidate in the poll. Without it, prompt-looking agent
 // output that stays on screen would re-probe every tick for the whole session.
 export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
+// How often a held prompt on Windows may ask the census for an early sweep. A
+// widget that quotes a prompt can stay on screen for minutes; a real exit is
+// still confirmed within about a second.
+export const CENSUS_RECHECK_MIN_MS = 1_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -182,11 +186,16 @@ interface CommittedPollSignals {
   readonly promptVisible: boolean;
   readonly unambiguousShellPromptVisible: boolean;
   readonly hasRecentCommandFailureOutput: boolean;
+  /** Windows only: the census hasn't confirmed the exit a visible prompt suggests. */
+  readonly censusHoldsPrompt: boolean;
 }
 
 type PromptReturnVerdict =
   | { readonly advance: true }
-  | { readonly advance: false; readonly hold?: "foreground-child-active" | "agent-ui-prompt" };
+  | {
+      readonly advance: false;
+      readonly hold?: "foreground-child-active" | "agent-ui-prompt" | "agent-process-present";
+    };
 
 const ADVANCE_PROMPT_STREAK: PromptReturnVerdict = Object.freeze({ advance: true });
 const RESET_PROMPT_STREAK: PromptReturnVerdict = Object.freeze({ advance: false });
@@ -197,6 +206,10 @@ const HOLD_FOREGROUND_CHILD_ACTIVE: PromptReturnVerdict = Object.freeze({
 const HOLD_AGENT_UI_PROMPT: PromptReturnVerdict = Object.freeze({
   advance: false,
   hold: "agent-ui-prompt",
+});
+const HOLD_AGENT_PROCESS_PRESENT: PromptReturnVerdict = Object.freeze({
+  advance: false,
+  hold: "agent-process-present",
 });
 
 export interface IdentityWatcherDelegate {
@@ -217,6 +230,13 @@ export interface IdentityWatcherDelegate {
   hasAgentProcess(agentId: string): boolean | undefined;
   /** Called after each census refresh; returns the unsubscribe. Absent when there is no census. */
   onProcessTreeRefresh?(listener: () => void): () => void;
+  /**
+   * When the last successful census sweep began (`Date.now()`, 0 before the
+   * first); `undefined` when there is no census.
+   */
+  getProcessTreeSampledAt?(): number | undefined;
+  /** Ask the census for a sweep sooner than its schedule. */
+  requestProcessTreeRefresh?(): void;
   readForegroundProcessGroupSnapshot(): {
     shellPgid: number;
     foregroundPgid: number;
@@ -271,6 +291,10 @@ export class IdentityWatcher {
   // Latched once the census has shown the agent's own process, so its later
   // absence reads as an exit rather than a census that never matched it.
   private sawAgentProcess = false;
+  // Windows: when prompt-shaped output was first seen while the census could
+  // still vouch for the agent (0 = none), and when it last asked for a sweep.
+  private censusCandidateSince = 0;
+  private censusRequestedAt = 0;
   // A prompt already on screen when the next command is submitted is stale.
   // Only a prompt emitted afterward can cancel an uncommitted process badge.
   private sawPromptAfterSubmit = false;
@@ -440,6 +464,7 @@ export class IdentityWatcher {
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
+    this.censusCandidateSince = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
     this.resetForegroundCandidate();
@@ -656,6 +681,17 @@ export class IdentityWatcher {
     this.foregroundProbeFollowUpAt = 0;
 
     const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
+    // On Windows one prompt-shaped chunk was enough to demote, and a live
+    // agent's own output can carry one (#18291). While the census can still
+    // vouch for the agent, the poll decides once a sweep confirms the exit.
+    if (
+      !foregroundShellIdle.supported &&
+      hasReturnedShellPromptOutput &&
+      !hasRecentCommandFailureOutput &&
+      this.censusHoldsReturnedPromptOutput()
+    ) {
+      return;
+    }
     if (foregroundShellIdle.empty) {
       this.foregroundProbeFollowUpAt = now + FOREGROUND_PROBE_FOLLOW_UP_MS;
       if (hasReturnedShellPromptOutput) {
@@ -704,6 +740,7 @@ export class IdentityWatcher {
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
+    this.censusCandidateSince = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
   }
@@ -831,6 +868,40 @@ export class IdentityWatcher {
       PROMPT_CHARACTER_PATTERN,
       promptEdgesMayMatch
     ).some((line) => isUnambiguousShellPromptLine(line, true));
+  }
+
+  // Windows has no foreground probe, so a prompt-shaped line is the only
+  // lifecycle evidence the screen gives, and a live agent can draw one (a
+  // question quoting a path, a tool transcript). The agent's own process in
+  // the census outranks it: while a sweep still finds the process, or none
+  // has run since the prompt appeared (before the census first named the
+  // agent, an absence can mean it hasn't looked yet), the prompt waits and an
+  // early sweep is requested. A census that has seen the agent can only lose
+  // it by the agent exiting, so its absence confirms at once.
+  private censusHoldsPrompt(agentProcessPresent: boolean | undefined): boolean {
+    const sampledAt = this.delegate.getProcessTreeSampledAt?.();
+    if (sampledAt === undefined || agentProcessPresent === undefined) return false;
+    const now = Date.now();
+    if (this.censusCandidateSince === 0) this.censusCandidateSince = now;
+    if (
+      agentProcessPresent === false &&
+      (this.sawAgentProcess || sampledAt > this.censusCandidateSince)
+    ) {
+      return false;
+    }
+    if (now - this.censusRequestedAt >= CENSUS_RECHECK_MIN_MS) {
+      this.censusRequestedAt = now;
+      this.delegate.requestProcessTreeRefresh?.();
+    }
+    return true;
+  }
+
+  private censusHoldsReturnedPromptOutput(): boolean {
+    const agentId = this.identity?.agentType ?? this.delegate.detectedAgentId;
+    if (!agentId) return false;
+    const present = this.delegate.hasAgentProcess(agentId);
+    if (present) this.sawAgentProcess = true;
+    return this.censusHoldsPrompt(present);
   }
 
   private clearShellCommandEvidenceAfterPromptReturn(): void {
@@ -1015,6 +1086,12 @@ export class IdentityWatcher {
         this.delegate.getCursorLine(),
         { allowHistoryScan: true }
       ).isPrompt;
+    let censusHoldsPrompt = false;
+    if (agentProcessPresent !== undefined && (promptVisible || unambiguousShellPromptVisible)) {
+      censusHoldsPrompt = this.censusHoldsPrompt(agentProcessPresent);
+    } else {
+      this.censusCandidateSince = 0;
+    }
     // A live identity only pre-empts the fallback commit when it matches what
     // the fallback detected — a stale badge (e.g. a prior `npm run dev` whose
     // icon hasn't been cleared yet) must NOT block the fallback from emitting
@@ -1111,6 +1188,7 @@ export class IdentityWatcher {
       promptVisible: agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput: this.hasRecentCommandFailureOutput(),
+      censusHoldsPrompt,
     };
     const verdict = foregroundGated
       ? this.judgePromptReturnWithGatedProbe(signals)
@@ -1121,6 +1199,11 @@ export class IdentityWatcher {
         console.log(
           `[IdentityDebug] shell-fallback-hold term=${this.delegate.terminalId.slice(-8)} ` +
             `reason=foreground-child-active`
+        );
+      } else if (verdict.hold === "agent-process-present" && this.promptStreak > 0) {
+        console.log(
+          `[IdentityDebug] shell-fallback-hold term=${this.delegate.terminalId.slice(-8)} ` +
+            `reason=agent-process-present`
         );
       } else if (verdict.hold === "agent-ui-prompt" && this.promptStreak > 0) {
         console.log(
@@ -1217,6 +1300,7 @@ export class IdentityWatcher {
       promptVisible,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput,
+      censusHoldsPrompt,
     } = signals;
     const isAgent = Boolean(identity.agentType);
     const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
@@ -1246,6 +1330,10 @@ export class IdentityWatcher {
         : this.sawPtyDescendant && (ptyDescendantCount ?? 0) <= 1) &&
       !hasRecentCommandFailureOutput &&
       !this.hasAgentUiPromptFalsePositive(false);
+
+    if (isAgent && !foreground.supported && censusHoldsPrompt && !nonPosixAgentExited) {
+      return HOLD_AGENT_PROCESS_PRESENT;
+    }
 
     if (
       isAgent &&

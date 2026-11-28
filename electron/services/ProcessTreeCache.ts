@@ -115,6 +115,13 @@ export class ProcessTreeCache {
   private currentIntervalMs: number;
   private isRefreshing: boolean = false;
   private lastRefreshTime: number = 0;
+  // When the last successful sweep began. A reader that must know the census
+  // looked after some moment compares against this, not the finish time: a
+  // sweep that finished afterwards may have read the tree before it.
+  private lastSweepStartedAt: number = 0;
+  // An early sweep asked for while one was already running, which started too
+  // soon to answer it.
+  private refreshRequested: boolean = false;
   private isWindows: boolean = process.platform === "win32";
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
@@ -304,6 +311,8 @@ export class ProcessTreeCache {
     }
 
     this.isRefreshing = true;
+    this.refreshRequested = false;
+    const sweepStartedAt = Date.now();
     let outcome: RefreshOutcome = "error";
     try {
       if (this.isWindows) {
@@ -312,6 +321,7 @@ export class ProcessTreeCache {
         outcome = (await this.refreshUnix()) ? "changed" : "unchanged";
       }
       this.lastRefreshTime = Date.now();
+      this.lastSweepStartedAt = sweepStartedAt;
       this.lastError = null;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -365,7 +375,11 @@ export class ProcessTreeCache {
         } else {
           this.advanceBackoff();
         }
-        this.schedulePoll(this.currentIntervalMs);
+        if (this.refreshRequested) {
+          void this.refresh();
+        } else {
+          this.schedulePoll(this.currentIntervalMs);
+        }
       }
     }
   }
@@ -922,6 +936,23 @@ export class ProcessTreeCache {
 
   getLastRefreshTime(): number {
     return this.lastRefreshTime;
+  }
+
+  getLastSweepStartedAt(): number {
+    return this.lastSweepStartedAt;
+  }
+
+  /**
+   * Sweep now rather than on schedule. A sweep already running started before
+   * the request, so one more follows it; requests made meanwhile share it.
+   */
+  requestRefresh(): void {
+    if (this.disposed) return;
+    if (this.isRefreshing) {
+      this.refreshRequested = true;
+      return;
+    }
+    void this.refresh();
   }
 
   /** What `memoryKb` measures as of the last successful census. */
