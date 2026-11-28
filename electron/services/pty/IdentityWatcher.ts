@@ -47,11 +47,12 @@ export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 // widget that quotes a prompt can stay on screen for minutes; a real exit is
 // still confirmed within about a second.
 export const CENSUS_RECHECK_MIN_MS = 1_000;
-// A census that has finished no sweep this long, while a prompt has waited as
-// long, has stopped answering (its helper failed), and holding on its last
-// word would pin an exited agent: the prompt decides again. Longer than the
-// Windows census request's own 10 s timeout, so one slow sweep still answers.
-export const CENSUS_UNANSWERED_MS = 12_000;
+// A census that has let this many early-sweep requests in a row go by without
+// finishing a sweep has stopped answering (its helper failed), and holding on
+// its last word would pin an exited agent: the prompt decides again. Counted
+// in requests rather than wall time, which a suspend would let lapse at once;
+// at one a second it outlasts the Windows census request's 10 s timeout.
+export const CENSUS_UNANSWERED_REQUESTS = 12;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -300,6 +301,10 @@ export class IdentityWatcher {
   // still vouch for the agent (0 = none), and when it last asked for a sweep.
   private censusCandidateSince = 0;
   private censusRequestedAt = 0;
+  private censusUnansweredRequests = 0;
+  // A raw chunk's prompt is being held for a sweep: the poll keeps judging it
+  // even once later output has pushed it off the lines it scans.
+  private censusRawPromptPending = false;
   // A prompt already on screen when the next command is submitted is stale.
   // Only a prompt emitted afterward can cancel an uncommitted process badge.
   private sawPromptAfterSubmit = false;
@@ -470,6 +475,8 @@ export class IdentityWatcher {
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
     this.censusCandidateSince = 0;
+    this.censusRawPromptPending = false;
+    this.censusUnansweredRequests = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
     this.resetForegroundCandidate();
@@ -697,6 +704,7 @@ export class IdentityWatcher {
       !hasRecentCommandFailureOutput &&
       this.censusHoldsReturnedPromptOutput()
     ) {
+      this.censusRawPromptPending = true;
       return;
     }
     if (foregroundShellIdle.empty) {
@@ -748,6 +756,8 @@ export class IdentityWatcher {
     this.sawPtyDescendant = false;
     this.sawAgentProcess = false;
     this.censusCandidateSince = 0;
+    this.censusRawPromptPending = false;
+    this.censusUnansweredRequests = 0;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
   }
@@ -892,6 +902,9 @@ export class IdentityWatcher {
     if (!sample || sample.finishedAt === 0) return false;
     const now = Date.now();
     if (this.censusCandidateSince === 0) this.censusCandidateSince = now;
+    if (this.censusRequestedAt !== 0 && sample.finishedAt >= this.censusRequestedAt) {
+      this.censusUnansweredRequests = 0;
+    }
     const sampledSincePrompt = sample.startedAt >= this.censusCandidateSince;
     if (agentProcessPresent === undefined) {
       // It looked since the prompt and still can't place this terminal.
@@ -899,13 +912,11 @@ export class IdentityWatcher {
     } else if (agentProcessPresent === false && (this.sawAgentProcess || sampledSincePrompt)) {
       return false;
     }
-    if (
-      now - this.censusCandidateSince >= CENSUS_UNANSWERED_MS &&
-      now - sample.finishedAt >= CENSUS_UNANSWERED_MS
-    ) {
-      return false;
-    }
+    if (this.censusUnansweredRequests >= CENSUS_UNANSWERED_REQUESTS) return false;
     if (now - this.censusRequestedAt >= CENSUS_RECHECK_MIN_MS) {
+      if (this.censusRequestedAt !== 0 && sample.finishedAt < this.censusRequestedAt) {
+        this.censusUnansweredRequests++;
+      }
       this.censusRequestedAt = now;
       this.delegate.requestProcessTreeRefresh?.();
     }
@@ -1104,9 +1115,15 @@ export class IdentityWatcher {
     // Only once committed: a prompt still in the history from the launch line
     // must not start the clock a later sweep is measured against.
     let censusHoldsPrompt = false;
-    if (this.committed && censusJudgesAgent && (promptVisible || unambiguousShellPromptVisible)) {
+    if (agentProcessPresent === true) {
+      // A live agent drew the held chunk; its own exit is now read from the census.
+      this.censusRawPromptPending = false;
+    }
+    const censusPromptEvidence =
+      promptVisible || unambiguousShellPromptVisible || this.censusRawPromptPending;
+    if (this.committed && censusJudgesAgent && censusPromptEvidence) {
       censusHoldsPrompt = this.censusHoldsPrompt(agentProcessPresent);
-    } else {
+    } else if (this.committed) {
       this.censusCandidateSince = 0;
     }
     // A live identity only pre-empts the fallback commit when it matches what
@@ -1202,7 +1219,9 @@ export class IdentityWatcher {
       // An icon-only command can inherit the previous shell prompt in the
       // visible buffer. Do not treat it as this command's return until a new
       // prompt has arrived in output since submission.
-      promptVisible: agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false,
+      promptVisible:
+        (agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false) ||
+        this.censusRawPromptPending,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput: this.hasRecentCommandFailureOutput(),
       censusHoldsPrompt,

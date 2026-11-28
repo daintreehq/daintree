@@ -1334,6 +1334,7 @@ describe("IdentityWatcher", () => {
       it("keeps agy while its widget stays up and every sweep finds it", async () => {
         const { state, clear, watcher, sweep, show } = await launchAgy();
 
+        const before = state.censusRequests;
         show([...WIDGET, QUOTED_PROMPT]);
         for (let i = 0; i < 12; i++) {
           await vi.advanceTimersByTimeAsync(1_250);
@@ -1342,6 +1343,9 @@ describe("IdentityWatcher", () => {
 
         expect(clear).not.toHaveBeenCalled();
         expect(state.detectionCalls).toHaveLength(0);
+        // It keeps asking for as long as the widget stays up, about once a second.
+        expect(state.censusRequests - before).toBeGreaterThanOrEqual(10);
+        expect(state.censusRequests - before).toBeLessThanOrEqual(16);
         watcher.dispose();
       });
 
@@ -1439,20 +1443,37 @@ describe("IdentityWatcher", () => {
         expect(clear).toHaveBeenCalledWith("prompt-return");
       });
 
-      it("lets the prompt decide once the census has finished no sweep for 12 s", async () => {
+      it("lets the prompt decide once twelve early-sweep requests in a row go unanswered", async () => {
         const { state, clear, show } = await launchAgy();
-        const lastAnswer = state.censusSampledAt!;
 
         show(EXIT_TAIL);
-        const promptAt = Date.now();
-        await vi.advanceTimersByTimeAsync(lastAnswer + 12_000 - promptAt - 1);
-        expect(clear).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(promptAt + 12_000 - Date.now() - 1);
+        const first = state.censusRequests;
+        while (state.censusRequests < first + 12) {
+          await vi.advanceTimersByTimeAsync(200);
+          expect(clear).not.toHaveBeenCalled();
+        }
+
+        // The next poll gives up on the census; two ticks confirm the prompt.
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("keeps a live agy across a suspend that outlasts the wait, until the census answers", async () => {
+        const { clear, watcher, sweep, show } = await launchAgy();
+        show([...WIDGET, QUOTED_PROMPT]);
+        await vi.advanceTimersByTimeAsync(1_500);
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(500);
+
+        // The machine sleeps for a minute: the wall clock jumps, no timer ran.
+        vi.setSystemTime(Date.now() + 60_000);
+        await vi.advanceTimersByTimeAsync(3_000);
         expect(clear).not.toHaveBeenCalled();
 
-        // Then the poll's two confirming ticks.
-        await vi.advanceTimersByTimeAsync(2_200);
-        expect(clear).toHaveBeenCalledWith("prompt-return");
+        sweep(true);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(clear).not.toHaveBeenCalled();
+        watcher.dispose();
       });
 
       it("keeps a live agy through a slow census whose sweeps still finish", async () => {
@@ -1473,19 +1494,40 @@ describe("IdentityWatcher", () => {
       });
 
       it("stops trusting a sighting once the census stops finishing sweeps", async () => {
-        const { clear, sweep, show } = await launchAgy();
+        const { state, clear, sweep, show } = await launchAgy();
         show([...WIDGET, QUOTED_PROMPT]);
         await vi.advanceTimersByTimeAsync(500);
         sweep(true);
-        const lastAnswer = Date.now();
-
-        // The census helper dies; agy then quits.
+        // The census helper dies with that answer; every request from here on
+        // goes unanswered. agy then quits.
+        const lastAnswered = state.censusRequests;
         await vi.advanceTimersByTimeAsync(2_000);
         show(EXIT_TAIL);
-        await vi.advanceTimersByTimeAsync(lastAnswer + 12_000 - Date.now() - 1);
+        while (state.censusRequests < lastAnswered + 12) {
+          await vi.advanceTimersByTimeAsync(200);
+          expect(clear).not.toHaveBeenCalled();
+        }
+
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("keeps judging a held prompt that later output pushed off screen", async () => {
+        const { state, clear, sweep, show } = await launchAgy(
+          { agentProcessPresent: false },
+          { detected: false }
+        );
+        // agy quits before any sweep has named it; the shell prints its prompt,
+        // then more output scrolls the prompt out of the lines the poll reads.
+        show(EXIT_TAIL);
+        state.visibleLines = ["line one", "line two", "line three", "line four"];
+        state.cursorLine = "line four";
+        await vi.advanceTimersByTimeAsync(600);
         expect(clear).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(2_200);
+        sweep(false);
+        await vi.advanceTimersByTimeAsync(1_000);
+
         expect(clear).toHaveBeenCalledWith("prompt-return");
       });
 
